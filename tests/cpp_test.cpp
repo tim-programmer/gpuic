@@ -81,7 +81,9 @@ struct Fix {
     bool ctx_ok = false;
     bool flag = true;
     std::string keys, ups_k, typed, ime;
-    int drags = 0, ime_cursor = -1, scrolls = 0;
+    int drags = 0, ime_cursor = -1, scrolls = 0, wheels = 0;
+    float wheel_dy = 0;
+    uint32_t wheel_mods = 0;
     gp_image solid;
 
     explicit Fix(App a) : app(a), focus(gp_focus_new(a.raw())), child(a.new_view<Child>()),
@@ -261,11 +263,21 @@ static std::vector<Pair> pairs(Fix& f) {
                   div().flex_col().child(g_shared).child(SharedString()) });
     p.push_back({ "right to left", gp_div(gp_size_full(), gp_flex_row(), gp_text_dir_rtl(), c_box(30, 30, RED), c_box(50, 20, C2)),
                   div().size_full().flex_row().text_dir_rtl().children({ box(30, 30, RED), box(50, 20, C2) }) });
+    {
+        static const gp_point zig[4] = { { 10, 10 }, { 60, 55 }, { 110, 10 }, { 160, 55 } };
+        std::vector<gp_point> zig_v(zig, zig + 4);
+        p.push_back({ "a curve",
+                      gp_div(gp_size_full(), gp_curve(gp_xy(10, 55), gp_xy(60, 0), gp_xy(110, 70), gp_xy(170, 15), gp_stroke_width(7), gp_stroke_color(RED), gp_stroke_cap_butt(), gp_hit_tolerance(3))),
+                      div().size_full().child(curve(xy(10, 55), xy(60, 0), xy(110, 70), xy(170, 15)).stroke_width(7).stroke_color(RED).stroke_cap_butt().hit_tolerance(3)) });
+        p.push_back({ "a polyline",
+                      gp_div(gp_size_full(), gp_polyline(zig, 4, gp_stroke_width(5), gp_stroke_color(C2), gp_stroke_join_miter(), gp_miter_limit(3)), gp_polyline(NULL, 0, gp_stroke_width(3))),
+                      div().size_full().child(polyline(zig_v).stroke_width(5).stroke_color(C2).stroke_join_miter().miter_limit(3)).child(polyline({}).stroke_width(3)) });
+    }
     return p;
 }
 
-static constexpr int kHandlerBoxes = 17;   // the boxes after the pairs, before the style carriers
-static constexpr int kCellW = 200, kCellH = 70, kPairs = 20;
+static constexpr int kHandlerBoxes = 18;   // the boxes after the pairs, before the style carriers
+static constexpr int kCellW = 200, kCellH = 70, kPairs = 22;
 
 Element Fix::render(Ctx) {
     std::vector<Pair> ps = pairs(*this);
@@ -302,7 +314,8 @@ Element Fix::render(Ctx) {
                    .child(div().w(40).h(100).flex_none()))
         .child(uniform_list(100, 20, [](size_t i) { return div().h(20).child(text("r" + std::to_string(i))); })   // 16: a list with a pinned header
                    .w(100).h(60).flex_none()
-                   .list_sticky([](size_t r) { return ListGroup(div().h(20).child(text("G" + std::to_string(r / 10))), r / 10 * 10, r / 10 * 10 + 10); }));
+                   .list_sticky([](size_t r) { return ListGroup(div().h(20).child(text("G" + std::to_string(r / 10))), r / 10 * 10, r / 10 * 10 + 10); }))
+        .child(hb(C1).on_wheel([](Fix& s, const gp_wheel_event& ev) { s.wheels++; s.wheel_dy += ev.dy; s.wheel_mods = ev.mods; }));   // 17: the wheel
     for (const Case& c : kCases) root.child(c.make().flex_none());                                       // 15..: the style carriers
     for (const PassThrough& pt : kPass) root.child(pt.cpp()).child(raw(pt.c()));              // then two per pass-through: C++, C
     return root;
@@ -506,6 +519,14 @@ static void test_handlers(Fix& f) {
         gp_sleep(g_co, 0.1);
         CHECK(f.scrolls > before && std::fabs(f.lastx - 20) < 0.01f, "on_scroll with the new offset when the wheel moves it: %d calls, y %g", f.scrolls - before, f.lastx);
     }
+    {   // on_wheel from a lambda: the turn in pixels (one notch down is +40) and the modifiers
+        int path[1] = { base_index() + 17 };
+        float r[4];
+        cpp_probe_rect(g_app, path, 1, r);
+        gp_simulate_wheel(g_app, r[0] + 5, r[1] + 5, 0, -1, GP_MOD_CTRL);
+        gp_sleep(g_co, 0.1);
+        CHECK(f.wheels == 1 && std::fabs(f.wheel_dy - 40) < 0.01f && f.wheel_mods == GP_MOD_CTRL, "on_wheel: %d calls, dy %g, mods %u", f.wheels, f.wheel_dy, f.wheel_mods);
+    }
     {   // gp_list_sticky from a lambda: the header of the group of the first row in view, once its own row has gone past the top
         int path[1] = { base_index() + 16 };
         float r[4];
@@ -590,7 +611,7 @@ int main() {
     int rc = run([](App app) {
         g_app = app.raw();
         g_root = app.new_view<Fix>(app);
-        app.open_window("cpp_test", 900, 840, g_root);
+        app.open_window("cpp_test", 900, 960, g_root);
         gp_ctx cx = gp_ctx_for(g_app, GP_ENTITY_NULL);
         gp_spawn(&cx, driver, nullptr);
     });

@@ -274,10 +274,11 @@ static void dispatch(gp_app *app, const SDL_Event *e) {
             float dx = e->wheel.x, dy = e->wheel.y;
             if (e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) { dx = -dx; dy = -dy; }
             /* shift + wheel scrolls horizontally: rolling "down" (y < 0) goes right (x > 0) */
-            if (dx == 0 && (SDL_GetModState() & SDL_KMOD_SHIFT)) { dx = -dy; dy = 0; }
+            uint32_t mods = (e->wheel.which & 0xffff0000u) == SYNTH_MOUSE_ID ? (e->wheel.which & 0xffu) : map_mods(SDL_GetModState());
+            if (dx == 0 && (mods & GP_MOD_SHIFT)) { dx = -dy; dy = 0; }
             /* SDL: x > 0 scrolls right, y > 0 scrolls up. Offsets grow rightwards / downwards. */
             gp_window_on_scroll(w, e->wheel.mouse_x, e->wheel.mouse_y, dx * GP_SCROLL_LINE_PX,
-                                -dy * GP_SCROLL_LINE_PX);
+                                -dy * GP_SCROLL_LINE_PX, mods);
         }
         break;
     case SDL_EVENT_FINGER_DOWN:
@@ -409,12 +410,12 @@ void gp_platform_inject_mouse(gp_window *w, int kind, float x, float y, int butt
     SDL_PushEvent(&e);
 }
 
-void gp_platform_inject_wheel(gp_window *w, float x, float y, float dx, float dy) {
+void gp_platform_inject_wheel(gp_window *w, float x, float y, float dx, float dy, uint32_t mods) {
     SDL_Event e;
     memset(&e, 0, sizeof e); /* `= { 0 }` would only initialize the union's first member */
     e.type = SDL_EVENT_MOUSE_WHEEL;
     e.wheel.windowID = w->id;
-    e.wheel.which = SYNTH_MOUSE_ID;
+    e.wheel.which = SYNTH_MOUSE_ID | (mods & 0xffu); /* (a wheel event carries no modifiers either: smuggled) */
     e.wheel.x = dx;
     e.wheel.y = dy;
     e.wheel.mouse_x = x;

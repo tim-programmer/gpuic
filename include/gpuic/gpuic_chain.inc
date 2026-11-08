@@ -2,6 +2,22 @@
     // ---- every modifier of the C header, by its C name without the gp_ prefix
     Element& list_horizontal() & { return add(gp_list_horizontal()); }
     Element&& list_horizontal() && { return std::move(add(gp_list_horizontal())); }
+    Element& stroke_width(float px) & { return add(gp_stroke_width(px)); }
+    Element&& stroke_width(float px) && { return std::move(add(gp_stroke_width(px))); }
+    Element& stroke_color(gp_color c) & { return add(gp_stroke_color(c)); }
+    Element&& stroke_color(gp_color c) && { return std::move(add(gp_stroke_color(c))); }
+    Element& stroke_cap_round() & { return add(gp_stroke_cap_round()); }
+    Element&& stroke_cap_round() && { return std::move(add(gp_stroke_cap_round())); }
+    Element& stroke_cap_butt() & { return add(gp_stroke_cap_butt()); }
+    Element&& stroke_cap_butt() && { return std::move(add(gp_stroke_cap_butt())); }
+    Element& stroke_join_round() & { return add(gp_stroke_join_round()); }
+    Element&& stroke_join_round() && { return std::move(add(gp_stroke_join_round())); }
+    Element& stroke_join_miter() & { return add(gp_stroke_join_miter()); }
+    Element&& stroke_join_miter() && { return std::move(add(gp_stroke_join_miter())); }
+    Element& miter_limit(float ratio) & { return add(gp_miter_limit(ratio)); }
+    Element&& miter_limit(float ratio) && { return std::move(add(gp_miter_limit(ratio))); }
+    Element& hit_tolerance(float px) & { return add(gp_hit_tolerance(px)); }
+    Element&& hit_tolerance(float px) && { return std::move(add(gp_hit_tolerance(px))); }
     Element& object_fit(int fit) & { return add(gp_object_fit(fit)); }
     Element&& object_fit(int fit) && { return std::move(add(gp_object_fit(fit))); }
     Element& image_pixelated() & { return add(gp_image_pixelated()); }

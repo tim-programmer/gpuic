@@ -83,6 +83,11 @@ typedef struct gp_style {
     uint8_t bcolor_set;
     const struct gp_gradient *border_gradient;   /* the border painted with this (arena of the element), or NULL */
     /* a paint-time transform (gp_rotate, gp_scale, gp_translate): about the point (origin_x, origin_y) of the box (fractions), the scale, then the rotation, then the move */
+    /* a stroked curve (GP_EL_CURVE) */
+    float stroke_w, hit_tol, miter_limit;
+    gp_color stroke_color;
+    bool has_stroke_color;
+    uint8_t stroke_cap, stroke_join;   /* 0 round, 1 butt / 0 round, 1 miter */
     bool has_xf;
     float xf_rot, xf_sx, xf_sy, xf_tx, xf_ty, xf_ox, xf_oy;   /* degrees; scale; px; fractions of the box (0.5: the middle) */
     const struct gp_style *hover_style, *active_style, *focus_style;   /* gp_hover_style...: what the state paints over this style (arena of the element) */
@@ -105,7 +110,7 @@ typedef struct {
 } gp_text_style;
 
 enum { GP_TAG_END = 1, GP_TAG_ELEMENT, GP_TAG_MOD };
-enum { GP_EL_DIV = 1, GP_EL_TEXT, GP_EL_LIST, GP_EL_IMAGE, GP_EL_SVG };
+enum { GP_EL_DIV = 1, GP_EL_TEXT, GP_EL_LIST, GP_EL_IMAGE, GP_EL_SVG, GP_EL_CURVE };
 
 /* Type-erased callback; cast back to its real type (gp_mouse_fn, gp_key_fn, ...) to call. */
 typedef void (*gp_any_fn)(void);
@@ -174,10 +179,13 @@ struct gp_el {
     const char *text;
     gp_image image;        /* GP_EL_IMAGE */
     gp_svg svg;            /* GP_EL_SVG */
+    gp_point *curve_pts;   /* GP_EL_CURVE: the points, relative to the element's box (4 for a Bezier, any number for a polyline) */
+    uint32_t curve_n;
+    uint8_t curve_kind;    /* 0 a cubic Bezier, 1 a polyline */
     gp_el **children;
     uint32_t nchildren;
     gp_handler on_click, on_mouse_down, on_key_down, on_key_up, on_text;
-    gp_handler on_drag, on_mouse_up, on_ime, on_layout, on_scroll;
+    gp_handler on_drag, on_mouse_up, on_ime, on_layout, on_scroll, on_wheel;
     float ime_rect[4];     /* element-relative caret rect for the IME candidate window */
     bool has_ime_rect;
     gp_action_handler *actions;
@@ -260,9 +268,10 @@ void gp_style_init(gp_style *s);
 gp_el *gp_build_view(gp_build_ctx *bc, gp_entity view, bool cached);
 gp_entity gp_building_view(void);   /* the view whose render function is running, or null */
 
-typedef enum { GP_HIT_CLICK, GP_HIT_MOUSE_DOWN, GP_HIT_CURSOR, GP_HIT_FOCUS } gp_hit_kind;
+typedef enum { GP_HIT_CLICK, GP_HIT_MOUSE_DOWN, GP_HIT_CURSOR, GP_HIT_FOCUS, GP_HIT_WHEEL } gp_hit_kind;
 typedef struct { gp_el *el; uint64_t path; float ox, oy; /* element's absolute origin */ float qx, qy; /* where the point is, in the element's own coordinates (as ox, oy: layout coordinates) */ } gp_hit;
 bool gp_hit_test(gp_el *root, gp_point p, gp_hit_kind kind, gp_hit *out);
+bool gp_hit_test_skipping(gp_el *root, gp_point p, gp_hit_kind kind, gp_hit *out, const uint64_t *skip, int nskip);   /* not the elements whose path is in `skip` */
 
 /* ---------------------------------------------------------------- text */
 
@@ -494,7 +503,7 @@ void gp_image_premultiply(uint8_t *rgba, size_t pixels);
 /* ---------------------------------------------------------------- scene / renderer */
 
 enum { GP_PRIM_QUAD = 0, GP_PRIM_SHADOW = 1, GP_PRIM_GLYPH = 2, GP_PRIM_COLOR_GLYPH = 3, GP_PRIM_LCD_GLYPH = 4,
-       GP_PRIM_LINEAR_GRADIENT = 5, GP_PRIM_RADIAL_GRADIENT = 6, GP_PRIM_IMAGE = 7, GP_PRIM_CONIC_GRADIENT = 8 };
+       GP_PRIM_LINEAR_GRADIENT = 5, GP_PRIM_RADIAL_GRADIENT = 6, GP_PRIM_IMAGE = 7, GP_PRIM_CONIC_GRADIENT = 8, GP_PRIM_SEGMENT = 9 };
 
 typedef struct {
     float bounds[4];       /* x y w h, logical px */
@@ -521,6 +530,9 @@ typedef struct {
 
 /* A 2 x 3 affine map: x' = a x + c y + tx, y' = b x + d y + ty. */
 typedef struct { float a, b, c, d, tx, ty; } gp_affine;
+size_t gp_curve_flatten(const gp_el *n, float tol, gp_arena *a, gp_point **out);   /* curve.c: the centerline as straight pieces (arena) */
+float gp_curve_distance(const gp_el *n, float x, float y);   /* to the centerline; x, y in the element's own coordinates */
+bool gp_curve_hit(const gp_el *n, float x, float y);          /* on the stroke: within half the width plus the hit tolerance */
 gp_affine gp_style_affine(const struct gp_style *s, float x, float y, float w, float h);   /* what a transformed element does to what is in it (paint.c) */
 static inline gp_affine gp_aff_identity(void) { return (gp_affine){ 1, 0, 0, 1, 0, 0 }; }
 /* p after n: the map that does n first */
@@ -971,7 +983,7 @@ bool gp_input_key_up(gp_window *w, const gp_key_event *ev);
 void gp_input_cancel_chord(gp_window *w);
 void gp_window_on_text(gp_window *w, const char *utf8);
 void gp_window_on_ime(gp_window *w, const char *preedit, int cursor);
-void gp_window_on_scroll(gp_window *w, float x, float y, float dx, float dy);
+void gp_window_on_scroll(gp_window *w, float x, float y, float dx, float dy, uint32_t mods);
 
 /* input.c: focus, keymap, action dispatch */
 void gp_input_free(gp_app *app);
@@ -1004,7 +1016,7 @@ void gp_platform_wake(gp_app *app);               /* thread-safe: make gp_platfo
 float gp_platform_refresh_hz(gp_window *w);
 void gp_platform_inject_key(gp_window *w, const char *key, uint32_t mods); /* test hook */
 void gp_platform_inject_key_up(gp_window *w, const char *key, uint32_t mods);
-void gp_platform_inject_wheel(gp_window *w, float x, float y, float dx, float dy); /* test hook */
+void gp_platform_inject_wheel(gp_window *w, float x, float y, float dx, float dy, uint32_t mods); /* test hook */
 void gp_platform_inject_text(gp_window *w, const char *utf8);
 void gp_platform_inject_mouse(gp_window *w, int kind, float x, float y, int button, int clicks, uint32_t mods);
 void *gp_platform_gl_proc(const char *name);

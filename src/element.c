@@ -34,6 +34,8 @@ void gp_style_init(gp_style *s) {
     s->opacity = 1.f;
     s->xf_sx = s->xf_sy = 1.f;
     s->xf_ox = s->xf_oy = 0.5f;
+    s->stroke_w = 2.f;
+    s->miter_limit = 4.f;
 }
 
 gp_el *gp_el_new(gp_arena *a, int kind) {
@@ -59,9 +61,10 @@ enum {
     M_KEY_CONTEXT, M_ON_ACTION, M_ON_KEY_DOWN, M_ON_KEY_UP, M_ON_TEXT, M_WHITESPACE_PRE,
     M_SCROLL_X, M_SCROLL_Y, M_TRACK_SCROLL, M_SCROLLBAR_COLOR, M_HIDE_SCROLLBAR,
     M_CHILDREN, M_MODS, M_ON_DRAG, M_ON_MOUSE_UP, M_ON_IME, M_IME_RECT, M_CURSOR_TEXT,
-    M_ON_LAYOUT, M_ON_SCROLL, M_FONT_VARIATIONS, M_LIST_STICKY, M_LIST_HORIZ, M_BORDER_SIDE_COLOR, M_BORDER_STYLE, M_BORDER_GRADIENT, M_TEXT_DIR, M_LIST_STICK, M_ANIM, M_AUTOHIDE, M_BG_GRADIENT, M_OBJECT_FIT, M_PIXELATED, M_BORDER_SIDE, M_CORNER, M_CORNERS,
+    M_ON_LAYOUT, M_ON_SCROLL, M_ON_WHEEL, M_FONT_VARIATIONS, M_LIST_STICKY, M_LIST_HORIZ, M_BORDER_SIDE_COLOR, M_BORDER_STYLE, M_BORDER_GRADIENT, M_TEXT_DIR, M_LIST_STICK, M_ANIM, M_AUTOHIDE, M_BG_GRADIENT, M_OBJECT_FIT, M_PIXELATED, M_BORDER_SIDE, M_CORNER, M_CORNERS,
     M_IMG_BRIGHTNESS, M_IMG_CONTRAST, M_IMG_SATURATE, M_IMG_GRAYSCALE, M_IMG_BLUR, M_IMG_TINT, M_MARGIN_AUTO, M_WRAP, M_ALIGN_CONTENT,
     M_HOVER_STYLE, M_ACTIVE_STYLE, M_FOCUS_STYLE, M_ROTATE, M_SCALE, M_TRANSLATE, M_XF_ORIGIN,
+    M_STROKE_W, M_STROKE_COLOR, M_STROKE_CAP, M_STROKE_JOIN, M_MITER_LIMIT, M_HIT_TOL,
 };
 
 enum { SIDE_L = 1, SIDE_T = 2, SIDE_R = 4, SIDE_B = 8, SIDE_ALL = 15 };
@@ -430,6 +433,8 @@ gp_node *gp_on_mouse_up(gp_mouse_fn fn) { return mod_fn(M_ON_MOUSE_UP, (gp_any_f
 gp_node *gp_on_ime(gp_ime_fn fn) { return mod_fn(M_ON_IME, (gp_any_fn)fn, NULL); }
 gp_node *gp_on_layout(gp_layout_fn fn) { return mod_fn(M_ON_LAYOUT, (gp_any_fn)fn, NULL); }
 gp_node *gp_on_scroll(gp_scroll_fn fn) { return mod_fn(M_ON_SCROLL, (gp_any_fn)fn, NULL); }
+gp_node *gp_on_wheel(gp_wheel_fn fn) { return mod_fn(M_ON_WHEEL, (gp_any_fn)fn, NULL); }
+gp_node *gp_on_wheel_data(gp_wheel_fn fn, void *data) { return mod_fn(M_ON_WHEEL, (gp_any_fn)fn, data); }
 gp_node *gp_cursor_text(void) { return mod_f(M_CURSOR_TEXT, GP_CURSOR_TEXT); }
 gp_node *gp_ime_rect(float x, float y, float w, float h) {
     gp_mod *m = mod_new(M_IME_RECT);
@@ -458,6 +463,14 @@ static gp_node *mod_f2(int kind, float a, float b) {
     m->f[1] = b;
     return &m->base;
 }
+gp_node *gp_stroke_width(float px) { return mod_f(M_STROKE_W, px); }
+gp_node *gp_stroke_color(gp_color c) { return mod_c(M_STROKE_COLOR, c); }
+gp_node *gp_stroke_cap_round(void) { return mod_f(M_STROKE_CAP, 0); }
+gp_node *gp_stroke_cap_butt(void) { return mod_f(M_STROKE_CAP, 1); }
+gp_node *gp_stroke_join_round(void) { return mod_f(M_STROKE_JOIN, 0); }
+gp_node *gp_stroke_join_miter(void) { return mod_f(M_STROKE_JOIN, 1); }
+gp_node *gp_miter_limit(float ratio) { return mod_f(M_MITER_LIMIT, ratio); }
+gp_node *gp_hit_tolerance(float px) { return mod_f(M_HIT_TOL, px); }
 gp_node *gp_rotate(float degrees) { return mod_f2(M_ROTATE, degrees, 0); }
 gp_node *gp_scale(float s) { return mod_f2(M_SCALE, s, s); }
 gp_node *gp_scale_xy(float sx, float sy) { return mod_f2(M_SCALE, sx, sy); }
@@ -627,6 +640,7 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_ON_IME: el->on_ime = (gp_handler){ m->fn, m->data, g_bc->view }; break;
     case M_ON_LAYOUT: el->on_layout = (gp_handler){ m->fn, m->data, g_bc->view }; break;
     case M_ON_SCROLL: el->on_scroll = (gp_handler){ m->fn, m->data, g_bc->view }; break;
+    case M_ON_WHEEL: el->on_wheel = (gp_handler){ m->fn, m->data, g_bc->view }; break;
     case M_IME_RECT:
         for (int i = 0; i < 4; i++) el->ime_rect[i] = m->f[i];
         el->has_ime_rect = true;
@@ -643,6 +657,12 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_TAB_STOP: el->tab_stop = true; break;
     case M_TAB_INDEX: el->tab_index = (int)m->f[0]; break;
     case M_FOCUS_BG: s->focus_bg = m->c; s->has_focus_bg = true; break;
+    case M_STROKE_W: s->stroke_w = m->f[0] > 0.f ? m->f[0] : 0.f; break;
+    case M_STROKE_COLOR: s->stroke_color = m->c; s->has_stroke_color = true; break;
+    case M_STROKE_CAP: s->stroke_cap = (uint8_t)m->f[0]; break;
+    case M_STROKE_JOIN: s->stroke_join = (uint8_t)m->f[0]; break;
+    case M_MITER_LIMIT: s->miter_limit = m->f[0] >= 1.f ? m->f[0] : 1.f; break;
+    case M_HIT_TOL: s->hit_tol = m->f[0] > 0.f ? m->f[0] : 0.f; break;
     case M_ROTATE: s->xf_rot = m->f[0]; s->has_xf = true; break;
     case M_SCALE: s->xf_sx = m->f[0]; s->xf_sy = m->f[1]; s->has_xf = true; break;
     case M_TRANSLATE: s->xf_tx = m->f[0]; s->xf_ty = m->f[1]; s->has_xf = true; break;
@@ -753,6 +773,56 @@ gp_node *gp_div_(int unused, ...) {
     collect(el, ap, true);
     va_end(ap);
     return &el->base;
+}
+
+/* A stroked curve or polyline: an absolutely placed element whose box is the bounding box of its points, padded by half the stroke width (more for a miter join) and the
+ * hit tolerance. Its points are in the parent's space (the one gp_left and gp_top use); they are kept relative to the box. Nothing about it depends on a layout. */
+static gp_node *make_curve(int kind, const gp_point *pts, size_t n, va_list ap) {
+    gp_el *el = gp_el_new(g_bc->arena, GP_EL_CURVE);
+    el->curve_kind = (uint8_t)kind;
+    collect(el, ap, false);
+    gp_style *s = &el->style;
+    size_t good = 0;
+    float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+    for (size_t i = 0; i < n; i++) {   /* a point that is not a number, or is absurd, ends the points there: nothing is drawn past it */
+        if (!(isfinite(pts[i].x) && isfinite(pts[i].y) && fabsf(pts[i].x) < 1e7f && fabsf(pts[i].y) < 1e7f)) break;
+        x0 = fminf(x0, pts[i].x); y0 = fminf(y0, pts[i].y);
+        x1 = fmaxf(x1, pts[i].x); y1 = fmaxf(y1, pts[i].y);
+        good++;
+    }
+    if (kind == 0 && good != 4) good = 0;
+    if (!good) x0 = y0 = x1 = y1 = 0;
+    float hw = s->stroke_w * 0.5f;
+    float pad = hw * (s->stroke_join == 1 && kind == 1 ? fmaxf(1.f, s->miter_limit) : 1.f) + s->hit_tol;
+    el->curve_n = (uint32_t)good;
+    el->curve_pts = gp_arena_alloc(g_bc->arena, (good ? good : 1) * sizeof *el->curve_pts, 4);
+    for (size_t i = 0; i < good; i++) el->curve_pts[i] = (gp_point){ pts[i].x - (x0 - pad), pts[i].y - (y0 - pad) };
+    s->absolute = 1;
+    s->inset[0] = (gp_length){ GP_PX, x0 - pad };
+    s->inset[1] = (gp_length){ GP_PX, y0 - pad };
+    s->inset[2] = s->inset[3] = (gp_length){ GP_AUTO, 0 };
+    s->w = (gp_length){ GP_PX, x1 - x0 + 2 * pad };
+    s->h = (gp_length){ GP_PX, y1 - y0 + 2 * pad };
+    s->min_w = s->min_h = s->max_w = s->max_h = (gp_length){ GP_AUTO, 0 };
+    s->basis = (gp_length){ GP_AUTO, 0 };
+    return &el->base;
+}
+
+gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, ...) {
+    gp_point pts[4] = { p0, c1, c2, p3 };
+    va_list ap;
+    va_start(ap, p3);
+    gp_node *n = make_curve(0, pts, 4, ap);
+    va_end(ap);
+    return n;
+}
+
+gp_node *gp_polyline_(const gp_point *pts, size_t n, ...) {
+    va_list ap;
+    va_start(ap, n);
+    gp_node *r = make_curve(1, pts, pts ? n : 0, ap);
+    va_end(ap);
+    return r;
 }
 
 gp_node *gp_img_(gp_image image, ...) {
@@ -952,6 +1022,7 @@ static bool has_handler(const gp_el *el, gp_hit_kind kind) {
     case GP_HIT_MOUSE_DOWN: return el->on_mouse_down.fn != NULL;
     case GP_HIT_CURSOR: return el->style.cursor != GP_CURSOR_DEFAULT;
     case GP_HIT_FOCUS: return el->focus_id != 0;
+    case GP_HIT_WHEEL: return el->on_wheel.fn != NULL;
     }
     return false;
 }
@@ -971,6 +1042,15 @@ static bool aff_box(gp_affine m, rect r, rect *out) {   /* a rectangle through a
 
 /* `p` is the point in the window; `fwd` (if `moved`) maps layout coordinates to the window, so the point in this element's own coordinates is its inverse
  * applied to p, and the clip, which is in the window, is tested with p. */
+static const uint64_t *g_hit_skip;   /* gp_hit_test_skipping: the paths not to report (the wheel goes on to the next handler when one lets it) */
+static int g_hit_nskip;
+
+static bool skipped(uint64_t path) {
+    for (int i = 0; i < g_hit_nskip; i++)
+        if (g_hit_skip[i] == path) return true;
+    return false;
+}
+
 static bool hit_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_hit_kind kind,
                     uint64_t path, gp_hit *out, gp_affine fwd, bool moved) {
     float x = ox + n->pos.x, y = oy + n->pos.y;
@@ -994,7 +1074,7 @@ static bool hit_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_hit_
         uint64_t cp = (path ^ (i + 1)) * 1099511628211ull;
         if (hit_rec(n->children[i], cx, cy, child_clip, p, kind, cp, out, fwd, moved)) return true;
     }
-    if (has_handler(n, kind) && rect_has(clip, p) && rect_has(b, q)) {
+    if (has_handler(n, kind) && !(g_hit_nskip && skipped(path)) && rect_has(clip, p) && (n->kind == GP_EL_CURVE ? rect_has(b, q) && gp_curve_hit(n, q.x - x, q.y - y) : rect_has(b, q))) {
         out->el = n;
         out->path = path;
         out->ox = x;
@@ -1004,6 +1084,15 @@ static bool hit_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_hit_
         return true;
     }
     return false;
+}
+
+bool gp_hit_test_skipping(gp_el *root, gp_point p, gp_hit_kind kind, gp_hit *out, const uint64_t *skip, int nskip) {
+    g_hit_skip = skip;
+    g_hit_nskip = nskip;
+    bool r = gp_hit_test(root, p, kind, out);
+    g_hit_skip = NULL;
+    g_hit_nskip = 0;
+    return r;
 }
 
 bool gp_hit_test(gp_el *root, gp_point p, gp_hit_kind kind, gp_hit *out) {

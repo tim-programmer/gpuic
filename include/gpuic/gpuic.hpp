@@ -31,7 +31,7 @@
  *             Like the C macros, a later modifier wins over an earlier one for the same property.
  * Children.   .child(x) takes an Element, a gp_node *, a string (a text element), an Entity (a nested view) or nullptr (skipped);
  *             .children(range) takes any range of those; .when(cond, f), .when_some(optional, f) and .map(f) are GPUI's.
- * Handlers.   .on_click, .on_mouse_down/up, .on_drag, .on_key_down/up, .on_text_input, .on_action, .on_layout, .on_ime and
+ * Handlers.   .on_click, .on_mouse_down/up, .on_drag, .on_wheel, .on_key_down/up, .on_text_input, .on_action, .on_layout, .on_ime and
  *             .with_animation take lambdas. A lambda names what it wants by its parameter types, in any order and any subset: a
  *             reference to the view's state (`Counter&`: the view that built the element), `Ctx` or `gp_ctx *`, and the event
  *             (`const gp_mouse_event&`, `const gp_key_event&`, `std::string_view` for text, `gp_size` for layout...). Captures are
@@ -490,6 +490,7 @@ template <class D> void text_tramp(void* self, gp_ctx* cx, const char* utf8, voi
     std::string_view sv(utf8);
     run_handler<D>(self, data, cx, utf8, sv);
 }
+template <class D> void wheel_tramp(void* self, gp_ctx* cx, const gp_wheel_event* ev, void* data) { run_handler<D>(self, data, cx, *ev); }
 template <class D> void scroll_tramp(void* self, gp_ctx* cx, gp_point offset, void* data) { run_handler<D>(self, data, cx, offset); }
 template <class D> void layout_tramp(void* self, gp_ctx* cx, gp_size size, void* data) { run_handler<D>(self, data, cx, size); }
 template <class D> void ime_tramp(void* self, gp_ctx* cx, const char* preedit, int cursor, void* data) {
@@ -552,6 +553,8 @@ public:
         case Kind::Text: return gp_text_(str_, mods, GP_END);
         case Kind::Img: return gp_img_(img_, mods, GP_END);
         case Kind::Svg: return gp_svg_img_(svg_, mods, GP_END);
+        case Kind::Curve: return gp_curve_(pts_[0], pts_[1], pts_[2], pts_[3], mods, GP_END);
+        case Kind::Polyline: return gp_polyline_(pts_, npts_, mods, GP_END);
         case Kind::UList: return gp_uniform_list_(count_, height_, list_fn_, data_, mods, GP_END);
         case Kind::List: return gp_list_(count_, height_, list_fn_, data_, mods, GP_END);
         case Kind::Group: return gp_mods(mods_.p, mods_.n);
@@ -654,6 +657,14 @@ public:
     }
     template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element&& on_mouse_up(F&& f) && { on_mouse_up(std::forward<F>(f)); return std::move(*this); }
 
+    /** The wheel turned over this element (see gp_on_wheel): `const gp_wheel_event&` has dx, dy, mods and the pointer; it is used up unless the handler calls cx.propagate(). */
+    Element& on_wheel(gp_wheel_fn fn, void* data = nullptr) & { return add(gp_on_wheel_data(fn, data)); }
+    Element&& on_wheel(gp_wheel_fn fn, void* data = nullptr) && { return std::move(add(gp_on_wheel_data(fn, data))); }
+    template <class F> requires(!std::is_convertible_v<F, gp_wheel_fn>) Element& on_wheel(F&& f) & {
+        return add(gp_on_wheel_data(&detail::wheel_tramp<std::decay_t<F>>, detail::box(std::forward<F>(f))));
+    }
+    template <class F> requires(!std::is_convertible_v<F, gp_wheel_fn>) Element&& on_wheel(F&& f) && { on_wheel(std::forward<F>(f)); return std::move(*this); }
+
     Element& on_key_down(gp_key_fn fn, void* data = nullptr) & { return add(gp_on_key_down_data(fn, data)); }
     Element&& on_key_down(gp_key_fn fn, void* data = nullptr) && { return std::move(add(gp_on_key_down_data(fn, data))); }
     template <class F> requires(!std::is_convertible_v<F, gp_key_fn>) Element& on_key_down(F&& f) & {
@@ -726,12 +737,14 @@ private:
     friend Element text(Str);
     friend Element img(gp_image);
     friend Element svg_img(gp_svg);
+    friend Element curve(gp_point, gp_point, gp_point, gp_point);
+    friend Element polyline(const gp_point*, size_t);
     friend Element style();
     friend Element raw(gp_node*);
     template <class F> friend Element uniform_list(size_t, float, F&&);
     template <class F> friend Element list(size_t, float, F&&);
 
-    enum class Kind : uint8_t { Div, Text, Img, Svg, UList, List, Group, Raw };
+    enum class Kind : uint8_t { Div, Text, Img, Svg, Curve, Polyline, UList, List, Group, Raw };
     explicit Element(Kind k) : kind_(k) {}
 
     Element& add(gp_node* mod) { mods_.push(mod); return *this; }
@@ -740,6 +753,8 @@ private:
     const char* str_ = nullptr;
     gp_image img_{};
     gp_svg svg_{};
+    gp_point* pts_ = nullptr;   // a curve's four points, a polyline's n (copied into the frame's memory)
+    size_t npts_ = 0;
     gp_node* raw_ = nullptr;
     size_t count_ = 0;
     float height_ = 0;
@@ -754,6 +769,35 @@ inline Element div() { return Element(Element::Kind::Div); }
 inline Element text(Str s) { Element e(Element::Kind::Text); e.str_ = s.c_str() ? s.c_str() : ""; return e; }
 inline Element img(gp_image image) { Element e(Element::Kind::Img); e.img_ = image; return e; }
 inline Element svg_img(gp_svg svg) { Element e(Element::Kind::Svg); e.svg_ = svg; return e; }
+/** A point, for the curve and polyline below: `xy(10, 20)` (or a braced `{10, 20}`). */
+inline gp_point xy(float x, float y) { return gp_point{ x, y }; }
+/** A stroked cubic Bezier from p0 to p3 with control points c1 and c2 (see gp_curve). The points are in the parent's space, where an absolute child's .left() and .top() are; the
+ *  element places itself, and its modifiers are the stroke ones: .stroke_width, .stroke_color, .stroke_cap_butt/_round, .stroke_join_miter/_round, .miter_limit, .hit_tolerance (and the
+ *  handlers and state styles: only the stroke is hit). */
+inline Element curve(gp_point p0, gp_point c1, gp_point c2, gp_point p3) {
+    Element e(Element::Kind::Curve);
+    e.pts_ = static_cast<gp_point*>(gp_frame_alloc(4 * sizeof(gp_point)));
+    e.pts_[0] = p0; e.pts_[1] = c1; e.pts_[2] = c2; e.pts_[3] = p3;
+    e.npts_ = 4;
+    return e;
+}
+/** A stroked polyline through the points (copied now: a std::vector or an initializer list may go away). */
+inline Element polyline(const gp_point* pts, size_t n) {
+    Element e(Element::Kind::Polyline);
+    e.pts_ = static_cast<gp_point*>(gp_frame_alloc((n ? n : 1) * sizeof(gp_point)));
+    for (size_t i = 0; i < n; i++) e.pts_[i] = pts[i];
+    e.npts_ = n;
+    return e;
+}
+inline Element polyline(std::initializer_list<gp_point> pts) { return polyline(pts.begin(), pts.size()); }
+template <class R> requires(!std::is_convertible_v<R, const gp_point*>) Element polyline(const R& range) {
+    size_t n = 0;
+    for (const auto& p : range) { (void)p; n++; }
+    gp_point* tmp = static_cast<gp_point*>(gp_frame_alloc((n ? n : 1) * sizeof(gp_point)));
+    size_t i = 0;
+    for (const auto& p : range) tmp[i++] = gp_point{ p.x, p.y };
+    return polyline(tmp, n);
+}
 /** Modifiers on their own, to be returned from a with_animation function or given to .refine(). */
 inline Element style() { return Element(Element::Kind::Group); }
 

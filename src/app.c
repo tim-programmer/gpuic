@@ -229,9 +229,27 @@ void gp_window_on_mouse_move(gp_window *w, float x, float y) {
     update_cursor(w);
 }
 
-void gp_window_on_scroll(gp_window *w, float x, float y, float dx, float dy) {
+/* gp_on_wheel: the innermost handler under the pointer; used up unless it calls gp_propagate, which goes on to the next one */
+static bool wheel_handlers(gp_window *w, gp_point p, float dx, float dy, uint32_t mods) {
+    uint64_t skip[16];
+    for (int n = 0; n < 16; n++) {
+        gp_hit hit;
+        if (!gp_hit_test_skipping(w->tree, p, GP_HIT_WHEEL, &hit, skip, n)) return false;
+        skip[n] = hit.path;
+        void *state = gp_entity_get(w->app, hit.el->on_wheel.owner);
+        if (!state) continue;
+        gp_ctx cx = { w->app, w, hit.el->on_wheel.owner, false };
+        gp_wheel_event ev = { p, { hit.qx - hit.ox, hit.qy - hit.oy }, dx, dy, mods };
+        ((gp_wheel_fn)hit.el->on_wheel.fn)(state, &cx, &ev, hit.el->on_wheel.data);
+        if (!cx.propagate) return true;
+    }
+    return false;
+}
+
+void gp_window_on_scroll(gp_window *w, float x, float y, float dx, float dy, uint32_t mods) {
     w->mouse = (gp_point){ x, y };
     w->mouse_in = true;
+    if (w->tree && wheel_handlers(w, w->mouse, dx, dy, mods)) return;
     gp_scroll_wheel(w, w->mouse, dx, dy);
 }
 
@@ -335,7 +353,7 @@ static void inject_key(gp_app *app, gp_window *w) {
  * In notches, SDL's convention: dy < 0 scrolls down (content moves up), dx > 0 scrolls right. */
 static void inject_wheel(gp_app *app, gp_window *w) {
     float x, y, dx, dy;
-    if (sscanf(app->wheel, "%f,%f,%f,%f", &x, &y, &dx, &dy) == 4) gp_platform_inject_wheel(w, x, y, dx, dy);
+    if (sscanf(app->wheel, "%f,%f,%f,%f", &x, &y, &dx, &dy) == 4) gp_platform_inject_wheel(w, x, y, dx, dy, 0);
     const char *next = strchr(app->wheel, ';');
     app->wheel = next ? next + 1 : "";
     app->shot_at = app->frames + 3;
@@ -698,6 +716,11 @@ void gp_simulate_mouse_button(gp_app *app, int kind, float x, float y, int butto
 void gp_simulate_touch(gp_app *app, int phase, float x, float y, double time_seconds) {
     gp_window *w = sim_window(app);
     if (w) gp_scroll_touch(w, phase, x, y, (int64_t)(time_seconds * 1e9));
+}
+
+void gp_simulate_wheel(gp_app *app, float x, float y, float dx, float dy, uint32_t mods) {
+    gp_window *w = sim_window(app);
+    if (w) gp_platform_inject_wheel(w, x, y, dx, dy, mods);
 }
 
 void gp_simulate_mouse(gp_app *app, int kind, float x, float y, int clicks, uint32_t mods) {

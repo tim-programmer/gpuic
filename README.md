@@ -106,7 +106,7 @@ animations can be sampled. The screenshot otherwise waits for the script to drai
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
 and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
 awaits: pipes, sockets, a TCP echo through coroutines, closing and cancelling at awkward moments),
-`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
+`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
 widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-height list, checked
 against a model), `tests/text_test.c` (fonts and shaping, against the fonts actually installed) and
 `tests/vlist_test.c` (the row-height index against a brute-force model). The first three need a
@@ -236,6 +236,7 @@ Link `gpuic::cpp` (CMake: `target_link_libraries(app PRIVATE gpuic::cpp)`; it is
 * **`SharedString`** (GPUI's): an immutable string that is shared when copied (a `shared_ptr` to a `std::string`): hold one in a view's state and put it in the tree every frame (`.child(title)`,
   `text(title)`, any string argument) with no copy per frame, because a `Str` made from one uses its text as it is, which lives as long as any copy does. Compares by text (`same()` asks for the
   same object), orders, hashes (`std::hash`) and converts to `std::string_view`; an empty one is one shared empty text, and a null C string is empty.
+* **ISO C++.** `gpuic.h` writes its struct values with `GP_LIT(T, ...)`, which is `T{ ... }` in C++ and a compound literal in C, so `gp_rgb`, `GP_ENTITY_NULL`, `GP_IMAGE_NULL`, `GP_SVG_NULL`, `gp_xy`, `gp_stop` and the rest compile under `-Wpedantic -Werror` (`tests/cpp_pedantic.cpp` does, in the build). The C builder macros that take compound literals from *your* code (`GP_NEW`, `gp_view_new`'s `&(T){...}`) are still C spellings: use `app.new_entity<T>(...)`.
 * **Not wrapped:** the synthetic-input functions (`gp_simulate_*`) and the debug hooks stay C calls.
 
 ## Observing entities
@@ -494,6 +495,12 @@ gp_scroll_to_end(cx, list);                   /* follow a log tail */
   `gp_track_focus` handle, e.g. after a search jumps to a result. Clicking, `gp_focus_set` and `gp_text_input`'s own caret reveal do not
   use it. An element not in the tree (a row of a `gp_list` that is scrolled out) is ignored; give a list `gp_list_scroll_to_item` instead.
   `tests/reveal_test.c` covers a bordered column, a row, nested scrollers, tall elements and wrapping around.
+
+* **`gp_on_wheel(fn)` / `gp_on_wheel_data(fn, data)`** on any element: the wheel (or a touchpad's scroll) over it calls `fn(self, cx, &ev, data)` with a `gp_wheel_event` (`position`, `local` in the element's
+  own coordinates, `dx`, `dy` in logical pixels the way scroll offsets grow: one notch down is `dy = +40`, shift + wheel arrives as `dx`, `mods` the `GP_MOD_*` held). The innermost element under the pointer
+  with a handler gets it, before any scroller, and it is **used up** (nothing scrolls) unless the handler calls `gp_propagate(cx)`, which passes it to the next handler under the pointer and after the last to
+  scrolling as if there had been none. Hit testing is the element's own (the stroke of a curve, the transformed shape of a turned box). Touch drags and flings do not come through it.
+  `gp_simulate_wheel(app, x, y, dx, dy, mods)` (in SDL's notches) is the test hook; C++ `.on_wheel([](Self&, const gp_wheel_event&) { ... })`. `tests/wheel_test.c`.
 
 See `examples/scroll.c`: a 200-row list with keyboard paging, a log nested inside a scrolling
 page (wheel chaining), and a horizontal strip.
@@ -822,6 +829,9 @@ its own cleanup code. Rules:
   (or `gp_entity_release`), so it unwinds before the call returns.
 * At exit `gp_application_run` cancels everything, joins the pool and unwinds every coroutine
   before entities are freed.
+* **Shutdown order (guaranteed, `tests/shutdown_test.c`):** when `gp_application_run` ends (after `gp_quit`, a closed last window, or a signal) it (1) cancels tasks, unwinds coroutines and joins the pool, (2) releases the renderer and destroys the windows,
+  (3) runs every entity's drop function (an entity may still use SDL: close an SDL audio device, destroy an SDL object; do not touch windows or other entities, whose order of dropping is unspecified),
+  (4) frees subscriptions, text and graphics state, and only then (5) calls `SDL_Quit()` and returns. So an entity destructor that closes an SDL3 audio device sees SDL still initialised.
 * Stack depth is fixed; keep big buffers off it. A blocking call blocks the whole UI, as anywhere.
 * `ucontext` needs glibc/macOS-style libc (not musl); the platform-independent part is only the
   executor, so a different coroutine backend could slot into `coro.c`.
@@ -1353,6 +1363,70 @@ gp_svg arrow = gp_svg_from_path(app, "M0 0 L20 10 L0 20 Z", 20, 20, fill, stroke
   stale handles, the raster cache (sharing, per color, per size), the budget overflow and repaint, releasing. `examples/svg.c`.
 * **Not done:** SVG animation and scripting, filters, `textPath`, loading from URLs, CSS `mask` / `clip-path` in `<style>` rules (the attribute and `style=""` work).
 
+### Stroked curves: `gp_curve`, `gp_polyline`
+
+```c
+gp_point pts[] = { gp_xy(10, 10), gp_xy(80, 40), gp_xy(120, 5) };
+gp_curve(gp_xy(20, 200), gp_xy(120, 200), gp_xy(180, 320), gp_xy(300, 320),    /* a cubic Bezier: p0, c1, c2, p3 */
+         gp_stroke_width(4), gp_stroke_color(red), gp_hit_tolerance(6), gp_hover_bg(white), gp_on_click(unplug), gp_cursor_pointer())
+gp_polyline(pts, 3, gp_stroke_width(6), gp_stroke_join_miter(), gp_stroke_cap_butt())  /* the points are copied */
+```
+
+C++: `curve(xy(20, 200), xy(120, 200), xy(180, 320), xy(300, 320)).stroke_width(4).stroke_color(red).hit_tolerance(6)` and `polyline({ xy(0, 0), xy(5, 5) })` (or a `std::vector` of anything with `x` and `y`).
+
+A cable, a connector, a graph edge: a stroked path that the GPU draws from a few instances, with hit testing on the stroke and not in its box. Modifiers: `gp_stroke_width(px)` (default 2; 0 or less
+draws and hits nothing), `gp_stroke_color(c)` (default: the text color; `gp_hover_bg` / `gp_active_bg` / `gp_focus_bg` and `gp_hover_style(gp_group(gp_stroke_color(c)))` replace it as they do a
+background), `gp_stroke_cap_round()` (default) / `gp_stroke_cap_butt()`, `gp_stroke_join_round()` (default) / `gp_stroke_join_miter()` with `gp_miter_limit(l)` (default 4: a join sharper than
+that falls back to a round one; polylines only: a Bezier has no corners), `gp_hit_tolerance(px)` (default 0).
+
+* **Coordinates.** The points are in the *parent's* space, the one `gp_left` / `gp_top` use for an absolutely placed child: the origin is the top left of the parent's padding box. They can be
+  computed from your own model with no layout. The element places itself: it is absolute (inset and size are set from the points), its box is the bounding box of all the points (the control
+  points too: a Bezier stays inside their hull) padded by half the stroke width plus the hit tolerance, plus (for a miter join) the limit times the half width, and it takes no part in the layout of its siblings or
+  of anything. A point that is not a number (or beyond 1e7) ends the points there; a Bezier with one is not drawn; a polyline of one point is a dot (round caps) or nothing (butt caps).
+* **Drawing.** The curve is flattened on the CPU, in uniform steps of t, until no piece strays more than a quarter of a *device* pixel from the curve at the current scale and under the current
+  transform (`n = ceil(sqrt(3 M / 4 tol))`, M the larger second difference of the control points: a long shallow cable gets a handful of pieces, a tight loop dozens; at most 512), and every piece
+  is **one instance of the existing renderer** (kind 9, the same 208-byte instance, same batching, same clip, same matrix): the fragment shader evaluates the exact distance to the piece's segment, so the
+  edge is anti-aliased like a rounded box's (coverage from the signed distance, one pixel wide), the round cap or join is part of the distance function (no polygons to stitch), and the premultiplied alpha is
+  the same as everything else's. Each piece has the half width, the style of each end (round, miter, flat) and, for each neighbour, the *plane* through the shared vertex (normal: the mean of
+  the two directions) that divides them: a piece draws only its side of the plane, so the pieces tile the stroke without overlap or gaps, and **a translucent stroke is blended exactly once
+  everywhere, joints included**. A miter beyond the limit, and every Bezier join, is the round one. (A dedicated vertex mesh was the alternative; instances won because they reuse all of the
+  above, need no second pipeline or buffer, give analytic round caps and joins, and each piece's bounds are tight around its own segment, so a long diagonal cable does not fill its bounding
+  box. The price is 208 bytes per piece rather than a few vertices: a few tens of pieces for a long cable, 4,200 instances for a hundred of them.) Flat ends are square to the first and last piece, and a flat-capped Bezier gets two extra
+  points a small step in from its ends so that those pieces point along the curve and the cap is not slanted.
+  Where a stroke *crosses itself* (a loop, a polyline over itself) the pieces overlap, and each blends over the other: the interior of an opaque stroke is right, a translucent one is darker where
+  it crosses itself, and where two anti-aliased edges meet in one pixel they both blend (a faint 1-pixel darkening at the crossing). A stroke that doubles straight back on itself is cut square at the turn and does not.
+* **Hit testing.** A point is on the stroke when its distance from the flattened center line (within 0.05 px of the curve) is at most half the width plus `gp_hit_tolerance`; a flat cap does not reach past
+  its end. Only that point counts for `gp_on_click`, `gp_on_mouse_down` (and with it `gp_on_drag` / `gp_on_mouse_up`), hover and pressed styles, the cursor and `gp_on_wheel`; elsewhere in the box the
+  pointer reaches whatever is underneath (z-order is the tree's: a box later in the tree takes the click first). `local` in the event is in the element's box coordinates. Under a transform the pointer goes
+  through the inverse matrix first, so a curve under a turned or scaled ancestor is hit where it is seen. Hover is only looked at when the element has a state style that depends on it.
+* **Everything else is an element's:** an ancestor's `overflow: hidden` cuts it (pixels and pointer), a rotated or scaled ancestor draws and hits it turned or scaled (the flattening follows the
+  magnification), `gp_opacity` on it or above, z-order, `gp_hover_style`, cached views.
+* **Dirty tracking.** An element like the others: the view that builds it is rebuilt when it is notified. **Give each cable (or each group that moves together) a cached view of its own**
+  (`gp_child_view_cached`): changing its points is then `gp_notify` on that view, which builds and paints that view only (the others' painted instances are copied back, as for any cached view), and
+  nothing calls `gp_app_notify`. A cached view that is a bare curve has one absolute element to lay out. Moving a curve without a cached view of its own rebuilds whatever view contains it.
+* **Cost** (`tests/cables_bench.c`, 1400 x 900, 40 panels and N cables, each a cached view of its own; ms per draw, CPU only, the draw waits for vsync as usual):
+  | scene (40 panels + N cables, 1400 x 900) | build | layout | paint | GL submit | total | instances | view renders |
+  |---|---|---|---|---|---|---|---|
+  | 0 cables, one knob turns | 0.006 | 0.023 | 0.012 | 0.026 | **0.067** | 751 | 2 |
+  | 100 cables, nothing changes (a repaint) | 0.000 | 0.000 | 0.043 | 0.117 | **0.160** | 4924 | 0 |
+  | 100 cables, one knob turns | 0.010 | 0.030 | 0.047 | 0.065 | **0.152** | 4924 | 2 |
+  | 100 cables, **one cable moves** | 0.006 | 0.018 | 0.043 | 0.098 | **0.164** | 4928 | 2 |
+  | 100 cables, one knob turns and one cable moves | 0.010 | 0.028 | 0.047 | 0.088 | **0.173** | 4928 | 3 |
+
+  (NVIDIA RTX 3070, Wayland; 200 draws each after a warm-up, no atlas resets; "view renders" counts render functions called per draw: the changed view and the root view, which is the
+  one uncached view and builds the 140 `gp_child_view_cached` placeholders. The cables are random, ~40 pieces each, long ones; a typical short cable is 10-20. The 0.065 - 0.12 ms of GL submit is
+  uploading and drawing the 4,900 instances, 1 MB, which is the same whatever moved.) That is under a tenth of the 0.5 ms asked for, and the cost of a cable moving is that of a knob turning:
+  `GPUIC_STATS=1 ./build/cables_bench` prints the same figures in its own format as well.
+* **Tests.** `tests/curve_test.c` (display; a single frame read back and compared to independent geometry, plus simulated input): a straight line, S curves, a loop (p0 == p3), a tight curve and a wide
+  one with flat caps against the exact stroke of the very polyline the library flattens to (to .14 of coverage per pixel) *and* against a dense sampling of the true curve (to a third), the flattening
+  within a quarter pixel of the curve, round and miter joins against the miter written out as a polygon, the limit's fallback, widths from 1 to 24, a straight edge between pixel rows (.75 and .25 covered, the rest
+  untouched), a point (a dot, or nothing with flat caps), a zero-length polyline, a point that is not a number, a width of zero, a stroke that doubles back; a translucent stroke over a box (the same
+  blend at every pixel inside, nothing outside) and along the line between two pieces at half-pixel coordinates; boxes; clicks, presses, drags, hover, the cursor and the tolerance (also past the end of the
+  stroke), flat ends, a box under the cable's box, a box above it; a turned ancestor, a scaled one (2x: twice as thick, hit as seen), an overflow clip (pixels and pointer), opacity, a hover style that changes the color; and two cached
+  views, one cable moved: that view rendered once, the other not rendered at all and painted from its kept copy, every pixel as it should be. About 60 mutants of the geometry, the plane logic, the shader, the box, the hit test.
+* **Not done:** dashes, gradients along the stroke, arrowheads or markers, filled shapes, text on a path, animating the points (`gp_with_animation` does not reach them), variable width, a stroke's own
+  transform (use an ancestor's), hit testing of a miter's tip (it is the round join's), and a self-crossing stroke blending once.
+
 ### Corners and borders
 
 * **Per-corner radii.** `gp_rounded_corners(tl, tr, br, bl)`, and `gp_rounded_top/_bottom/_left/_right(px)` for two at once; a corner
@@ -1454,4 +1528,5 @@ Roughly in the order I'd tackle them:
    painted in full when it or its scroller moves (their clip moves with them: only views without one are moved, see "Transforms" and `tests/paintshift_test.c`). The scene is still
    re-uploaded and drawn as a whole every frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
 6. Native Wayland/X11 and Vulkan backends; multi-window polish.
-7. State styles cannot change text color or anything that lays out; transforms have no skew or 3D, and a scroller inside a transformed element does not follow the matrix for the wheel and its thumb.
+7. Stroked curves have no dashes, gradients along the stroke, arrowheads, fills or text on a path, and a translucent stroke blends twice where it crosses itself (see "Stroked curves").
+8. State styles cannot change text color or anything that lays out; transforms have no skew or 3D, and a scroller inside a transformed element does not follow the matrix for the wheel and its thumb.

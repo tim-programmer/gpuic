@@ -33,14 +33,21 @@ typedef struct { float x, y; } gp_point;
 typedef struct { float w, h; } gp_size;
 typedef struct { float r, g, b, a; } gp_color;
 
+/* A value of a struct type, written for both languages: C's compound literal `(T){ ... }` is not C++ (-Wpedantic says so), a braced `T{ ... }` is not C. */
+#ifdef __cplusplus
+#define GP_LIT(T, ...) T{ __VA_ARGS__ }
+#else
+#define GP_LIT(T, ...) ((T){ __VA_ARGS__ })
+#endif
+
 /* 0xRRGGBB and 0xRRGGBBAA */
 static inline gp_color gp_rgb(uint32_t hex) {
-    return (gp_color){ ((hex >> 16) & 0xff) / 255.f, ((hex >> 8) & 0xff) / 255.f,
-                       (hex & 0xff) / 255.f, 1.f };
+    return GP_LIT(gp_color, ((hex >> 16) & 0xff) / 255.f, ((hex >> 8) & 0xff) / 255.f,
+                       (hex & 0xff) / 255.f, 1.f);
 }
 static inline gp_color gp_rgba(uint32_t hex) {
-    return (gp_color){ ((hex >> 24) & 0xff) / 255.f, ((hex >> 16) & 0xff) / 255.f,
-                       ((hex >> 8) & 0xff) / 255.f, (hex & 0xff) / 255.f };
+    return GP_LIT(gp_color, ((hex >> 24) & 0xff) / 255.f, ((hex >> 16) & 0xff) / 255.f,
+                       ((hex >> 8) & 0xff) / 255.f, (hex & 0xff) / 255.f);
 }
 static inline gp_color gp_with_alpha(gp_color c, float a) { c.a = a; return c; }
 
@@ -52,14 +59,14 @@ typedef struct gp_node gp_node;
 
 /* Generational handle; the zero value is never valid. */
 typedef struct { uint32_t index, generation; } gp_entity;
-#define GP_ENTITY_NULL ((gp_entity){ 0, 0 })
+#define GP_ENTITY_NULL GP_LIT(gp_entity, 0, 0)
 
 /* A decoded picture (see "images" below): generational, and the zero value is never valid. */
 typedef struct { uint32_t index, generation; } gp_image;
-#define GP_IMAGE_NULL ((gp_image){ 0, 0 })
+#define GP_IMAGE_NULL GP_LIT(gp_image, 0, 0)
 /* A parsed vector drawing (see "SVG" below): generational like gp_image. */
 typedef struct { uint32_t index, generation; } gp_svg;
-#define GP_SVG_NULL ((gp_svg){ 0, 0 })
+#define GP_SVG_NULL GP_LIT(gp_svg, 0, 0)
 
 typedef struct gp_ctx {
     gp_app *app;
@@ -282,6 +289,7 @@ void gp_simulate_key(gp_app *app, const char *keystroke, bool down);   /* one pr
 void gp_simulate_text(gp_app *app, const char *utf8);         /* as if typed / committed by an IME */
 void gp_simulate_ime(gp_app *app, const char *preedit, int cursor); /* synchronous, see app.c */
 void gp_simulate_mouse(gp_app *app, int kind, float x, float y, int clicks, uint32_t mods);
+void gp_simulate_wheel(gp_app *app, float x, float y, float dx, float dy, uint32_t mods);   /* in notches, SDL's way: dy < 0 scrolls down, dx > 0 right (as GPUIC_WHEEL) */
 /* One finger on the touch screen, which scrolls: a tap (down, up without moving more than 8 px) is a click at that point; a drag moves the
  * scrollers under the finger with it, immediately (no smooth-scroll glide), the innermost that can move first and then the ones around it as
  * the wheel does; lifting the finger while it was moving faster than 120 px/s (measured over its last 100 ms) goes on as a fling that slows
@@ -664,6 +672,40 @@ extern gp_node gp_end_marker;
 gp_node *gp_div_(int unused, ...);
 gp_node *gp_text_(const char *text, ...);
 gp_node *gp_img_(gp_image image, ...);
+
+/* ---------------------------------------------------------------- stroked curves */
+
+/* A cable, a connector, a graph's edge: a cubic Bezier or a polyline stroked at a width, drawn by the GPU from a few instances (no bitmap, no upload), with hit testing on the
+ * stroke only. Written like the other elements: `gp_curve(p0, c1, c2, p3, modifiers...)`, `gp_polyline(points, n, modifiers...)` (the points are copied).
+ *
+ * Coordinates: the points are in the PARENT's space, the one gp_left / gp_top use for an absolutely placed child (the origin is the top left of the parent's padding box, inside its
+ * border): compute them from your own model, no layout is needed. The element places itself: it is absolute, its box is the bounding box of the points padded by half the
+ * stroke width plus the hit tolerance (plus more for a miter join, see gp_miter_limit), and it takes no part in the layout of its siblings. Put it where the stroke should be in
+ * the tree order (it paints and is hit in that order, like any element), inside a parent that covers the area. */
+gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, ...);
+#define gp_curve(p0, c1, c2, p3, ...) gp_curve_((p0), (c1), (c2), (p3) __VA_OPT__(,) __VA_ARGS__, GP_END)
+gp_node *gp_polyline_(const gp_point *pts, size_t n, ...);
+#define gp_polyline(pts, n, ...) gp_polyline_((pts), (n) __VA_OPT__(,) __VA_ARGS__, GP_END)
+#define gp_xy(px, py) GP_LIT(gp_point, (px), (py))   /* a point (not gp_pt: that is the padding at the top) */
+
+/* How it is stroked (the stroke is `gp_stroke_color`, by default the text color, `gp_stroke_width` wide, by default 2 px). The ends are round or flat; the joins of a polyline round or
+ * mitered (a Bezier's pieces are joined smoothly whatever is set); a miter longer than `gp_miter_limit` times the half width (default 4) falls back to a round join. The pixels are
+ * covered exactly, with a soft edge like a rounded box's, and a translucent stroke is blended once everywhere, joints included (no darker spots where pieces meet). The Bezier is
+ * cut into straight pieces to within 0.25 device pixels at the scale it is drawn at (the window's, times any transform above it). */
+gp_node *gp_stroke_width(float px);
+gp_node *gp_stroke_color(gp_color c);
+gp_node *gp_stroke_cap_round(void);
+gp_node *gp_stroke_cap_butt(void);
+gp_node *gp_stroke_join_round(void);
+gp_node *gp_stroke_join_miter(void);
+gp_node *gp_miter_limit(float ratio);
+
+/* Hit testing and the pointer: gp_on_click, gp_on_mouse_down, gp_on_drag, the hover and pressed styles (`gp_hover_bg(c)` and `gp_active_bg(c)` are the stroke's color while they hold, and
+ * gp_hover_style(gp_group(gp_stroke_color(c)))) and the cursor work on the STROKE only: a point is on it when it is within half the width plus `gp_hit_tolerance` (default 0) of the
+ * centerline (and, with butt caps, not beyond an end); everywhere else in the box the pointer goes on to what is below. Transforms and clips above it apply to the pixels and to the pointer.
+ * The element has no children. Changing the points means building it again, which is the business of the view that builds it: put a cable in a cached view of its own
+ * (gp_child_view_cached) and only that view is built and painted again when it moves. */
+gp_node *gp_hit_tolerance(float px);
 gp_node *gp_svg_img_(gp_svg svg, ...);
 #define gp_div(...)        gp_div_(0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 #define gp_text(str, ...)  gp_text_((str) __VA_OPT__(,) __VA_ARGS__, GP_END)
@@ -925,7 +967,7 @@ gp_task gp_image_load_file_async(gp_ctx *cx, const char *path, gp_image_fn done,
 bool gp_image_size(gp_app *app, gp_image image, int *width, int *height);        /* false for a released or null image */
 /* Frees the pixels and the texture. Elements that still show it draw nothing (and, laid out by it, are 0 x 0). */
 void gp_image_release(gp_app *app, gp_image image);
-#define gp_stop(color, at) ((gp_color_stop){ (color), (at) })
+#define gp_stop(color, at) GP_LIT(gp_color_stop, (color), (at))
 /* `angle_deg` as in CSS: 0 points up, 90 right, 180 down; the line is as long as the box needs to reach its corners. */
 gp_node *gp_bg_linear_gradient(float angle_deg, const gp_color_stop *stops, int n);
 /* A circle around (cx, cy), fractions of the box (0.5, 0.5 is the middle), out to the farthest corner. */
@@ -1086,7 +1128,7 @@ gp_node *gp_scale(float s);
 gp_node *gp_scale_xy(float sx, float sy);
 gp_node *gp_translate(float dx, float dy);
 gp_node *gp_transform_origin(float fx, float fy);
-gp_node *gp_hover_style(gp_node *group);gp_node *gp_hover_style(gp_node *group);
+gp_node *gp_hover_style(gp_node *group);
 gp_node *gp_active_style(gp_node *group);
 gp_node *gp_focus_style(gp_node *group);
 
@@ -1128,6 +1170,21 @@ gp_node *gp_on_layout(gp_layout_fn fn);
  * gp_on_layout. It runs often (once per layout pass): do nothing unless something changed. Only on an element that scrolls. */
 typedef void (*gp_scroll_fn)(void *self, gp_ctx *cx, gp_point offset, void *data);
 gp_node *gp_on_scroll(gp_scroll_fn fn);
+
+/* The mouse wheel (or touchpad scroll) turned with the pointer over the element: `dx`, `dy` are in logical pixels, the way scroll offsets grow (dy > 0 is "down": the content
+ * would move up; dx > 0 is "right"; shift + wheel arrives as dx), `mods` the GP_MOD_* held. The innermost element under the pointer that has a handler gets the event, BEFORE
+ * any scroller does, and it is used up: nothing scrolls, unless the handler calls gp_propagate(cx), which passes it on to the next handler under the pointer and then to
+ * scrolling as if there had been none. Hit testing is the element's own: on a curve only the stroke counts, under a transform the transformed shape. `local` is where the pointer is in
+ * the element's own coordinates. Touch scrolling and flings do not come through here. */
+typedef struct {
+    gp_point position;   /* window coordinates, logical pixels */
+    gp_point local;      /* position relative to the element */
+    float dx, dy;
+    uint32_t mods;
+} gp_wheel_event;
+typedef void (*gp_wheel_fn)(void *self, gp_ctx *cx, const gp_wheel_event *ev, void *data);
+gp_node *gp_on_wheel(gp_wheel_fn fn);
+gp_node *gp_on_wheel_data(gp_wheel_fn fn, void *data);
 
 /* Composition events, delivered to the focused element (or its ancestors) that also has
  * gp_on_text_input. gp_ime_rect tells the platform where to put the candidate window, in

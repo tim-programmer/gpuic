@@ -87,6 +87,68 @@ static void push(paint_ctx *pc, gp_instance *inst) {
     gp_scene_push(pc->scene, inst);
 }
 
+/* ---------------------------------------------------------------- stroked curves */
+
+/* The stroke as one instance a piece: every piece is a capsule (or, at a joint, the part of the stroke on its own side of the plane that bisects the angle there), drawn by the
+ * fragment shader from the distance to the piece, so edges are anti-aliased exactly, round caps and joins come out of the distance, and no pixel is covered by two pieces: a translucent
+ * stroke is blended once everywhere. The planes make the pieces tile the stroke (a pixel belongs to the piece whose side of both planes it is on). */
+static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, float opacity, gp_color color) {
+    const gp_style *s = &n->style;
+    float hw = s->stroke_w * 0.5f;
+    if (!(hw > 0.f) || color.a <= 0.f) return;
+    float mag = 1.f;
+    if (pc->has_xf) mag = sqrtf(fabsf(pc->xf.a * pc->xf.d - pc->xf.b * pc->xf.c));
+    float tol = 0.25f / (pc->scale * (mag > 1e-4f ? mag : 1e-4f));   /* a quarter of a device pixel, in the element's own units */
+    gp_point *p;
+    size_t m = gp_curve_flatten(n, tol, pc->scratch, &p);
+    if (!m) return;
+    const bool butt = s->stroke_cap == 1, miter = s->stroke_join == 1 && n->curve_kind == 1;
+    float pad = hw * (miter ? fmaxf(1.f, s->miter_limit) : 1.f) + 1.5f;   /* (and a pixel and a half for the soft edge) */
+    if (m == 1) {   /* a point: a dot, if the ends are round */
+        if (butt) return;
+        gp_instance inst = { 0 };
+        set4(inst.bounds, x + p[0].x - pad, y + p[0].y - pad, 2 * pad, 2 * pad);
+        set_clip(&inst, clip);
+        set_color(inst.color, color, opacity);
+        inst.kind = GP_PRIM_SEGMENT;
+        set4(inst.radii, hw, 0, 0, 0);
+        push(pc, &inst);
+        return;
+    }
+    /* the unit directions of the pieces, and the plane at every joint: the one through the vertex whose normal is the mean direction */
+    gp_point *dir = gp_arena_alloc(pc->scratch, (m - 1) * sizeof *dir, 4);
+    gp_point *plane = gp_arena_alloc(pc->scratch, m * sizeof *plane, 4);   /* the mean direction at vertex i (1 .. m-2) */
+    uint8_t *style = gp_arena_alloc(pc->scratch, m, 1);                    /* at vertex i: 0 round, 1 miter */
+    for (size_t i = 0; i + 1 < m; i++) {
+        float dx = p[i + 1].x - p[i].x, dy = p[i + 1].y - p[i].y, l = hypotf(dx, dy);
+        dir[i] = l > 0.f ? (gp_point){ dx / l, dy / l } : (gp_point){ 1, 0 };
+    }
+    for (size_t i = 1; i + 1 < m; i++) {
+        float mx = dir[i - 1].x + dir[i].x, my = dir[i - 1].y + dir[i].y, l = hypotf(mx, my);
+        if (l < 1e-4f) { plane[i] = dir[i - 1]; style[i] = 0; continue; }   /* a turn right back on itself: cut square */
+        plane[i] = (gp_point){ mx / l, my / l };
+        float cos_half = plane[i].x * dir[i].x + plane[i].y * dir[i].y;   /* of half the turn: the miter is 1 / cos_half times the half width */
+        style[i] = miter && cos_half > 1e-3f && 1.f / cos_half <= s->miter_limit ? 1 : 0;
+    }
+    for (size_t i = 0; i + 1 < m; i++) {
+        gp_point a = p[i], b = p[i + 1];
+        float minx = fminf(a.x, b.x) - pad, maxx = fmaxf(a.x, b.x) + pad, miny = fminf(a.y, b.y) - pad, maxy = fmaxf(a.y, b.y) + pad;
+        float cx = (minx + maxx) * 0.5f, cy = (miny + maxy) * 0.5f;
+        gp_instance inst = { 0 };
+        set4(inst.bounds, x + minx, y + miny, maxx - minx, maxy - miny);
+        set_clip(&inst, clip);
+        set_color(inst.color, color, opacity);
+        inst.kind = GP_PRIM_SEGMENT;
+        set4(inst.uv, a.x - cx, a.y - cy, b.x - cx, b.y - cy);   /* the ends, relative to the middle of the bounds (what the shader's local position is) */
+        float sa = i == 0 ? (butt ? 2.f : 0.f) : (float)style[i], sb = i + 2 == m ? (butt ? 2.f : 0.f) : (float)style[i + 1];
+        set4(inst.radii, hw, sa, sb, 0);
+        gp_point na = i == 0 ? (gp_point){ 0, 0 } : (gp_point){ -plane[i].x, -plane[i].y };
+        gp_point nb = i + 2 == m ? (gp_point){ 0, 0 } : plane[i + 1];
+        set4(inst.side[0], na.x, na.y, nb.x, nb.y);
+        push(pc, &inst);
+    }
+}
+
 static void paint_text(paint_ctx *pc, gp_el *n, float x, float y, rect clip, float opacity) {
     const gp_style *s = &n->style;
     float bw = s->border_w;
@@ -371,6 +433,7 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
  * colors, style and gradient, corner radii, shadow, opacity), put over `dst`. Anything that would move or resize the element is not here. */
 static void overlay_style(gp_style *dst, const gp_style *src) {
     if (src->has_bg) { dst->bg = src->bg; dst->has_bg = true; dst->bg_gradient = NULL; }
+    if (src->has_stroke_color) { dst->stroke_color = src->stroke_color; dst->has_stroke_color = true; }
     if (src->bg_gradient) dst->bg_gradient = src->bg_gradient;
     if (src->border_color.a > 0) { dst->border_color = src->border_color; dst->bcolor_set = 0; dst->border_gradient = NULL; }
     for (int i = 0; i < 4; i++)
@@ -391,6 +454,10 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
 
     rect bounds = { x, y, x + w, y + h };
     bool hovered = pc->mouse_in && rect_has(bounds, pc->mouse_local) && rect_has(clip, pc->mouse);
+    if (hovered && n->kind == GP_EL_CURVE) {   /* a stroke is hovered on the stroke, not in its box (looked at only if something depends on it) */
+        const gp_style *cs = &n->style;
+        hovered = (cs->has_hover_bg || cs->has_active_bg || cs->hover_style || cs->active_style) && gp_curve_hit(n, pc->mouse_local.x - x, pc->mouse_local.y - y);
+    }
     bool focused = n->focus_id && n->focus_id == pc->focused;
     gp_style stated;
     if ((hovered && (s->hover_style || (pc->pressed && s->active_style))) || (focused && s->focus_style)) {
@@ -402,6 +469,14 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
     }
     opacity *= s->opacity;
     if (opacity <= 0) return;
+    if (n->kind == GP_EL_CURVE) {
+        gp_color c = s->has_stroke_color ? s->stroke_color : n->ts.color;
+        if (hovered && pc->pressed && s->has_active_bg) c = s->active_bg;
+        else if (hovered && s->has_hover_bg) c = s->hover_bg;
+        if (focused && s->has_focus_bg && !(hovered && s->has_hover_bg)) c = s->focus_bg;
+        paint_curve(pc, n, x, y, clip, opacity, c);
+        return;
+    }
     float r4[4];
     corner_radii(s, w, h, r4);
 

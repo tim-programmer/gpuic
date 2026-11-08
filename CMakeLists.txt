@@ -44,6 +44,7 @@ add_library(gpuic
   src/image.c
   src/svg.c
   src/svgx.c
+  src/curve.c
   src/app.c
   src/arena.c
   src/coro.c
@@ -105,7 +106,10 @@ endif()
 if(GPUIC_BUILD_TESTS)
   enable_testing()
   # exec_test, fd_test, anim_test, window_test, autohide_test, fonts_test, lcd_test, input_test, list_test, observe_test and views_test open a window and need a display; the others do not.
-  foreach(test exec_test fd_test anim_test window_test autohide_test fonts_test lcd_test gfx_test gradient_test image_test svg_test svgx_test box_test flex_test minwidth_test reveal_test track_test smooth_test bigdoc_test grapheme_test variations_test gamma_test touch_test sticky_test hlist_test hvlist_test border_style_test state_style_test paintshift_test transform_test keys_test input_test ime_wrap_test dualcaret_test wrapedit_test text_test list_test vlist_test observe_test views_test)
+  add_executable(cables_bench tests/cables_bench.c)   # not a test: a measurement (needs a display)
+  target_link_libraries(cables_bench PRIVATE gpuic gpuic_deps)
+  target_include_directories(cables_bench PRIVATE src)
+  foreach(test exec_test fd_test anim_test window_test autohide_test fonts_test lcd_test gfx_test gradient_test image_test svg_test svgx_test box_test flex_test minwidth_test reveal_test track_test smooth_test bigdoc_test grapheme_test variations_test gamma_test touch_test sticky_test hlist_test hvlist_test border_style_test state_style_test paintshift_test transform_test curve_test wheel_test shutdown_test keys_test input_test ime_wrap_test dualcaret_test wrapedit_test text_test list_test vlist_test observe_test views_test)
     add_executable(${test} tests/${test}.c)
     target_link_libraries(${test} PRIVATE gpuic gpuic_deps)   # tests reach into internals and the dependency headers
     target_include_directories(${test} PRIVATE src)
@@ -129,6 +133,11 @@ if(GPUIC_BUILD_TESTS)
     target_compile_options(cpp_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wno-unused-parameter>)
     add_test(NAME cpp_test COMMAND cpp_test)
     set_tests_properties(cpp_test PROPERTIES ENVIRONMENT "GPUIC_FONT_CACHE=${CMAKE_CURRENT_BINARY_DIR}/font-scan-cache;GPUIC_LCD=off")
+    # the header and the C++ layer as ISO C++ (no compound literals): -Wpedantic -Werror
+    add_executable(cpp_pedantic tests/cpp_pedantic.cpp)
+    target_link_libraries(cpp_pedantic PRIVATE gpuic::cpp gpuic_deps)
+    target_compile_options(cpp_pedantic PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME cpp_pedantic COMMAND cpp_pedantic)
     # timers, background work, coroutines, observation, text fields and loaders: every closure destroyed exactly once
     add_executable(cpp_async_test tests/cpp_async_test.cpp)
     target_link_libraries(cpp_async_test PRIVATE gpuic::cpp gpuic_deps)
