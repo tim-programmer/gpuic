@@ -1,0 +1,18 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+# gpuic's dependencies are system packages here; find them the way the build did.
+set(_gpuic_saved_global "${CMAKE_FIND_PACKAGE_TARGETS_GLOBAL}")
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
+set(GPUIC_DEPENDENCIES SYSTEM)
+set(GPUIC_FONTCONFIG @GPUIC_CONFIG_FONTCONFIG@)
+include("${CMAKE_CURRENT_LIST_DIR}/GpuicDependencies.cmake")
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL "${_gpuic_saved_global}")
+
+if(NOT TARGET gpuic_installed_deps)
+  add_library(gpuic_installed_deps ALIAS gpuic_deps)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/gpuicTargets.cmake")
+check_required_components(gpuic)
