@@ -1,9 +1,10 @@
 /*
- * Editing a soft-wrapped document: the rows are brought up to date by wrapping again only the hard lines an edit touched and moving the rest. After every
- * edit the kept rows must be exactly the rows made again from scratch (every field of every row), over thousands of random edits (inserts and deletes of
- * letters, spaces, newlines, Hebrew, CJK, long words; edits that join and split lines, that cross several lines, at the start and the end of the text, on empty
- * lines); two edits before the rows are read take the full path; a change of width does too; and on a big document an edit takes a fraction of the time of making all the
- * rows again. Needs a display (the field needs a width to wrap at).
+ * Editing a soft-wrapped document: the rows are kept per hard line (breaks relative to the line's start), so an edit wraps again only the lines it
+ * touched and nothing else moves. After every edit the kept rows must be exactly the lines wrapped again (every field of every row), and the
+ * Fenwick tree over the row counts must add up, over thousands of random edits (inserts and deletes of letters, spaces, newlines, Hebrew, CJK, long
+ * words; edits that join and split lines, that cross several lines, at the start and the end of the text, on empty lines); any number of edits
+ * before a read wrap only their lines; a change of width estimates everything again; and a big document is not wrapped when it is opened, only
+ * where it is looked at. (tests/lazywrap_test.c scrolls such a document.) Needs a display (the field needs a width to wrap at).
  */
 #include "../src/internal.h"
 
@@ -76,6 +77,8 @@ static void run(void) {
     char why[300];
     CHECK(gp_text_input_debug_rows(app, field, &full0, &inc0, why, sizeof why) == NULL, "the rows of the document: %s", why);
     CHECK(gp_text_input_rows(app, field) > 800, "a document that wraps to many rows (%zu)", gp_text_input_rows(app, field));
+    size_t lines, unwrapped = gp_text_input_debug_unwrapped(app, field, &lines);
+    CHECK(unwrapped == 0, "a small document is wrapped whole, its rows exact (%zu of %zu lines not wrapped)", unwrapped, lines);
 
     /* random edits, the rows read (so brought up to date) after each */
     for (int i = 0; i < 2500; i++) {
@@ -95,7 +98,7 @@ static void run(void) {
     }
     unsigned long full1, inc1;
     gp_text_input_debug_rows(app, field, &full1, &inc1, why, sizeof why);
-    CHECK(inc1 - inc0 >= 2400 && full1 - full0 <= 50, "most edits updated the rows in place (%lu incremental, %lu from scratch)", inc1 - inc0, full1 - full0);
+    CHECK(full1 == full0 && inc1 - inc0 <= 2500 * 3, "edits wrap only the lines they touch (%lu lines wrapped by 2500 edits, %lu re-estimates)", inc1 - inc0, full1 - full0);
 
     /* edits that join and split lines: delete a line break; put one in the middle of a long line; a range across many lines */
     {
@@ -132,7 +135,7 @@ static void run(void) {
     verify("two edits", 0);
     unsigned long f3, i3;
     gp_text_input_debug_rows(app, field, &f3, &i3, why, sizeof why);
-    CHECK(f3 == f2 + 1 && i3 == i2, "two edits before the rows were read: from scratch (%lu -> %lu from scratch, %lu -> %lu in place)", f2, f3, i2, i3);
+    CHECK(f3 == f2 && i3 - i2 <= 4, "two edits before the rows were read: only their lines (%lu -> %lu re-estimates, %lu lines wrapped)", f2, f3, i3 - i2);
 
     /* a change of width: again from scratch */
     g_width = 150;
@@ -152,38 +155,44 @@ static void run(void) {
     settle();
     verify("an edit, then a width", 0);
 
-    /* speed: a big wrapped document, an edit in the middle, against the rows made all over again */
+    /* a big wrapped document: opening it wraps only what is looked at (the rows of the rest are estimated); an edit wraps its line */
     static char big[3000000];
     make_doc(big, sizeof big, 20000);
     g_width = 220;
     gp_app_notify(app);
-    gp_text_input_set_text(&cx, field, big);
     settle();
-    size_t rows = gp_text_input_rows(app, field);
+    double t0 = now();
+    gp_text_input_set_text(&cx, field, big);
+    size_t est = gp_text_input_rows(app, field);
+    double open_t = now() - t0;
+    settle();
+    lines = 0;
+    unwrapped = gp_text_input_debug_unwrapped(app, field, &lines);
+    CHECK(lines > 19000 && unwrapped + 200 > lines, "opening the big document wrapped only the lines in view (%zu of %zu not wrapped)", unwrapped, lines);
+    verify("big, opened", 1);
     unsigned long f5, i5;
     gp_text_input_debug_rows(app, field, &f5, &i5, why, sizeof why);
     size_t mid = strlen(gp_text_input_text(app, field)) / 2;
     const char *t = gp_text_input_text(app, field);
     while (((unsigned char)t[mid] & 0xc0) == 0x80) mid++;
-    double t0 = now();
     for (int i = 0; i < 20; i++) {
         gp_text_input_debug_replace(app, field, mid, mid, "q");
         (void)gp_text_input_rows(app, field);
     }
-    double inc = (now() - t0) / 20;
-    t0 = now();
-    for (int i = 0; i < 5; i++) {
-        gp_text_input_debug_replace(app, field, mid, mid, "q");
-        gp_text_input_debug_replace(app, field, mid, mid, "q");   /* two before a read: the full path */
-        (void)gp_text_input_rows(app, field);
-    }
-    double fullt = (now() - t0) / 5;
-    verify("big", 0);
     unsigned long f6, i6;
     gp_text_input_debug_rows(app, field, &f6, &i6, why, sizeof why);
-    printf("  (%zu rows: %.2f ms an edit in place, %.2f ms from scratch)\n", rows, inc * 1e3, fullt * 1e3);
-    CHECK(rows > 30000 && i6 - i5 >= 20, "the big document: %zu rows, %lu edits in place", rows, i6 - i5);
-    CHECK(inc * 8 < fullt, "an edit in place is at least 8 times quicker than making all the rows again (%.2f ms against %.2f ms)", inc * 1e3, fullt * 1e3);
+    CHECK(f6 == f5 && i6 == i5, "edits out of view wrap nothing (%lu lines wrapped)", i6 - i5);
+    t0 = now();
+    gp_text_input_debug_wrap_all(app, field);
+    double all_t = now() - t0;
+    const char *idx = gp_text_input_debug_check(app, field, why, sizeof why);
+    CHECK(!idx, "big: line index: %s", idx ? idx : "");
+    verify("big, all wrapped", 1);
+    size_t rows = gp_text_input_rows(app, field);
+    printf("  (%zu rows, estimated %zu when opened: %.2f ms to open, %.0f ms to wrap it all)\n", rows, est, open_t * 1e3, all_t * 1e3);
+    CHECK(rows > 30000, "the big document: %zu rows", rows);
+    CHECK(est * 10 > rows * 7 && est * 10 < rows * 13, "the estimate is within 30%% (%zu estimated, %zu rows)", est, rows);
+    CHECK(open_t * 8 < all_t, "opening is at least 8 times quicker than wrapping everything (%.2f ms against %.2f ms)", open_t * 1e3, all_t * 1e3);
 }
 
 static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {

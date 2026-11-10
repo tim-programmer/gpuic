@@ -636,8 +636,12 @@ bool gp_scroll_thumb(const gp_el *n, int axis, float ox, float oy, gp_thumb *t);
 void gp_scroll_wheel(gp_window *w, gp_point p, float dx, float dy);
 void gp_text_input_debug_replace(gp_app *app, gp_entity input, size_t start, size_t end, const char *ins);   /* tests: an edit with no bookkeeping but the buffer's */
 size_t gp_text_input_debug_clusters(gp_app *app, gp_entity input, int mode, size_t *out, size_t cap);   /* tests: the cluster boundaries three ways */
-const char *gp_text_input_debug_check(gp_app *app, gp_entity input, char *why, size_t cap);
-const char *gp_text_input_debug_rows(gp_app *app, gp_entity input, unsigned long *full, unsigned long *incremental, char *why, size_t cap);   /* tests: the rows kept up to date against the rows made again; and how many times each way */   /* tests: NULL if the kept-up index is what a rescan gives */
+const char *gp_text_input_debug_check(gp_app *app, gp_entity input, char *why, size_t cap);   /* tests: NULL if the kept-up index is what a rescan gives */
+const char *gp_text_input_debug_rows(gp_app *app, gp_entity input, unsigned long *full, unsigned long *incremental, char *why, size_t cap);   /* tests: the wrapped lines against the lines wrapped again; times everything was re-estimated, lines wrapped */
+void gp_text_input_debug_wrap_all(gp_app *app, gp_entity input);   /* tests: wraps every line of a soft-wrapped field */
+size_t gp_text_input_debug_row_of(gp_app *app, gp_entity input, size_t off, bool upstream);   /* tests */
+void gp_text_input_debug_scroll_to(gp_app *app, gp_entity input, float y);   /* tests: as the wheel or a scrollbar would */
+size_t gp_text_input_debug_unwrapped(gp_app *app, gp_entity input, size_t *lines);   /* tests: lines whose row counts are estimates */
 void gp_scroll_notify(gp_window *w, gp_el *n);   /* calls the element's gp_on_scroll handler with its offset (base included), if it has one */
 void gp_scroll_track_repeat(gp_window *w);    /* before painting: pages again if the button is still held on a track and it is time */
 void gp_scroll_stop_repeat(gp_window *w);     /* the button was released */

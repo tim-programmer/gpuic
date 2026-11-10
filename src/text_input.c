@@ -51,6 +51,17 @@ typedef struct {
     size_t pre_a, pre_b;
 } Row;
 
+/* The rows of one hard line. state 0: not wrapped, `n` is an estimate; 1: wrapped, row i > 0 starts brk[i - 1] bytes into the line
+ * (relative, so an edit elsewhere moves nothing); 2: wrapped with the composition in it, the rows are TextInput.crow. */
+typedef struct {
+    uint32_t n;
+    uint8_t state, rtl, pre;     /* pre: Row.pre of its rows */
+    uint32_t *brk;               /* n - 1 entries, NULL when n <= 1 */
+} LineRows;
+
+/* A document this small is wrapped whole (everything about its rows is exact); a bigger one only where it is looked at. */
+#define EAGER_WRAP_BYTES 65536
+
 typedef struct {
     uint32_t magic;
     gp_text_input_options o;
@@ -85,13 +96,25 @@ typedef struct {
     float max_w;                 /* the widest row built so far: the scroll extent across, for a document that is not built whole */
     size_t win_first, win_n;     /* the rows the last render built */
     uint64_t rev;                /* bumped on every change to the text */
-    Row *rows;
+    Row *rows;                   /* scratch: the rows of the line being wrapped */
     size_t nrows, cap_rows;
-    bool rows_valid;
-    uint64_t rows_rev, rows_pre;   /* the revision and the composition (pre_ver) the rows were made for */
-    bool pend_valid;               /* exactly one edit since the rows were made: [pend_start, pend_old_end) of the old text became pend_len bytes (see update_rows) */
-    size_t pend_start, pend_old_end, pend_len;
-    unsigned long rows_full, rows_incremental;   /* how the rows were brought up to date (tests) */
+    /* Soft wrap is lazy (see "rows"): every hard line has a row count, MEASURED (its breaks are known) or ESTIMATED from its length, and a
+     * Fenwick tree over the counts gives the row a line starts at and the line a row is in. Only the lines that are looked at are wrapped. */
+    LineRows *lr;                /* parallel to ls */
+    size_t *fw;                  /* Fenwick tree over lr[].n, 1-based, nl + 1 entries when fw_valid */
+    size_t fw_cap, total_rows, unmeasured;
+    bool fw_valid, lr_valid;
+    double k_bytes, k_width;     /* the lines measured so far: bytes and shaped width, for the estimates */
+    double k_used;               /* the width of a byte the estimates of the lines not wrapped were made with */
+    Row *crow;                   /* the rows of the line holding the composition (state 2), which say what share of it each row shows */
+    size_t ncrow, cap_crow;
+    uint64_t c_rev, c_pre;
+    /* The scroll position of a wrapped field is ANCHORED to text: the start of the row at the top (a_off) and how far into that row the view
+     * starts (a_frac). When lines above it are measured and their estimates were wrong, the offset moves with them, so the view does not. */
+    size_t a_off;
+    float a_frac, last_y;
+    bool a_valid;
+    unsigned long rows_full, rows_lines;   /* tests: times everything was re-estimated (a new width), lines wrapped */
     uint64_t pre_ver;              /* bumped whenever the composition changes */
     float rows_w;
     float wrap_w;                /* 0 = do not wrap */
@@ -620,8 +643,43 @@ static void lines_reserve(TextInput *ti, size_t need) {
     while (c < need) c *= 2;
     ti->ls = realloc(ti->ls, c * sizeof *ti->ls);
     ti->lrtl = realloc(ti->lrtl, c);
-    if (!ti->ls || !ti->lrtl) abort();
+    ti->lr = realloc(ti->lr, c * sizeof *ti->lr);
+    if (!ti->ls || !ti->lrtl || !ti->lr) abort();
     ti->cap_l = c;
+}
+
+static bool wrapping(const TextInput *ti) { return ti->o.multiline && ti->o.soft_wrap; }
+
+/* The width of a byte: in the lines measured so far, or a guess for Latin text before there are any. */
+static double byte_width(const TextInput *ti) { return ti->k_bytes > 0 ? ti->k_width / ti->k_bytes : ti->o.font_size * 0.5; }
+
+/* How many rows a line of `bytes` bytes probably wraps into: its length times the width of a byte. */
+static uint32_t est_rows(const TextInput *ti, size_t bytes) {
+    float W = ti->rows_w;
+    if (W <= 0 || bytes == 0) return 1;
+    double k = byte_width(ti);
+    double n = ceil((double)bytes * k / W);
+    return n < 1 ? 1 : n > 1e9 ? 1000000000u : (uint32_t)n;
+}
+
+/* The line's row count is now `n` (the tree follows if it is built). */
+static void set_count(TextInput *ti, size_t h, uint32_t n) {
+    uint32_t old = ti->lr[h].n;
+    if (n == old) return;
+    ti->lr[h].n = n;
+    ti->total_rows = ti->total_rows + n - old;
+    if (ti->fw_valid) {
+        size_t d = (size_t)n - (size_t)old;   /* (unsigned wrap-around adds a negative change correctly) */
+        for (size_t i = h + 1; i <= ti->nl; i += i & (~i + 1)) ti->fw[i] += d;
+    }
+}
+
+static void line_forget(TextInput *ti, size_t h) {
+    LineRows *e = &ti->lr[h];
+    free(e->brk);
+    e->brk = NULL;
+    if (e->state != 0) ti->unmeasured++;
+    e->state = 0;
 }
 
 /* Brings the index up to date after the text changed: [start, end) of the old text became `ilen` bytes (the text is already the new one).
@@ -643,9 +701,19 @@ static void lines_replace(TextInput *ti, size_t start, size_t end, size_t ilen) 
     size_t removed = b - a + 1;
     size_t tail = ti->nl - (b + 1);
     for (size_t i = a; i <= b; i++) ti->rtl_lines -= ti->lrtl[i];
+    bool rows = ti->lr_valid;   /* (a wrapped field's rows: the lines the edit touched are new and not wrapped, the others keep theirs) */
+    if (rows) {
+        for (size_t i = a; i <= b; i++) line_forget(ti, i);
+        if (m != removed) {   /* lines came or went: the tree is built again when it is next needed */
+            for (size_t i = a; i <= b; i++) ti->total_rows -= ti->lr[i].n;
+            ti->unmeasured -= removed;
+            ti->fw_valid = false;
+        }
+    }
     lines_reserve(ti, ti->nl - removed + m);
     memmove(ti->ls + a + m, ti->ls + b + 1, tail * sizeof *ti->ls);
     memmove(ti->lrtl + a + m, ti->lrtl + b + 1, tail);
+    if (rows) memmove(ti->lr + a + m, ti->lr + b + 1, tail * sizeof *ti->lr);
     if (delta) for (size_t i = a + m; i < a + m + tail; i++) ti->ls[i] = (size_t)((long)ti->ls[i] + delta);
     ti->nl = ti->nl - removed + m;
     size_t k = a, lo = region_lo;
@@ -655,6 +723,15 @@ static void lines_replace(TextInput *ti, size_t start, size_t end, size_t ilen) 
         ti->ls[k] = lo;
         ti->lrtl[k] = span_has_rtl(ti->text + lo, hi - lo);
         ti->rtl_lines += ti->lrtl[k];
+        if (rows) {
+            if (m != removed) {
+                ti->lr[k] = (LineRows){ est_rows(ti, hi - lo), 0, 0, 0, NULL };
+                ti->total_rows += ti->lr[k].n;
+                ti->unmeasured++;
+            } else {
+                set_count(ti, k, est_rows(ti, hi - lo));   /* (the same lines: the tree follows the new counts) */
+            }
+        }
         k++;
         if (!nl) break;
         lo = hi + 1;
@@ -734,120 +811,6 @@ static void wrap_line(TextInput *ti, const Line *L, float W, uint32_t hard, bool
     rows_push(ti, make_row(ti, L, row_k, n, hard, false, rtl));
 }
 
-/* The rows of one hard line [ls, le), appended to ti->rows. */
-static void rows_for_line(TextInput *ti, gp_text_system *ts, uint32_t hard, size_t ls, size_t le, float W, gp_arena *tmp) {
-    /* the paragraph's direction, decided once for all the rows it wraps into */
-    bool rtl = gp_text_is_rtl(ti->text + ls, le - ls, (int)ti->o.direction);
-    if (W <= 0 || (le == ls && !(composing(ti) && ti->head == ls))) {   /* (an empty line has a row, unless a composition is in it) */
-        rows_push(ti, (Row){ ls, le, hard, false, rtl, 0, 0, 0 });
-    } else {
-        Line L;
-        build_line(ti, ts, ls, le, true, rtl, tmp, &L);   /* (with the composition, if it is in this line: it wraps like the text) */
-        wrap_line(ti, &L, W, hard, rtl, tmp);
-        gp_arena_reset(tmp);
-    }
-}
-
-static void compute_rows(TextInput *ti, gp_text_system *ts) {
-    ti->nrows = 0;
-    float W = ti->o.multiline && ti->o.soft_wrap ? ti->wrap_w : 0;
-    gp_arena tmp = { .chunk_size = 32768 };
-    uint32_t hard = 0;
-    size_t ls = 0;
-    for (;;) {
-        size_t le = ti->o.multiline ? line_end_of(ti, ls) : ti->len;
-        rows_for_line(ti, ts, hard, ls, le, W, &tmp);
-        if (!ti->o.multiline || le >= ti->len) break;
-        ls = le + 1;
-        hard++;
-    }
-    gp_arena_free(&tmp);
-}
-
-/* Soft wrap needs every row (a row's start depends on the ones before it); without it a row is a hard line and is found in the index. */
-static bool eager_rows(const TextInput *ti) { return ti->o.multiline && ti->o.soft_wrap; }
-
-/* One edit since the rows were made: only the hard lines it touched are wrapped again, the rows of the others are moved (their bytes by the change in length, their line
- * numbers by the change in the number of lines). A typed character in a big wrapped document costs a line's shaping and a pass over the rows instead of all the shaping. */
-static bool update_rows(TextInput *ti, gp_text_system *ts, float W) {
-    size_t start = ti->pend_start, old_end = ti->pend_old_end, ilen = ti->pend_len;
-    long delta = (long)ilen - (long)(old_end - start);
-    if (!ti->nrows || !ti->nl) return false;
-    /* the old rows of the hard lines the edit touched: [r0, r1] (the rows are in the old text's numbering until they are moved) */
-    size_t lo = 0, hi = ti->nrows;   /* the last row that starts at or before `start` */
-    while (hi - lo > 1) { size_t mid = lo + (hi - lo) / 2; if (ti->rows[mid].start <= start) lo = mid; else hi = mid; }
-    size_t r0 = lo;
-    uint32_t a = ti->rows[r0].hard;
-    while (r0 > 0 && ti->rows[r0 - 1].hard == a) r0--;
-    lo = 0; hi = ti->nrows;
-    while (hi - lo > 1) { size_t mid = lo + (hi - lo) / 2; if (ti->rows[mid].start <= old_end) lo = mid; else hi = mid; }
-    size_t r1 = lo;
-    uint32_t b_old = ti->rows[r1].hard;
-    while (r1 + 1 < ti->nrows && ti->rows[r1 + 1].hard == b_old) r1++;
-    if (b_old < a) return false;
-    size_t b_new = line_of(ti, start + ilen);   /* the new index is already made: the line holding the end of what was put in */
-    if (b_new < a) return false;
-    long shift = (long)(b_new - a + 1) - (long)(b_old - a + 1);
-
-    /* the new rows of the new lines a..b_new */
-    Row *keep = ti->rows;
-    size_t keep_n = ti->nrows, keep_cap = ti->cap_rows;
-    ti->rows = NULL;
-    ti->nrows = ti->cap_rows = 0;
-    gp_arena tmp = { .chunk_size = 32768 };
-    for (size_t h = a; h <= b_new; h++) rows_for_line(ti, ts, (uint32_t)h, ti->ls[h], line_end(ti, h), W, &tmp);
-    gp_arena_free(&tmp);
-    Row *fresh = ti->rows;
-    size_t fresh_n = ti->nrows;
-
-    size_t tail = keep_n - (r1 + 1);
-    size_t total = r0 + fresh_n + tail;
-    if (total > keep_cap) {
-        keep_cap = total * 2;
-        keep = realloc(keep, keep_cap * sizeof *keep);
-        if (!keep) abort();
-    }
-    memmove(keep + r0 + fresh_n, keep + r1 + 1, tail * sizeof *keep);
-    memcpy(keep + r0, fresh, fresh_n * sizeof *keep);
-    for (size_t i = r0 + fresh_n; i < total; i++) {
-        keep[i].start = (size_t)((long)keep[i].start + delta);
-        keep[i].end = (size_t)((long)keep[i].end + delta);
-        keep[i].hard = (uint32_t)((long)keep[i].hard + shift);
-    }
-    free(fresh);
-    ti->rows = keep;
-    ti->nrows = total;
-    ti->cap_rows = keep_cap;
-    return true;
-}
-
-static void rows_ready(TextInput *ti, gp_text_system *ts) {
-    float W = ti->o.multiline && ti->o.soft_wrap ? ti->wrap_w : 0;
-    if (ti->rows_valid && ti->pend_valid && ti->rows_rev + 1 == ti->rev && ti->rows_w == W && ti->rows_pre == ti->pre_ver && W > 0) {
-        bool done = update_rows(ti, ts, W);
-        ti->pend_valid = false;
-        if (done) {
-            ti->rows_rev = ti->rev;
-            ti->rows_incremental++;
-            return;
-        }
-    }
-    ti->pend_valid = false;
-    if (!ti->rows_valid || ti->rows_rev != ti->rev || ti->rows_w != W || ti->rows_pre != ti->pre_ver) {
-        ti->rows_full++;
-        compute_rows(ti, ts);
-        ti->rows_valid = true;
-        ti->rows_rev = ti->rev;
-        ti->rows_w = W;
-        ti->rows_pre = ti->pre_ver;
-    }
-}
-
-static size_t rows_count(TextInput *ti, gp_text_system *ts) {
-    if (eager_rows(ti)) { rows_ready(ti, ts); return ti->nrows; }
-    return ti->o.multiline ? (ti->nl ? ti->nl : 1) : 1;
-}
-
 /* Is hard line [start, end) a right-to-left paragraph? Text with nothing right-to-left in it is not, whatever the field says. */
 static bool paragraph_rtl(const TextInput *ti, size_t start, size_t end, bool line_flag) {
     if (ti->o.direction == GP_TEXT_DIRECTION_RTL) return true;
@@ -855,8 +818,185 @@ static bool paragraph_rtl(const TextInput *ti, size_t start, size_t end, bool li
     return gp_text_is_rtl(ti->text + start, end - start, (int)ti->o.direction);
 }
 
+/* The rows of hard line `hard` = [ls, le), into ti->rows (emptied first). `*width` is the line's shaped width, or -1 if it was not shaped. */
+static void rows_for_line(TextInput *ti, gp_text_system *ts, uint32_t hard, size_t ls, size_t le, float W, gp_arena *tmp, float *width) {
+    ti->nrows = 0;
+    *width = -1;
+    /* the paragraph's direction, decided once for all the rows it wraps into */
+    bool rtl = paragraph_rtl(ti, ls, le, ti->lrtl[hard]);
+    if (W <= 0 || (le == ls && !(composing(ti) && ti->head == ls))) {   /* (an empty line has a row, unless a composition is in it) */
+        rows_push(ti, (Row){ ls, le, hard, false, rtl, 0, 0, 0 });
+    } else {
+        Line L;
+        build_line(ti, ts, ls, le, true, rtl, tmp, &L);   /* (with the composition, if it is in this line: it wraps like the text) */
+        *width = L.width;
+        wrap_line(ti, &L, W, hard, rtl, tmp);
+        gp_arena_reset(tmp);
+    }
+}
+
+/* ---- the Fenwick tree over the lines' row counts */
+
+static void fw_build(TextInput *ti) {
+    size_t n = ti->nl;
+    if (ti->fw_cap < n + 1) {
+        ti->fw_cap = (n + 1) * 2;
+        ti->fw = realloc(ti->fw, ti->fw_cap * sizeof *ti->fw);
+        if (!ti->fw) abort();
+    }
+    size_t total = 0;
+    ti->fw[0] = 0;
+    for (size_t i = 1; i <= n; i++) { ti->fw[i] = ti->lr[i - 1].n; total += ti->lr[i - 1].n; }
+    for (size_t i = 1; i <= n; i++) {
+        size_t j = i + (i & (~i + 1));
+        if (j <= n) ti->fw[j] += ti->fw[i];
+    }
+    ti->total_rows = total;
+    ti->fw_valid = true;
+}
+
+/* The number of rows before line h: the row it starts at. */
+static size_t fw_prefix(const TextInput *ti, size_t h) {
+    size_t s = 0;
+    for (size_t i = h; i > 0; i -= i & (~i + 1)) s += ti->fw[i];
+    return s;
+}
+
+/* The line row r (< total_rows) is in, and *sub its row within the line. */
+static size_t fw_find(const TextInput *ti, size_t r, size_t *sub) {
+    size_t pos = 0, step = 1;
+    while (step * 2 <= ti->nl) step *= 2;
+    for (; step; step >>= 1)
+        if (pos + step <= ti->nl && ti->fw[pos + step] <= r) { pos += step; r -= ti->fw[pos]; }
+    *sub = r;
+    return pos;
+}
+
+/* ---- lazily wrapped lines */
+
+static bool comp_in_line(const TextInput *ti, size_t h) {
+    return composing(ti) && ti->head >= ti->ls[h] && ti->head <= line_end(ti, h);
+}
+
+/* Must line h be wrapped (again) before its rows are used? It has only an estimate, or the composition came, went or changed. */
+static bool line_stale(const TextInput *ti, size_t h) {
+    const LineRows *e = &ti->lr[h];
+    if (e->state == 0) return true;
+    if ((e->state == 2) != comp_in_line(ti, h)) return true;
+    return e->state == 2 && (ti->c_rev != ti->rev || ti->c_pre != ti->pre_ver);
+}
+
+static void measure_line(TextInput *ti, gp_text_system *ts, size_t h) {
+    size_t ls = ti->ls[h], le = line_end(ti, h);
+    gp_arena tmp = { .chunk_size = 32768 };
+    float width;
+    rows_for_line(ti, ts, (uint32_t)h, ls, le, ti->rows_w, &tmp, &width);
+    gp_arena_free(&tmp);
+    LineRows *e = &ti->lr[h];
+    if (e->state == 0) ti->unmeasured--;
+    free(e->brk);
+    e->brk = NULL;
+    size_t n = ti->nrows;
+    e->rtl = ti->rows[0].rtl;
+    e->pre = ti->rows[0].pre;
+    if (comp_in_line(ti, h)) {
+        if (n > ti->cap_crow) {
+            ti->cap_crow = n * 2;
+            ti->crow = realloc(ti->crow, ti->cap_crow * sizeof *ti->crow);
+            if (!ti->crow) abort();
+        }
+        memcpy(ti->crow, ti->rows, n * sizeof *ti->crow);
+        ti->ncrow = n;
+        ti->c_rev = ti->rev;
+        ti->c_pre = ti->pre_ver;
+        e->state = 2;
+    } else {
+        e->state = 1;
+        if (width >= 0) { ti->k_bytes += (double)(le - ls); ti->k_width += width; }
+        if (n > 1) {
+            e->brk = malloc((n - 1) * sizeof *e->brk);
+            if (!e->brk) abort();
+            for (size_t i = 1; i < n; i++) e->brk[i - 1] = (uint32_t)(ti->rows[i].start - ls);
+        }
+    }
+    set_count(ti, h, (uint32_t)n);
+    ti->rows_lines++;
+}
+
+static void line_ready(TextInput *ti, gp_text_system *ts, size_t h) {
+    if (line_stale(ti, h)) measure_line(ti, ts, h);
+}
+
+/* Row `sub` of a line that is ready. */
+static Row line_row(const TextInput *ti, size_t h, size_t sub) {
+    const LineRows *e = &ti->lr[h];
+    if (e->state == 2) return ti->crow[sub < ti->ncrow ? sub : ti->ncrow - 1];
+    size_t ls = ti->ls[h], le = line_end(ti, h);
+    if (sub >= e->n) sub = e->n - 1;
+    size_t s = sub ? ls + e->brk[sub - 1] : ls, en = sub + 1 < e->n ? ls + e->brk[sub] : le;
+    return (Row){ s, en, (uint32_t)h, sub + 1 < e->n, e->rtl, e->pre, 0, 0 };
+}
+
+/* Brings the rows' bookkeeping up to date: everything is estimated again for a new width, a small document is wrapped whole, the tree is
+ * built if lines came or went, and the line with the composition is wrapped with it (its row count is part of every total). */
+static void rows_sync(TextInput *ti, gp_text_system *ts) {
+    if (!wrapping(ti) || !ti->nl) return;
+    float W = ti->wrap_w;
+    if (!ti->lr_valid || ti->rows_w != W) {
+        ti->rows_w = W;
+        for (size_t h = 0; h < ti->nl; h++) {
+            if (ti->lr_valid) free(ti->lr[h].brk);
+            ti->lr[h] = (LineRows){ est_rows(ti, line_end(ti, h) - ti->ls[h]), 0, 0, 0, NULL };
+        }
+        ti->unmeasured = ti->nl;
+        ti->fw_valid = false;
+        ti->lr_valid = true;
+        ti->k_used = byte_width(ti);
+        ti->rows_full++;
+    }
+    /* The first lines measured in a document of another script (Cyrillic is two bytes a letter, CJK three a wide one) show the guess was off:
+     * the lines not wrapped are estimated again, once per 10% that the width of a byte moved (so rarely: it settles). */
+    if (ti->unmeasured && ti->k_bytes >= 1024 && fabs(byte_width(ti) - ti->k_used) > 0.1 * ti->k_used) {
+        ti->k_used = byte_width(ti);
+        for (size_t h = 0; h < ti->nl; h++)
+            if (ti->lr[h].state == 0) ti->lr[h].n = est_rows(ti, line_end(ti, h) - ti->ls[h]);
+        ti->fw_valid = false;
+    }
+    if (ti->unmeasured && ti->len <= EAGER_WRAP_BYTES)
+        for (size_t h = 0; h < ti->nl; h++)
+            if (ti->lr[h].state == 0) measure_line(ti, ts, h);
+    if (!ti->fw_valid) fw_build(ti);
+    if (composing(ti)) line_ready(ti, ts, line_of(ti, ti->head));
+}
+
+/* Makes sure the lines covering rows [first, end) are wrapped. True if any was not (the rows' numbers after them may have changed). */
+static bool measure_rows(TextInput *ti, gp_text_system *ts, size_t first, size_t end) {
+    rows_sync(ti, ts);
+    bool any = false;
+    for (size_t r = first; r < end && r < ti->total_rows;) {
+        size_t sub, h = fw_find(ti, r, &sub);
+        if (line_stale(ti, h)) { measure_line(ti, ts, h); any = true; }
+        r = fw_prefix(ti, h) + ti->lr[h].n;   /* the next line's first row */
+    }
+    return any;
+}
+
+/* The number of rows. With soft wrap in a big document, lines nobody has looked at count as estimated. */
+static size_t rows_count(TextInput *ti, gp_text_system *ts) {
+    if (wrapping(ti)) { rows_sync(ti, ts); return ti->total_rows; }
+    return ti->o.multiline ? (ti->nl ? ti->nl : 1) : 1;
+}
+
+/* Row i, as far as is known: the line it falls in is wrapped first (which may change what row i is: then the line it falls in now). */
 static Row row_at(TextInput *ti, gp_text_system *ts, size_t i) {
-    if (eager_rows(ti)) { rows_ready(ti, ts); return ti->rows[i]; }
+    if (wrapping(ti) && ti->nl) {
+        rows_sync(ti, ts);
+        for (;;) {
+            size_t sub, h = fw_find(ti, i < ti->total_rows ? i : ti->total_rows - 1, &sub);
+            if (line_stale(ti, h)) { measure_line(ti, ts, h); continue; }
+            return line_row(ti, h, i < ti->total_rows ? sub : ti->lr[h].n - 1);
+        }
+    }
     if (!ti->o.multiline || !ti->nl)
         return (Row){ 0, ti->len, 0, false, gp_text_is_rtl(ti->text ? ti->text : "", ti->len, (int)ti->o.direction), 0, 0, 0 };
     size_t s0 = ti->ls[i], e0 = line_end(ti, i);
@@ -866,32 +1006,39 @@ static Row row_at(TextInput *ti, gp_text_system *ts, size_t i) {
 /* The row a caret at `off` is drawn on: the last row that starts at or before it, except that a caret at the end of a row that wrapped is
  * on that row if it is "upstream" (it is the same offset as the next row's start). */
 static size_t row_of_off(TextInput *ti, gp_text_system *ts, size_t off, bool upstream) {
-    size_t n = rows_count(ti, ts);
-    if (!eager_rows(ti)) return ti->o.multiline && ti->nl ? line_of(ti, off) : 0;
-    size_t lo = 0, hi = n;
+    if (!wrapping(ti) || !ti->nl) return ti->o.multiline && ti->nl ? line_of(ti, off) : 0;
+    rows_sync(ti, ts);
+    size_t h = line_of(ti, off);
+    line_ready(ti, ts, h);
+    size_t n = ti->lr[h].n, lo = 0, hi = n;
     while (hi - lo > 1) {
         size_t mid = lo + (hi - lo) / 2;
-        if (ti->rows[mid].start <= off) lo = mid; else hi = mid;
+        if (line_row(ti, h, mid).start <= off) lo = mid; else hi = mid;
     }
-    if (lo > 0 && upstream && ti->rows[lo - 1].soft_end && ti->rows[lo - 1].end == off && ti->rows[lo].start == off) return lo - 1;
-    return lo;
+    if (lo > 0 && upstream) {
+        Row p = line_row(ti, h, lo - 1), c = line_row(ti, h, lo);
+        if (p.soft_end && p.end == off && c.start == off) lo--;
+    }
+    return fw_prefix(ti, h) + lo;
 }
 
 /* The row the caret is drawn on: where its offset is, or, while composing with soft wrap, the row that holds the composition's own caret
  * (the composition can be several rows long). */
 static size_t caret_row(TextInput *ti, gp_text_system *ts) {
     size_t ri = row_of_off(ti, ts, ti->head, ti->upstream);
-    if (!composing(ti) || !eager_rows(ti)) return ri;
+    if (!composing(ti) || !wrapping(ti)) return ri;
+    size_t h = line_of(ti, ti->head);
+    if (ti->lr[h].state != 2) return ri;
     size_t plen = strlen(ti->preedit), cb = 0;   /* the cursor's byte in the composition */
     for (int c = 0; c < ti->preedit_cursor && cb < plen; c++) { size_t n; cp_decode(ti->preedit, plen, cb, &n); cb += n; }
-    size_t last = SIZE_MAX;
-    for (size_t i = 0; i < ti->nrows; i++) {
-        const Row *r = &ti->rows[i];
+    size_t last = SIZE_MAX, base = fw_prefix(ti, h);
+    for (size_t i = 0; i < ti->ncrow; i++) {
+        const Row *r = &ti->crow[i];
         if (r->pre != 1 || r->pre_b <= r->pre_a) continue;
         last = i;
-        if (cb >= r->pre_a && cb < r->pre_b) return i;
+        if (cb >= r->pre_a && cb < r->pre_b) return base + i;
     }
-    return last != SIZE_MAX ? last : ri;   /* (the cursor is at the end of the composition: its last row) */
+    return last != SIZE_MAX ? base + last : ri;   /* (the cursor is at the end of the composition: its last row) */
 }
 
 /* Position of the caret in content coordinates. */
@@ -954,15 +1101,11 @@ static void raw_replace(TextInput *ti, size_t start, size_t end, const char *ins
     ti->text[ti->len] = 0;
     ti->rev++; /* any cached rows are stale */
     lines_replace(ti, start, end, ilen);
-    if (eager_rows(ti) && ti->rows_valid) {   /* one edit since they were made: they can be brought up to date; another before that, and they are made again */
-        if (ti->rows_rev + 1 == ti->rev && !ti->pend_valid) {
-            ti->pend_valid = true;
-            ti->pend_start = start;
-            ti->pend_old_end = end;
-            ti->pend_len = ilen;
-        } else {
-            ti->pend_valid = false;
-        }
+    /* the scroll anchor stays on its text: moved with it when the edit is before it, to the edit when the edit swallowed it (an edit right at
+     * it, such as a line put in at the top row's start, stays in view) */
+    if (ti->a_off > start) {
+        if (ti->a_off >= end) ti->a_off = ti->a_off - (end - start) + ilen;
+        else { ti->a_off = start; ti->a_frac = 0; }
     }
 }
 
@@ -1017,15 +1160,70 @@ static void fire(TextInput *ti, gp_ctx *cx, gp_text_input_event_fn fn) {
 }
 
 /* Scrolls the caret into view, using the viewport as of the last layout. */
+static size_t view_rows(const TextInput *ti) { return (size_t)(ti->o.rows > 0 ? ti->o.rows : 4); }
+
+/* The vertical scroll offset of the field, in rows as they are known now. A wrapped field keeps it on its anchor: if nobody scrolled since
+ * it was last worked out (the offset is still last_y), it is wherever the anchor's row is now (lines above may have been wrapped since, and
+ * their estimates were wrong; a new width moves every row) and the stored offset is moved there quietly; if somebody did, the anchor is
+ * taken again from the offset. Called before anything that relates rows to the offset. */
+static float view_y(TextInput *ti, gp_ctx *cx) {
+    gp_point o = gp_scroll_offset(cx, ti->scroll);
+    if (!wrapping(ti) || ti->wrap_w <= 0 || !ti->nl) return o.y;
+    gp_text_system *ts = cx->app->text;
+    double lh = line_height(ti);
+    size_t n = rows_count(ti, ts);
+    double y;
+    if (ti->a_valid && fabsf(o.y - ti->last_y) < 0.01f) {
+        if (ti->a_off > ti->len) ti->a_off = ti->len;
+        y = (double)row_of_off(ti, ts, ti->a_off, false) * lh + ti->a_frac;
+    } else {
+        double want = o.y > 0 ? o.y : 0;
+        size_t r = (size_t)(want / lh);
+        if (r >= n) r = n - 1;
+        Row row = row_at(ti, ts, r);   /* (wraps its line, which can change which row r is, never what is above that line) */
+        double frac = want - (double)r * lh;
+        ti->a_off = row.start;
+        ti->a_frac = (float)(frac < 0 ? 0 : frac > lh ? lh : frac);
+        y = (double)row_of_off(ti, ts, ti->a_off, false) * lh + ti->a_frac;
+    }
+    gp_window *w = cx->window ? cx->window : cx->app->nwindows ? cx->app->windows[0] : NULL;
+    gp_scroll_state *st = w ? gp_scroll_state_get(&w->scrolls, ti->scroll.id, false) : NULL;
+    if (st && (float)y != st->y) {   /* not a scroll: the same text stays where it was (a glide keeps going to the same place too) */
+        st->ty += (float)y - st->y;
+        st->y = (float)y;
+        w->scrolls.ext_gen++;
+    } else if (!st) {
+        y = o.y;
+    }
+    ti->last_y = (float)y;
+    ti->a_valid = true;
+    return (float)y;
+}
+
+/* Wraps the lines around the caret that a view showing it could show, so that the distance from the caret to any row in such a view is
+ * exact (an estimate in between would put the caret somewhere else than where the reveal meant it to be). */
+static void measure_around_caret(TextInput *ti, gp_ctx *cx) {
+    if (!wrapping(ti) || ti->wrap_w <= 0 || !ti->nl) return;
+    gp_text_system *ts = cx->app->text;
+    size_t v = view_rows(ti) + 1;
+    for (int pass = 0; pass < 8; pass++) {
+        size_t cr = caret_row(ti, ts);
+        if (!measure_rows(ti, ts, cr > v ? cr - v : 0, cr + v + 1)) break;
+    }
+}
+
 static void reveal_caret(TextInput *ti, gp_ctx *cx) {
     gp_size vp = gp_scroll_viewport(cx, ti->scroll);
     if (vp.w <= 0 || vp.h <= 0) return;
+    measure_around_caret(ti, cx);
+    float vy = view_y(ti, cx);
     gp_arena tmp = { .chunk_size = 16384 };
     float x, y;
     caret_xy(ti, cx->app->text, &tmp, &x, &y);
     gp_arena_free(&tmp);
 
     gp_point cur = gp_scroll_offset(cx, ti->scroll), want = cur;
+    cur.y = want.y = vy;
     const float margin = 6;
     if (x - margin < cur.x) want.x = fmaxf(0, x - margin);
     else if (x + CARET_W + margin > cur.x + vp.w) want.x = x + CARET_W + margin - vp.w;
@@ -1231,7 +1429,7 @@ static void move_vertical(TextInput *ti, gp_ctx *cx, int lines, bool extend, flo
         pos = offset_in_line(&L, ti->goal_x, &upstream); /* upstream: stay on this row */
     }
     gp_arena_free(&tmp);
-    if (scroll_px != 0) gp_scroll_by(cx, ti->scroll, 0, scroll_px);
+    if (scroll_px != 0) gp_scroll_to(cx, ti->scroll, gp_scroll_offset(cx, ti->scroll).x, view_y(ti, cx) + scroll_px);
     bool boundary = target < 0 || (size_t)target >= nrows; /* hit the first / last row: new column */
     float keep = ti->goal_x;
     set_caret_aff(ti, cx, pos, extend, upstream);
@@ -1560,6 +1758,7 @@ static void on_ime(void *self, gp_ctx *cx, const char *preedit, int cursor, void
 /* Window position -> content coordinates of the scroller. */
 static gp_point to_content(TextInput *ti, gp_ctx *cx, gp_point local) {
     gp_point s = gp_scroll_offset(cx, ti->scroll);
+    s.y = view_y(ti, cx);
     return (gp_point){ local.x - (BORDER + ti->o.padding_x) + s.x, local.y - (BORDER + ti->o.padding_y) + s.y };
 }
 
@@ -1716,13 +1915,27 @@ static gp_node *render(void *self, gp_ctx *cx) {
     }
     float lh = line_height(ti);
     size_t nrows = rows_count(ti, ts);
-    size_t comp_row = caret_row(ti, ts); /* the row showing a composition (with soft wrap, the rows that hold a share of it say so themselves) */
     size_t lo = sel_lo(ti), hi = sel_hi(ti);
 
     /* Only the rows in view and a view's worth either side are built: the rest of the document is a spacer of their height. Scrolling out of
-     * what was built tells on_scroll, which asks for a rebuild. */
+     * what was built tells on_scroll, which asks for a rebuild. With soft wrap the lines of those rows are wrapped now if they were only
+     * estimated, which moves the rows after them: the offset follows the anchor (view_y) and the window is worked out again. */
     size_t first_row = 0, end_row = nrows;
-    if (o->multiline) window_for(ti, nrows, gp_scroll_offset(cx, ti->scroll).y, &first_row, &end_row);
+    if (o->multiline) {
+        if (wrapping(ti) && ti->wrap_w > 0) {
+            (void)caret_row(ti, ts);   /* (the caret's line is wrapped first: the caret is drawn even when it is elsewhere) */
+            for (int pass = 0; pass < 8; pass++) {
+                float y = view_y(ti, cx);
+                nrows = rows_count(ti, ts);
+                window_for(ti, nrows, y, &first_row, &end_row);
+                if (!measure_rows(ti, ts, first_row, end_row)) break;
+            }
+            nrows = rows_count(ti, ts);
+        } else {
+            window_for(ti, nrows, gp_scroll_offset(cx, ti->scroll).y, &first_row, &end_row);
+        }
+    }
+    size_t comp_row = caret_row(ti, ts); /* the row showing a composition (with soft wrap, the rows that hold a share of it say so themselves) */
     ti->win_first = first_row;
     ti->win_n = end_row - first_row;
 
@@ -1827,6 +2040,11 @@ static void ti_drop(void *p) {
     free(ti->text);
     free(ti->preedit);
     free(ti->rows);
+    if (ti->lr_valid)
+        for (size_t h = 0; h < ti->nl; h++) free(ti->lr[h].brk);
+    free(ti->lr);
+    free(ti->fw);
+    free(ti->crow);
     free(ti->ls);
     free(ti->lrtl);
     free((char *)ti->o.placeholder);
@@ -1866,6 +2084,12 @@ gp_entity gp_text_input_new(gp_app *app, const gp_text_input_options *opts) {
     gp_entity e = gp_view_new(app, sizeof init, &init, render, ti_drop);
     TextInput *ti = gp_entity_get(app, e);
     ti->self = e;
+    if (o->multiline) {   /* (a multi-line field always has its line index: an empty text is one empty line) */
+        lines_reserve(ti, 1);
+        ti->ls[0] = 0;
+        ti->lrtl[0] = 0;
+        ti->nl = 1;
+    }
     if (initial && *initial) {
         char *clean = sanitize(ti, initial, strlen(initial));
         size_t n = strlen(clean);
@@ -1890,9 +2114,11 @@ void gp_text_input_set_text(gp_ctx *cx, gp_entity input, const char *utf8) {
     char *clean = sanitize(ti, utf8 ? utf8 : "", utf8 ? strlen(utf8) : 0);
     size_t n = strlen(clean);
     if (ti->o.max_bytes && n > ti->o.max_bytes) n = ti->o.max_bytes;
+    ti->k_bytes = ti->k_width = 0;   /* a new document: the width of its bytes is not known yet (its lines are estimated with the guess) */
+    ti->k_used = byte_width(ti);
     raw_replace(ti, 0, ti->len, clean, n);
     free(clean);
-    ti->max_w = 0;   /* a new document: its widest row is not known yet */
+    ti->max_w = 0;   /* ...nor its widest row */
     ti->anchor = ti->head = ti->len;
     clear_stack(&ti->undo, &ti->nundo);
     clear_stack(&ti->redo, &ti->nredo);
@@ -2020,35 +2246,73 @@ void gp_text_input_debug_replace(gp_app *app, gp_entity input, size_t start, siz
     ti->anchor = ti->head = ti->head > ti->len ? ti->len : ti->head;
 }
 
-/* Tests: the rows brought up to date (as the widget does) and then made again from scratch: NULL if they are the same, else what differs. Also how they were
- * brought up to date: since the start, `*full` times from scratch, `*incremental` times by moving the rows of the lines the edit did not touch. */
+/* Tests: every line that is wrapped (and the composition's rows) against the line wrapped again, and the tree, the total and the count of
+ * lines not wrapped against the per-line counts: NULL if all agree, else what does not. Also, since the start: `*full` = times everything
+ * was estimated again (a new width), `*incremental` = lines wrapped. Wraps nothing that is not wrapped already, beyond what any read of the
+ * rows does (a small document is wrapped whole). */
 const char *gp_text_input_debug_rows(gp_app *app, gp_entity input, unsigned long *full, unsigned long *incremental, char *why, size_t cap) {
     TextInput *ti = ti_get(app, input);
     if (!ti) { snprintf(why, cap, "no such input"); return why; }
     gp_text_system *ts = app->text;
-    size_t n = rows_count(ti, ts);
+    (void)rows_count(ti, ts);
     if (full) *full = ti->rows_full;
-    if (incremental) *incremental = ti->rows_incremental;
-    if (!eager_rows(ti)) return NULL;
-    Row *mine = ti->rows;
-    size_t mine_n = ti->nrows, mine_cap = ti->cap_rows;
-    ti->rows = NULL;
-    ti->nrows = ti->cap_rows = 0;
-    compute_rows(ti, ts);
-    const char *bad = NULL;
-    if (ti->nrows != n) { snprintf(why, cap, "%zu rows kept, %zu made again", mine_n, ti->nrows); bad = why; }
-    for (size_t i = 0; !bad && i < n; i++) {
-        const Row *a = &mine[i], *b = &ti->rows[i];
-        if (a->start != b->start || a->end != b->end || a->hard != b->hard || a->soft_end != b->soft_end || a->rtl != b->rtl || a->pre != b->pre || a->pre_a != b->pre_a || a->pre_b != b->pre_b) {
-            snprintf(why, cap, "row %zu: [%zu, %zu) line %u soft %d rtl %d, made again [%zu, %zu) line %u soft %d rtl %d", i, a->start, a->end, a->hard, a->soft_end, a->rtl, b->start, b->end, b->hard, b->soft_end, b->rtl);
-            bad = why;
+    if (incremental) *incremental = ti->rows_lines;
+    if (!wrapping(ti) || !ti->lr_valid) return NULL;
+    size_t sum = 0, unmeasured = 0;
+    gp_arena tmp = { .chunk_size = 32768 };
+    for (size_t h = 0; h < ti->nl; h++) {
+        const LineRows *e = &ti->lr[h];
+        if (fw_prefix(ti, h) != sum) { snprintf(why, cap, "line %zu: the tree says it starts at row %zu, the counts %zu", h, fw_prefix(ti, h), sum); gp_arena_free(&tmp); return why; }
+        sum += e->n;
+        if (e->n == 0) { snprintf(why, cap, "line %zu has no rows", h); gp_arena_free(&tmp); return why; }
+        if (e->state == 0) { unmeasured++; continue; }
+        if (line_stale(ti, h)) continue;   /* (wrapped before a change of composition: it is wrapped again before it is used) */
+        float width;
+        rows_for_line(ti, ts, (uint32_t)h, ti->ls[h], line_end(ti, h), ti->rows_w, &tmp, &width);
+        gp_arena_reset(&tmp);
+        if (ti->nrows != e->n) { snprintf(why, cap, "line %zu: %u rows kept, %zu made again", h, e->n, ti->nrows); gp_arena_free(&tmp); return why; }
+        for (size_t i = 0; i < ti->nrows; i++) {
+            Row a = line_row(ti, h, i), *b = &ti->rows[i];
+            if (a.start != b->start || a.end != b->end || a.hard != b->hard || a.soft_end != b->soft_end || a.rtl != b->rtl || a.pre != b->pre || a.pre_a != b->pre_a || a.pre_b != b->pre_b) {
+                snprintf(why, cap, "line %zu row %zu: [%zu, %zu) line %u soft %d rtl %d pre %d, made again [%zu, %zu) line %u soft %d rtl %d pre %d", h, i, a.start, a.end, a.hard, a.soft_end, a.rtl, a.pre, b->start, b->end, b->hard, b->soft_end, b->rtl, b->pre);
+                gp_arena_free(&tmp);
+                return why;
+            }
         }
     }
-    free(ti->rows);
-    ti->rows = mine;
-    ti->nrows = mine_n;
-    ti->cap_rows = mine_cap;
-    return bad;
+    gp_arena_free(&tmp);
+    if (sum != ti->total_rows) { snprintf(why, cap, "%zu rows in total, the lines add up to %zu", ti->total_rows, sum); return why; }
+    if (unmeasured != ti->unmeasured) { snprintf(why, cap, "%zu lines not wrapped, counted %zu", unmeasured, ti->unmeasured); return why; }
+    return NULL;
+}
+
+/* Tests: wraps every line (what a soft-wrapped field did whenever it opened a document or its width changed). */
+void gp_text_input_debug_wrap_all(gp_app *app, gp_entity input) {
+    TextInput *ti = ti_get(app, input);
+    if (!ti || !wrapping(ti) || !ti->nl) return;
+    rows_sync(ti, app->text);
+    for (size_t h = 0; h < ti->nl; h++) line_ready(ti, app->text, h);
+}
+
+/* Tests: the row a caret at `off` is on (as far as the rows are known), and scrolling the field from outside. */
+size_t gp_text_input_debug_row_of(gp_app *app, gp_entity input, size_t off, bool upstream) {
+    TextInput *ti = ti_get(app, input);
+    if (!ti) return 0;
+    return row_of_off(ti, app->text, off > ti->len ? ti->len : off, upstream);
+}
+
+void gp_text_input_debug_scroll_to(gp_app *app, gp_entity input, float y) {
+    TextInput *ti = ti_get(app, input);
+    if (!ti) return;
+    gp_ctx cx = gp_ctx_for(app, input);
+    gp_scroll_to(&cx, ti->scroll, 0, y);
+}
+
+/* Tests: how many of the field's lines are not wrapped (their row counts are estimates), and how many lines it has. */
+size_t gp_text_input_debug_unwrapped(gp_app *app, gp_entity input, size_t *lines) {
+    TextInput *ti = ti_get(app, input);
+    if (lines) *lines = ti ? ti->nl : 0;
+    return ti && wrapping(ti) && ti->lr_valid ? ti->unmeasured : 0;
 }
 
 /* Is everything that is kept incrementally what a rescan of the text gives? NULL if so, else what is not. The row of an offset is also
@@ -2073,6 +2337,7 @@ const char *gp_text_input_debug_check(gp_app *app, gp_entity input, char *why, s
         }
         if (rtl != ti->rtl_lines) { snprintf(why, cap, "%zu right-to-left lines counted, %zu indexed", rtl, ti->rtl_lines); return why; }
     }
+    gp_text_input_debug_wrap_all(app, input);   /* everything wrapped first: a search over rows that are still being found would not stand still */
     size_t n = rows_count(ti, ts);
     if (n == 0) { snprintf(why, cap, "no rows"); return why; }
     /* the row of an offset against a plain search, for a sample of offsets and both affinities */

@@ -106,7 +106,7 @@ animations can be sampled. The screenshot otherwise waits for the script to drai
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
 and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
 awaits: pipes, sockets, a TCP echo through coroutines, closing and cancelling at awkward moments),
-`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
+`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
 widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-height list, checked
 against a model), `tests/text_test.c` (fonts and shaping, against the fonts actually installed) and
 `tests/vlist_test.c` (the row-height index against a brute-force model). The first three need a
@@ -1134,7 +1134,8 @@ sideways (off by default, so existing multi-line fields are unchanged).
 * **Rows.** The unit is the *visual row*, not the hard line: Up/Down, Home/End, Page Up/Down, the
   selection highlight, the caret and mouse hit-testing all work on rows. Without wrapping every hard
   line is exactly one row, so nothing else changes. `gp_text_input_rows / _row_range / _caret_row`
-  expose them. Rows are cached per text revision and wrap width.
+  expose them. Rows are kept per hard line (see "Cost"): in a big document the rows of lines nobody has looked at are estimated, so those
+  calls answer "as far as is known" there, and exactly for any row they are asked about (its line is wrapped first).
 * **Where rows break:** after a run of spaces (the spaces *hang* past the edge instead of pushing the
   word they follow onto the next row), after a hyphen before a word, between CJK characters (with the
   kinsoku rules of the text system), and, for a word too long for any row, between characters.
@@ -1148,11 +1149,33 @@ sideways (off by default, so existing multi-line fields are unchanged).
   so the first frame is already wrapped; there is a test that no frame is painted in between. A
   handler must only notify when something changed, or it rebuilds every frame (the widget's does not:
   a focused wrapping field redraws only for the caret blink).
-* **Cost.** An edit wraps again only the hard lines it touched: the rows of the lines before are kept, the rows after are moved (their bytes by the change in length, their line numbers by the change in the number of
-  lines), so a typed character in a document of 60,000 wrapped rows takes ~0.05 ms where making all the rows again takes ~210 ms (`tests/wrapedit_test.c`: after each of hundreds of random edits (inserts and
-  deletes, line breaks, Hebrew and CJK, across lines, at the ends) the kept rows equal the rows made again from scratch, field for field; and an edit followed by another before the rows are read, or by a
-  change of width, takes the from-scratch path). What still grows with the document is the pass that moves the rows after an edit and the one-off cost of the first wrap (made again when the width changes): it is
-  comfortable to some millions of rows, but the rows are still all there, which is why a soft-wrapped field is not as light to open as a field without wrap (see "Large documents").
+* **Cost: lazy wrapping.** Each hard line keeps its own rows, as break offsets *relative to the line's start*, so an edit wraps again only the lines it
+  touched and nothing else moves (the line index already shifts the starts). A line nobody has looked at is not wrapped at all: its row count is an
+  *estimate* from its length (the width of a byte in the lines measured so far, divided by the wrap width; when that width has moved by
+  more than 10% since the estimates were made, as when the first lines of a Cyrillic or CJK document are seen, the lines not wrapped are estimated again). A Fenwick tree over the per-line counts gives
+  the row a line starts at and the line a given row is in, in O(log n), and is rebuilt (O(lines), no shaping) only when lines come or go. Opening a
+  document and changing the width therefore wrap only the lines around the view: a 3.2 MB document of 40,000 lines (~110,000 rows) opens wrapping 7 lines,
+  a 1.2 MB one in 4 ms where wrapping all of it takes ~220 ms, and a resize costs the estimates (no shaping) plus a screenful. A document up to 64 KB is
+  wrapped whole, so small fields have exact rows everywhere, as before.
+* **The view is anchored to text.** When a line's estimate is replaced by its real count, every row after it moves, so the scroll position is kept as
+  *the start of the row at the top and how far into it the view begins* (like `gp_list`'s anchor). If nobody scrolled since the field last looked,
+  the offset is moved to wherever that text is now (quietly: it is not a scroll, and a smooth-scrolling glide keeps going to the same text); if
+  somebody did (the wheel, the scroll bar, `gp_scroll_to`, a reveal), the anchor is taken again from the new offset. The field does this before it
+  renders and before it maps the mouse, reveals the caret or pages. So: lines above the view turning out longer or shorter than estimated never move
+  what you see; each wheel notch moves the text by exactly one notch; a new width keeps the text at the top at the top; an edit above the view keeps the
+  view on its text, and an edit that removes the top text leaves the edit's place at the top. Before the caret is revealed, the rows a view showing
+  it could show are wrapped, so it lands where the reveal meant even across lines whose estimates were far off. The scroll bar's size is the estimate's,
+  and it settles as more of the document is seen (as in any editor that wraps lazily).
+* **Tests.** `tests/wrapedit_test.c`: after each of 2,500 random edits (inserts and deletes, line breaks, Hebrew and CJK, across lines, at the ends) every
+  wrapped line equals the line wrapped again, field for field, and the tree and the counts add up; edits wrap only their lines; a width change
+  estimates everything again; a big document opens without wrapping it, an edit out of view wraps nothing, the estimate is within 30% (12% for its
+  document). `tests/lazywrap_test.c` scrolls a 3.2 MB document with a block of wide lines (whose estimates are half the truth): every laid-out row is at
+  `row * line height` and shows that row; a jump, lines above wrapped from outside, wheel notches (also smooth), a new width, edits above and across the
+  top, Page Down with stale numbers: the text at the top is where it should be to the pixel; clicks land on the row under the mouse; Page Up/Down,
+  Up/Down and Ctrl+End keep the caret in view, as does typing with the caret deep in the wide lines and the view far away; a composition changes the rows
+  and gives them back; at the end the last row is at the bottom; after all that 90% of the lines were never wrapped and the estimate of the total is
+  within 10%; and a Cyrillic document (two bytes a letter) is estimated within 15% once its first screen was seen. 24 mutants: all caught but one
+  guard that the reveal after every composition update makes unobservable (see the test's header).
 * **A composition (IME preedit) wraps like the text.** The rows of the line it is in are made with the composition spliced in at the caret: it breaks at the same
   opportunities as text (spaces, hyphens, between CJK characters) and a long one takes several rows, each of which knows which bytes of it it shows; the composition's own
   caret (its cursor, in characters) is on the row that holds that character, and the underline follows the rows. When it ends or is cancelled the rows are the text's again.
@@ -1181,9 +1204,9 @@ a typed character at the end reaches the screen in ~25 ms, and selecting all, de
 * **Across.** The content is as wide as the widest row *seen so far* (a zero-height spacer carries it): scrolling to a very long line
   far down widens the scroll bar when it is first built, and the width stays after the line scrolls away. A document whose longest
   line is not known cannot have its horizontal bar's size right without reading every line.
-* **What is still whole-document:** soft wrap (a row's start depends on the rows before it, so every line is shaped and wrapped when the
-  text or the width changes: fine up to a few hundred KB, as measured above; it also builds only the rows in view, which is the part that
-  was the cost for long non-wrapping text); `gp_text_input_selection_rects` is bounded by the rows the selection reaches, but of course for a
+* **Soft wrap is lazy too** (see "Soft wrap"): only the lines around the view are wrapped, the rest are estimated, and the view is anchored to
+  text so that correcting an estimate never moves what is on screen.
+* **What is still whole-document:** `gp_text_input_selection_rects` is bounded by the rows the selection reaches, but of course for a
   whole-document selection that is all of them (pass a `max`); undo keeps copies of what was replaced, so deleting 14 MB keeps 14 MB
   (the stack is 500 edits deep at most); and a **single very long line** (a minified file) is shaped whole every time it is drawn.
   Positions are floats: past ~16 million pixels of height (about 850,000 lines at the default size) rows are placed to the nearest 2 px.
@@ -1203,7 +1226,7 @@ a typed character at the end reaches the screen in ~25 ms, and selecting all, de
   the caret stops of a laid-out row); `tools/gen_grapheme.py` makes the Unicode tables (`src/grapheme_data.h`) and the strings. The shaping of
   such text into the right glyphs is HarfBuzz's, and needs a font with the script.
 
-Limits of the widget as a whole, stated plainly: soft wrap and very long single lines are not virtualized (see above); no
+Limits of the widget as a whole, stated plainly: very long single lines are not virtualized (see above); no
 text drag-and-drop.
 The IME path is verified up to the widget with simulated composition events; there was no real
 input method available to try it against.
@@ -1520,7 +1543,7 @@ mouse move/hover ─────────────────────
 
 Roughly in the order I'd tackle them:
 
-1. A virtualized editor for soft-wrapped documents (all rows are built when it opens and when its width changes: a lazily wrapped document needs an anchor-based scroll like `gp_list`'s; an edit already wraps only the lines it touches) and for very long single lines (non-wrapping large documents are done).
+1. Very long single lines in the editor (a minified file): such a line is shaped whole whenever it is drawn or wrapped, with or without soft wrap (large documents of ordinary lines are done, wrapped or not).
 2. SVG / COLRv1 emoji fonts (FreeType gives the paint graph, it would need an interpreter with gradients, transforms and blend modes of its own).
 3. SVG patterns, markers and `textPath`; the rest of the filter primitives (turbulence, lighting, morphology, convolution, displacement, component transfer) and the filter region.
 4. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux).
