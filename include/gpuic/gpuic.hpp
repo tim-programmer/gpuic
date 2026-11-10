@@ -592,15 +592,18 @@ public:
     /** Applies the modifiers of a style() element (or any element's, ignoring its children) to this one. */
     Element& refine(const Element& style) & { for (uint32_t i = 0; i < style.mods_.n; i++) mods_.push(style.mods_.p[i]); return *this; }   // (flat: the C library does not apply a group inside a group)
     Element&& refine(const Element& style) && { refine(style); return std::move(*this); }
-    /** GPUI's `.hover(|style| style.bg(...))`: `f` gets a style() to add to (by value, or by reference, returning it or not) and what it sets is painted
-     *  while the pointer is over this element; `.active` while it is pressed, `.focus_style` while it has focus. Only what repaints can change:
-     *  background, border colors / style / gradient, rounded corners, shadow, opacity (see gp_hover_style). */
+    /** GPUI's `.hover(|style| style.bg(...))`: `f` gets a style() to add to (by value, or by reference, returning it or not) and what it sets holds
+     *  while the pointer is over this element; `.active` while it is pressed, `.focus_style` while it has focus. Colors, borders, corners, shadow, opacity,
+     *  filters, and what lays out (sizes, padding, fonts...): see gp_hover_style. */
     template <class F> Element& hover(F&& f) & { return add(gp_hover_style(detail::state_style(f))); }
     template <class F> Element&& hover(F&& f) && { hover(std::forward<F>(f)); return std::move(*this); }
     template <class F> Element& active(F&& f) & { return add(gp_active_style(detail::state_style(f))); }
     template <class F> Element&& active(F&& f) && { active(std::forward<F>(f)); return std::move(*this); }
     template <class F> Element& focus_style(F&& f) & { return add(gp_focus_style(detail::state_style(f))); }
     template <class F> Element&& focus_style(F&& f) && { focus_style(std::forward<F>(f)); return std::move(*this); }
+    /** A mask (gp_mask): any element, laid out over this one's box; where it is transparent this one is not seen. `.mask(div().size_full().bg_gradient(180, {...}))` */
+    template <class T> Element& mask(T&& x) & { return add(gp_mask(detail::into_node(std::forward<T>(x)))); }
+    template <class T> Element&& mask(T&& x) && { mask(std::forward<T>(x)); return std::move(*this); }
     /** One modifier made by a C function, for anything the methods do not name. */
     Element& with(gp_node* mod) & { return add(mod); }
     Element&& with(gp_node* mod) && { return std::move(add(mod)); }

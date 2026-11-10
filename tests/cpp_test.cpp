@@ -261,6 +261,8 @@ static std::vector<Pair> pairs(Fix& f) {
                       .child(div().w(30).h(30).mx_2().my_0p5().bg(RED)).child(div().w_7().h_2p5().ml_1().bg(C2)) });
     p.push_back({ "a shared string", gp_div(gp_flex_col(), gp_text("shared text"), gp_text("")),
                   div().flex_col().child(g_shared).child(SharedString()) });
+    p.push_back({ "mask", gp_div(gp_size_full(), gp_bg(C1), gp_mask(gp_div(gp_size_full(), gp_p(5), c_box(20, 20, RED)))),
+                  div().size_full().bg(C1).mask(div().size_full().p(5).child(box(20, 20, RED))) });
     p.push_back({ "right to left", gp_div(gp_size_full(), gp_flex_row(), gp_text_dir_rtl(), c_box(30, 30, RED), c_box(50, 20, C2)),
                   div().size_full().flex_row().text_dir_rtl().children({ box(30, 30, RED), box(50, 20, C2) }) });
     {
@@ -277,7 +279,7 @@ static std::vector<Pair> pairs(Fix& f) {
 }
 
 static constexpr int kHandlerBoxes = 18;   // the boxes after the pairs, before the style carriers
-static constexpr int kCellW = 200, kCellH = 70, kPairs = 22;
+static constexpr int kCellW = 200, kCellH = 70, kPairs = 23;
 
 Element Fix::render(Ctx) {
     std::vector<Pair> ps = pairs(*this);

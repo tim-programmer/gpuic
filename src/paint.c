@@ -87,6 +87,64 @@ static bool aff_rect(gp_affine m, rect r, rect *out) {
     return true;
 }
 
+/* Filters, a mask and a blend mode on a layer that closes (layer_end_fx) */
+typedef struct {
+    const gp_style *s;
+    gp_el *mask;          /* painted at (mx, my) */
+    float mx, my;
+    rect clip;            /* the clip the element is under: what the layer puts down is cut to it (a blur spreads past what was painted, not past this) */
+} layer_fx;
+
+static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, float opacity);
+
+/* a color filter as CSS defines it: a 4 x 5 matrix over straight (not premultiplied) RGBA, rows R G B A, the fifth column an offset */
+static void fx_matrix(const gp_filter_op *op, float M[4][5]) {
+    memset(M, 0, sizeof(float[4][5]));
+    for (int i = 0; i < 4; i++) M[i][i] = 1.f;
+    float v = op->v, s = 1.f - v;
+    switch (op->kind) {
+    case GP_FX_BRIGHTNESS: M[0][0] = M[1][1] = M[2][2] = v; break;
+    case GP_FX_CONTRAST:
+        M[0][0] = M[1][1] = M[2][2] = v;
+        M[0][4] = M[1][4] = M[2][4] = 0.5f - 0.5f * v;
+        break;
+    case GP_FX_SATURATE: {
+        const float m[3][3] = { { 0.213f + 0.787f * v, 0.715f - 0.715f * v, 0.072f - 0.072f * v },
+                                { 0.213f - 0.213f * v, 0.715f + 0.285f * v, 0.072f - 0.072f * v },
+                                { 0.213f - 0.213f * v, 0.715f - 0.715f * v, 0.072f + 0.928f * v } };
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) M[i][j] = m[i][j];
+        break;
+    }
+    case GP_FX_GRAYSCALE: {
+        const float m[3][3] = { { 0.2126f + 0.7874f * s, 0.7152f - 0.7152f * s, 0.0722f - 0.0722f * s },
+                                { 0.2126f - 0.2126f * s, 0.7152f + 0.2848f * s, 0.0722f - 0.0722f * s },
+                                { 0.2126f - 0.2126f * s, 0.7152f - 0.7152f * s, 0.0722f + 0.9278f * s } };
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) M[i][j] = m[i][j];
+        break;
+    }
+    case GP_FX_SEPIA: {
+        const float m[3][3] = { { 0.393f + 0.607f * s, 0.769f - 0.769f * s, 0.189f - 0.189f * s },
+                                { 0.349f - 0.349f * s, 0.686f + 0.314f * s, 0.168f - 0.168f * s },
+                                { 0.272f - 0.272f * s, 0.534f - 0.534f * s, 0.131f + 0.869f * s } };
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) M[i][j] = m[i][j];
+        break;
+    }
+    case GP_FX_INVERT:
+        M[0][0] = M[1][1] = M[2][2] = 1.f - 2.f * v;
+        M[0][4] = M[1][4] = M[2][4] = v;
+        break;
+    case GP_FX_HUE_ROTATE: {
+        float a = v * (float)M_PI / 180.f, c = cosf(a), n = sinf(a);
+        const float m[3][3] = { { 0.213f + c * 0.787f - n * 0.213f, 0.715f - c * 0.715f - n * 0.715f, 0.072f - c * 0.072f + n * 0.928f },
+                                { 0.213f - c * 0.213f + n * 0.143f, 0.715f + c * 0.285f + n * 0.140f, 0.072f - c * 0.072f - n * 0.283f },
+                                { 0.213f - c * 0.213f - n * 0.787f, 0.715f - c * 0.715f + n * 0.715f, 0.072f + c * 0.928f + n * 0.072f } };
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) M[i][j] = m[i][j];
+        break;
+    }
+    case GP_FX_OPACITY: M[3][3] = v; break;
+    }
+}
+
 /* ---------------------------------------------------------------- layers */
 
 /* Where an instance can draw on screen (logical px), conservatively: its quad grown by what the shader adds around it (a shadow's blur, a pixel of
@@ -135,27 +193,107 @@ static bool layer_begin(paint_ctx *pc) {
 
 /* Closes it: the region (the box of what was painted, out to whole device pixels) goes on both markers, and the end is the quad that composites
  * the texture at `alpha`. A layer nothing was painted into is taken out. */
-static void layer_end(paint_ctx *pc, float alpha) {
+static void layer_end_fx(paint_ctx *pc, float alpha, const layer_fx *fx) {
     pc->depth--;
     size_t at = pc->lbegin[pc->depth];
-    const float *L = pc->lbox[pc->depth];
+    float L[4];
+    memcpy(L, pc->lbox[pc->depth], sizeof L);
     if (pc->scene->len == at + 1 || !(L[2] > L[0] && L[3] > L[1]) || alpha <= 0.f) {
         pc->scene->len = at;
         return;
     }
+    const gp_style *st = fx ? fx->s : NULL;
+    int nf = st ? st->nfilters : 0;
+    /* how far the filters spread what was painted: a blur by three of its deviations, a shadow by its offset and its blur's */
+    for (int i = 0; i < nf; i++) {
+        const gp_filter_op *op = &st->filters[i];
+        if (op->kind == GP_FX_BLUR) {
+            float g = 3.f * op->v;
+            L[0] -= g; L[1] -= g; L[2] += g; L[3] += g;
+        } else if (op->kind == GP_FX_DROP_SHADOW) {
+            float g = 1.5f * op->v;   /* (sigma is half the blur, as for gp_shadow: three of them) */
+            L[0] = fminf(L[0], L[0] + op->dx - g); L[1] = fminf(L[1], L[1] + op->dy - g);
+            L[2] = fmaxf(L[2], L[2] + op->dx + g); L[3] = fmaxf(L[3], L[3] + op->dy + g);
+        }
+    }
     float s = pc->scale, lim = 1e6f;
     float x0 = floorf(fmaxf(L[0], -lim) * s) / s, y0 = floorf(fmaxf(L[1], -lim) * s) / s;
     float x1 = ceilf(fminf(L[2], lim) * s) / s, y1 = ceilf(fminf(L[3], lim) * s) / s;
+    float region[4] = { x0, y0, x1 - x0, y1 - y0 };
     gp_instance *b = &pc->scene->items[at];
-    set4(b->bounds, x0, y0, x1 - x0, y1 - y0);
-    memcpy(b->clip, b->bounds, sizeof b->clip);
+    memcpy(b->bounds, region, sizeof region);
+    memcpy(b->clip, region, sizeof region);
+
+    /* the mask: a layer of its own over the same region (cleared all over it: where the mask paints nothing, nothing is seen) */
+    int mask_mode = 0;
+    if (fx && fx->mask) {
+        size_t mat = pc->scene->len;
+        if (layer_begin(pc)) {
+            paint_node(pc, fx->mask, fx->mx, fx->my, fx->clip, 1.f);
+            pc->depth--;
+            gp_instance *mb = &pc->scene->items[mat];
+            memcpy(mb->bounds, region, sizeof region);
+            memcpy(mb->clip, region, sizeof region);
+            gp_instance me = { 0 };
+            me.kind = GP_PRIM_MASK_END;
+            memcpy(me.bounds, region, sizeof region);
+            memcpy(me.clip, region, sizeof region);
+            gp_scene_push(pc->scene, &me);
+            mask_mode = 1 + (st && st->mask_mode == 1);
+        } else {
+            static bool warned;
+            if (!warned) { warned = true; fprintf(stderr, "gpuic: a mask nested more than %d layers deep is not applied\n", GP_MAX_LAYERS); }
+        }
+    }
+
+    /* the filters, as passes over the layer's region, in order */
+    for (int i = 0; i < nf; i++) {
+        const gp_filter_op *op = &st->filters[i];
+        gp_instance f = { 0 };
+        memcpy(f.bounds, region, sizeof region);
+        memcpy(f.clip, region, sizeof region);
+        if (op->kind == GP_FX_BLUR || op->kind == GP_FX_DROP_SHADOW) {
+            float sigma = op->kind == GP_FX_BLUR ? op->v : op->v * 0.5f;
+            f.kind = GP_PRIM_FX_BLUR;
+            f.blur = sigma;
+            set4(f.side[0], 0.f, op->kind == GP_FX_DROP_SHADOW, 0.f, 0.f);
+            gp_scene_push(pc->scene, &f);
+            if (op->kind == GP_FX_BLUR) {
+                f.side[0][0] = 1.f;
+            } else {
+                f.kind = GP_PRIM_FX_SHADOW;
+                set4(f.side[0], op->dx, op->dy, 0.f, 0.f);
+                set_color(f.color, op->color, 1.f);
+            }
+            gp_scene_push(pc->scene, &f);
+        } else {
+            float M[4][5];
+            fx_matrix(op, M);
+            f.kind = GP_PRIM_FX_MATRIX;
+            for (int j = 0; j < 4; j++) {
+                f.color[j] = M[0][j];
+                f.border_color[j] = M[1][j];
+                f.radii[j] = M[2][j];
+                f.uv[j] = M[3][j];
+            }
+            set4(f.side[0], M[0][4], M[1][4], M[2][4], M[3][4]);
+            gp_scene_push(pc->scene, &f);
+        }
+    }
+
     gp_instance e = { 0 };
     e.kind = GP_PRIM_LAYER_END;
-    memcpy(e.bounds, b->bounds, sizeof e.bounds);
-    memcpy(e.clip, b->bounds, sizeof e.clip);
+    memcpy(e.bounds, region, sizeof region);
+    rect c = { x0, y0, x1, y1 };
+    if (fx) c = rect_isect(c, fx->clip);
+    set_clip(&e, c);
     set4(e.color, 1.f, 1.f, 1.f, fminf(alpha, 1.f));
+    e.uv[0] = st ? (float)st->blend_mode : 0.f;
+    e.uv[1] = (float)mask_mode;
     scene_add(pc, &e);
 }
+
+static void layer_end(paint_ctx *pc, float alpha) { layer_end_fx(pc, alpha, NULL); }
 
 /* every instance carries the transform it was painted under (all zeros: none) */
 static void push(paint_ctx *pc, gp_instance *inst) {
@@ -707,7 +845,7 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
 }
 
 /* What a state style (gp_hover_style, gp_active_style, gp_focus_style) changes: the paint-only properties it sets (background, border
- * colors, style and gradient, corner radii, shadow, opacity, text color), put over `dst`. Anything that would move or resize the element is not here. */
+ * colors, style and gradient, corner radii, shadow, opacity, text color, filters, blend mode), put over `dst`. Anything that would move or resize the element is not here. */
 static void overlay_style(gp_style *dst, const gp_style *src) {
     if (src->has_bg) { dst->bg = src->bg; dst->has_bg = true; dst->bg_gradient = NULL; }
     if (src->has_stroke_color) { dst->stroke_color = src->stroke_color; dst->has_stroke_color = true; }
@@ -723,6 +861,8 @@ static void overlay_style(gp_style *dst, const gp_style *src) {
     if (src->radius > 0.f) { dst->radius = src->radius; dst->corner_set = 0; }
     for (int i = 0; i < 4; i++)
         if (src->corner_set & (1 << i)) { dst->corner[i] = src->corner[i]; dst->corner_set |= (uint8_t)(1 << i); }
+    if (src->nfilters) { dst->filters = src->filters; dst->nfilters = src->nfilters; }
+    if (src->blend_mode) dst->blend_mode = src->blend_mode;
 }
 
 /* Whether an element's opacity needs a layer: what it paints could overlap (children, a box under text, a shadow under a box, a fill under a stroke) */
@@ -781,9 +921,14 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
     /* An opacity fades the element and what is in it as one thing (CSS's group opacity): painted into a layer that is put down at it, when
      * there is more than one thing to paint that could overlap; else it is put on the one instance, which is the same and costs nothing. */
     float group = 1.f;
+    bool layered = false, effects = s->nfilters || s->blend_mode || n->mask;   /* (these always take a layer) */
     if (s->opacity <= 0.f || opacity <= 0.f) return;
-    if (s->opacity < 1.f && wants_group(n, s) && layer_begin(pc)) group = s->opacity;
-    else opacity *= s->opacity;
+    if ((effects || (s->opacity < 1.f && wants_group(n, s))) && layer_begin(pc)) {
+        layered = true;
+        group = s->opacity;
+    } else {
+        opacity *= s->opacity;
+    }
     if (n->kind == GP_EL_CURVE) {
         gp_color c = s->has_stroke_color ? s->stroke_color : n->ts.color;
         if (hovered && pc->pressed && s->has_active_bg) c = s->active_bg;
@@ -936,7 +1081,10 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
     if (n->sticky) paint_node(pc, n->sticky, x, y, child_clip, opacity);   /* (a list's pinned header: not scrolled, above the rows) */
     if (scrolls) paint_scrollbars(pc, n, x, y, child_clip, opacity);
 done:
-    if (group < 1.f) layer_end(pc, group);
+    if (layered) {
+        layer_fx fx = { s, n->mask, x, y, clip };
+        layer_end_fx(pc, group, &fx);
+    }
 }
 
 /* An element with a transform paints itself and everything in it under it: the pointer is taken back through it for what hover looks at. */

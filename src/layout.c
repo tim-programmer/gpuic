@@ -143,6 +143,7 @@ static unsigned prepare(gp_el *n, gp_text_style parent, uint64_t path) {
     if (n->style.autohide_scrollbar) flags |= GP_SUB_AUTOHIDE;
     for (uint32_t i = 0; i < n->nchildren; i++)
         flags |= prepare(n->children[i], ts, (path ^ (i + 1)) * 1099511628211ull);
+    if (n->mask) flags |= prepare(n->mask, ts, (path ^ 0x6d61736bull) * 1099511628211ull);   /* (a mask inherits as a child would) */
     if (style_changed || (flags & (GP_SUB_LIST | PREP_STATE_CHANGED))) n->ncache = 0;   /* (a state put on or taken off below: the sizes measured differ) */
     n->sub_flags = (uint8_t)flags;
     n->prep_valid = cached_root;
@@ -1347,6 +1348,11 @@ static gp_size layout_node(gp_el *n, float fw, float fh, float pw, float ph, boo
                                         : layout_container(n, w, h, pw, ph, commit);
     if (commit) {
         n->size = out;
+        if (n->mask) {   /* over the border box, as an absolute child filling it would be */
+            n->mask->pos = (gp_point){ 0, 0 };
+            layout_node(n->mask, out.w, out.h, out.w, out.h, true);
+            n->mask->size = out;
+        }
         if (reusable) {
             n->lk[0] = w; n->lk[1] = h; n->lk[2] = pw; n->lk[3] = ph;
             n->lk_ext = ext_gen;

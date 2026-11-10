@@ -107,6 +107,9 @@ typedef struct gp_style {
     uint8_t lpad, lmargin, linset;
     gp_color bg, border_color, text_color, hover_bg, active_bg, focus_bg, focus_border;
     gp_color scrollbar_color;
+    /* effects that need the element in a layer of its own (paint.c): filters in order (arena of the element), how it blends with what is under it, how a mask counts */
+    const struct gp_filter_op *filters;
+    uint8_t nfilters, blend_mode, mask_mode;   /* blend: GP_BLEND_*; mask: 0 its alpha, 1 its luminance */
     struct { float dx, dy, blur; gp_color color; } shadow;
 } gp_style;
 
@@ -244,6 +247,7 @@ struct gp_el {
     bool list_horiz;       /* gp_list_horizontal: a uniform list laid out along x (list_ih is the items' width) */
     gp_list_group_fn sticky_fn;   /* gp_list_sticky: which header stays at the top, asked at layout and on every scroll */
     void *sticky_data;
+    gp_el *mask;           /* gp_mask: laid out over the element's box, painted into a layer of its own whose alpha (or luminance) cuts the element's; not hit, not in children */
     gp_el *sticky;         /* the header pinned now (made by the layout of the list, in its header arena), or NULL; drawn unscrolled, above the rows */
     bool list_stick;       /* gp_list_stick_to_end */
     bool list_head, list_tail; /* the realized rows start at row 0 / end at the last row */
@@ -538,7 +542,13 @@ enum { GP_PRIM_QUAD = 0, GP_PRIM_SHADOW = 1, GP_PRIM_GLYPH = 2, GP_PRIM_COLOR_GL
        GP_PRIM_LINEAR_GRADIENT = 5, GP_PRIM_RADIAL_GRADIENT = 6, GP_PRIM_IMAGE = 7, GP_PRIM_CONIC_GRADIENT = 8, GP_PRIM_SEGMENT = 9, GP_PRIM_TRIANGLE = 10,
        /* offscreen layers: BEGIN starts drawing into a texture of its own (bounds: the region of it that is cleared), END puts that region of it on what
         * is under it at color.a (and is the quad that does it); they nest, at most GP_MAX_LAYERS deep */
-       GP_PRIM_LAYER_BEGIN = 11, GP_PRIM_LAYER_END = 12 };
+       GP_PRIM_LAYER_BEGIN = 11, GP_PRIM_LAYER_END = 12,
+       /* passes over a layer before its END puts it down (bounds and clip: the layer's region): a color matrix (rows in color, border_color, radii, uv; the offsets in side[0]),
+        * a blur along one axis (blur: sigma in logical px; side[0].x: 0 across, 1 down; side[0].y: 1 into the aside texture for a shadow), a drop shadow (the aside texture blurred
+        * down at side[0].zw... see render_gl.c), and the end of a mask's layer (MASK_END: the layer just closed is the mask of the next END) */
+       GP_PRIM_FX_MATRIX = 13, GP_PRIM_FX_BLUR = 14, GP_PRIM_FX_SHADOW = 15, GP_PRIM_MASK_END = 16 };
+enum { GP_FX_BLUR = 1, GP_FX_BRIGHTNESS, GP_FX_CONTRAST, GP_FX_SATURATE, GP_FX_GRAYSCALE, GP_FX_SEPIA, GP_FX_INVERT, GP_FX_HUE_ROTATE, GP_FX_OPACITY, GP_FX_DROP_SHADOW };
+typedef struct gp_filter_op { uint8_t kind; float v, dx, dy; gp_color color; } gp_filter_op;   /* v: the amount (blur, drop shadow: the blur) */
 #define GP_MAX_LAYERS 8
 
 typedef struct {

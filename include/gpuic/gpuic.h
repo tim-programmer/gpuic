@@ -1071,6 +1071,37 @@ gp_node *gp_shadow(float dx, float dy, float blur, gp_color c);
  * none. Text inside a layer is antialiased in gray (LCD stripes need what is under them). Layers nest 8 deep; deeper ones are faded piece by piece. */
 gp_node *gp_opacity(float o);
 
+/* Filters on an element, as CSS's `filter`: the element and everything in it, drawn into a layer, then changed as a picture, in the order given (each modifier adds one,
+ * so gp_filter_grayscale(1) then gp_filter_brightness(1.2) is not the same as the other way round). The color ones work on each pixel's color as CSS defines them:
+ * brightness, contrast and saturate take a factor (1: unchanged), grayscale, sepia, invert and opacity an amount from 0 (unchanged) to 1, hue_rotate an angle in degrees.
+ * gp_filter_blur blurs it (a Gaussian, px is its standard deviation) and gp_filter_drop_shadow puts a shadow under the shape of what is drawn (its alpha, not its box,
+ * so text and icons get theirs; `blur` as in gp_shadow, the offset in screen px). The pointer is not affected: a blurred button is clicked where its box is.
+ * A filter on a state style (gp_hover_style) replaces the element's list. */
+gp_node *gp_filter_blur(float px);
+gp_node *gp_filter_brightness(float factor);
+gp_node *gp_filter_contrast(float factor);
+gp_node *gp_filter_saturate(float factor);
+gp_node *gp_filter_grayscale(float amount);
+gp_node *gp_filter_sepia(float amount);
+gp_node *gp_filter_invert(float amount);
+gp_node *gp_filter_hue_rotate(float degrees);
+gp_node *gp_filter_opacity(float amount);
+gp_node *gp_filter_drop_shadow(float dx, float dy, float blur, gp_color c);
+
+/* How the element (and what is in it, as one picture) is put on what is under it: CSS's mix-blend-mode, with what is under it inside its nearest group (an ancestor with
+ * gp_opacity, a filter, a mask or a blend mode of its own), or the window. */
+enum { GP_BLEND_NORMAL = 0, GP_BLEND_MULTIPLY, GP_BLEND_SCREEN, GP_BLEND_OVERLAY, GP_BLEND_DARKEN, GP_BLEND_LIGHTEN, GP_BLEND_COLOR_DODGE, GP_BLEND_COLOR_BURN,
+       GP_BLEND_HARD_LIGHT, GP_BLEND_SOFT_LIGHT, GP_BLEND_DIFFERENCE, GP_BLEND_EXCLUSION, GP_BLEND_HUE, GP_BLEND_SATURATION, GP_BLEND_COLOR, GP_BLEND_LUMINOSITY };
+gp_node *gp_blend_mode(int mode);
+
+/* A mask, as CSS's mask-image with any element for the image: `mask` is laid out over the element's border box (as an absolutely placed child filling it would be),
+ * painted, and where it is transparent the element is not seen (its alpha multiplies the element's; with gp_mask_luminance, its luminance times its alpha does, as
+ * mask-mode: luminance). A gradient that fades a list's bottom edge: gp_mask(gp_div(gp_size_full(), gp_bg_gradient(180, gp_stop(white, .8f), gp_stop(transparent, 1))))
+ * (any color: only the alpha counts). Applied after the filters, and before the opacity and blend mode. Not hit and not animated by gp_with_animation; the pointer is not
+ * affected by it. */
+gp_node *gp_mask(gp_node *mask);
+gp_node *gp_mask_luminance(void);
+
 gp_node *gp_hover_bg(gp_color c);
 gp_node *gp_active_bg(gp_color c);
 gp_node *gp_cursor_pointer(void);

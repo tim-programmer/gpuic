@@ -66,6 +66,7 @@ enum {
     M_HOVER_STYLE, M_ACTIVE_STYLE, M_FOCUS_STYLE, M_ROTATE, M_SCALE, M_TRANSLATE, M_XF_ORIGIN, M_SKEW,
     M_STROKE_W, M_STROKE_COLOR, M_STROKE_CAP, M_STROKE_JOIN, M_MITER_LIMIT, M_HIT_TOL,
     M_DASH, M_DASH_OFF, M_STROKE_GRADIENT, M_ARROW, M_FILL, M_CLOSED, M_PATH_TEXT, M_PATH_TEXT_DY,
+    M_FILTER, M_BLEND, M_MASK, M_MASK_LUM,
 };
 
 enum { SIDE_L = 1, SIDE_T = 2, SIDE_R = 4, SIDE_B = 8, SIDE_ALL = 15 };
@@ -498,6 +499,32 @@ gp_node *gp_path_text(const char *text) {
     return &m->base;
 }
 gp_node *gp_path_text_dy(float px) { return mod_f(M_PATH_TEXT_DY, isfinite(px) ? px : 0.f); }
+static float fin(float v, float dflt) { return isfinite(v) ? v : dflt; }
+static gp_node *mod_filter(int kind, float v, float dx, float dy, gp_color c) {
+    gp_mod *m = mod_new(M_FILTER);
+    m->mask = (uint8_t)kind;
+    m->f[0] = v; m->f[1] = dx; m->f[2] = dy;
+    m->c = c;
+    return &m->base;
+}
+static float amount01(float a) { a = fin(a, 0.f); return a < 0.f ? 0.f : a > 1.f ? 1.f : a; }
+gp_node *gp_filter_blur(float px) { return mod_filter(GP_FX_BLUR, fmaxf(fin(px, 0.f), 0.f), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_brightness(float f) { return mod_filter(GP_FX_BRIGHTNESS, fmaxf(fin(f, 1.f), 0.f), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_contrast(float f) { return mod_filter(GP_FX_CONTRAST, fmaxf(fin(f, 1.f), 0.f), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_saturate(float f) { return mod_filter(GP_FX_SATURATE, fmaxf(fin(f, 1.f), 0.f), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_grayscale(float a) { return mod_filter(GP_FX_GRAYSCALE, amount01(a), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_sepia(float a) { return mod_filter(GP_FX_SEPIA, amount01(a), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_invert(float a) { return mod_filter(GP_FX_INVERT, amount01(a), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_hue_rotate(float deg) { return mod_filter(GP_FX_HUE_ROTATE, fin(deg, 0.f), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_opacity(float a) { return mod_filter(GP_FX_OPACITY, amount01(a), 0, 0, (gp_color){ 0 }); }
+gp_node *gp_filter_drop_shadow(float dx, float dy, float blur, gp_color c) { return mod_filter(GP_FX_DROP_SHADOW, fmaxf(fin(blur, 0.f), 0.f), fin(dx, 0.f), fin(dy, 0.f), c); }
+gp_node *gp_blend_mode(int mode) { return mod_f(M_BLEND, (float)(mode >= GP_BLEND_NORMAL && mode <= GP_BLEND_LUMINOSITY ? mode : GP_BLEND_NORMAL)); }
+gp_node *gp_mask(gp_node *mask) {
+    gp_mod *m = mod_new(M_MASK);
+    m->data = mask;
+    return &m->base;
+}
+gp_node *gp_mask_luminance(void) { return mod_f(M_MASK_LUM, 1); }
 gp_node *gp_rotate(float degrees) { return mod_f2(M_ROTATE, degrees, 0); }
 gp_node *gp_scale(float s) { return mod_f2(M_SCALE, s, s); }
 gp_node *gp_scale_xy(float sx, float sy) { return mod_f2(M_SCALE, sx, sy); }
@@ -786,6 +813,22 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_CLOSED: s->closed = true; break;
     case M_PATH_TEXT: s->path_text = m->name; break;
     case M_PATH_TEXT_DY: s->path_text_dy = m->f[0]; break;
+    case M_FILTER: {   /* one more at the end of the list: a new array (the old one may be the element's base, which an animation goes back to) */
+        if (s->nfilters >= 32) break;
+        gp_filter_op *ops = gp_arena_alloc(g_bc->arena, (size_t)(s->nfilters + 1) * sizeof *ops, 8);
+        if (s->nfilters) memcpy(ops, s->filters, s->nfilters * sizeof *ops);
+        ops[s->nfilters] = (gp_filter_op){ m->mask, m->f[0], m->f[1], m->f[2], m->c };
+        s->filters = ops;
+        s->nfilters++;
+        break;
+    }
+    case M_BLEND: s->blend_mode = (uint8_t)m->f[0]; break;
+    case M_MASK: {
+        gp_node *g = m->data;
+        if (g && g->tag == GP_TAG_ELEMENT) el->mask = (gp_el *)g;
+        break;
+    }
+    case M_MASK_LUM: s->mask_mode = 1; break;
     case M_ROTATE: s->xf_rot = m->f[0]; s->has_xf = true; break;
     case M_SCALE: s->xf_sx = m->f[0]; s->xf_sy = m->f[1]; s->has_xf = true; break;
     case M_TRANSLATE: s->xf_tx = m->f[0]; s->xf_ty = m->f[1]; s->has_xf = true; break;

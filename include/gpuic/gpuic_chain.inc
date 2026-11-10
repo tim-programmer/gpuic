@@ -258,6 +258,30 @@
     Element&& shadow(float dx, float dy, float blur, gp_color c) && { return std::move(add(gp_shadow(dx, dy, blur, c))); }
     Element& opacity(float o) & { return add(gp_opacity(o)); }
     Element&& opacity(float o) && { return std::move(add(gp_opacity(o))); }
+    Element& filter_blur(float px) & { return add(gp_filter_blur(px)); }
+    Element&& filter_blur(float px) && { return std::move(add(gp_filter_blur(px))); }
+    Element& filter_brightness(float factor) & { return add(gp_filter_brightness(factor)); }
+    Element&& filter_brightness(float factor) && { return std::move(add(gp_filter_brightness(factor))); }
+    Element& filter_contrast(float factor) & { return add(gp_filter_contrast(factor)); }
+    Element&& filter_contrast(float factor) && { return std::move(add(gp_filter_contrast(factor))); }
+    Element& filter_saturate(float factor) & { return add(gp_filter_saturate(factor)); }
+    Element&& filter_saturate(float factor) && { return std::move(add(gp_filter_saturate(factor))); }
+    Element& filter_grayscale(float amount) & { return add(gp_filter_grayscale(amount)); }
+    Element&& filter_grayscale(float amount) && { return std::move(add(gp_filter_grayscale(amount))); }
+    Element& filter_sepia(float amount) & { return add(gp_filter_sepia(amount)); }
+    Element&& filter_sepia(float amount) && { return std::move(add(gp_filter_sepia(amount))); }
+    Element& filter_invert(float amount) & { return add(gp_filter_invert(amount)); }
+    Element&& filter_invert(float amount) && { return std::move(add(gp_filter_invert(amount))); }
+    Element& filter_hue_rotate(float degrees) & { return add(gp_filter_hue_rotate(degrees)); }
+    Element&& filter_hue_rotate(float degrees) && { return std::move(add(gp_filter_hue_rotate(degrees))); }
+    Element& filter_opacity(float amount) & { return add(gp_filter_opacity(amount)); }
+    Element&& filter_opacity(float amount) && { return std::move(add(gp_filter_opacity(amount))); }
+    Element& filter_drop_shadow(float dx, float dy, float blur, gp_color c) & { return add(gp_filter_drop_shadow(dx, dy, blur, c)); }
+    Element&& filter_drop_shadow(float dx, float dy, float blur, gp_color c) && { return std::move(add(gp_filter_drop_shadow(dx, dy, blur, c))); }
+    Element& blend_mode(int mode) & { return add(gp_blend_mode(mode)); }
+    Element&& blend_mode(int mode) && { return std::move(add(gp_blend_mode(mode))); }
+    Element& mask_luminance() & { return add(gp_mask_luminance()); }
+    Element&& mask_luminance() && { return std::move(add(gp_mask_luminance())); }
     Element& hover_bg(gp_color c) & { return add(gp_hover_bg(c)); }
     Element&& hover_bg(gp_color c) && { return std::move(add(gp_hover_bg(c))); }
     Element& active_bg(gp_color c) & { return add(gp_active_bg(c)); }

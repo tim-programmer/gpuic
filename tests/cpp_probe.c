@@ -59,6 +59,8 @@ static const char *same(const gp_el *a, const gp_el *b, char *why, size_t cap, i
     if (a->kind == GP_EL_TEXT && strcmp(a->text, b->text) != 0) { snprintf(why, cap, "text \"%s\" vs \"%s\"", a->text, b->text); return why; }
     for (uint32_t i = 0; i < a->nchildren; i++)
         if (same(a->children[i], b->children[i], why, cap, depth + 1)) return why;
+    if ((a->mask == NULL) != (b->mask == NULL)) { snprintf(why, cap, "a mask on one only at depth %d", depth); return why; }
+    if (a->mask && same(a->mask, b->mask, why, cap, depth + 1)) return why;
     return NULL;
 }
 
@@ -172,6 +174,12 @@ const char *cpp_probe_el_same(gp_app *app, int ia, int ib, char *why, size_t cap
     sa.path_text = sb.path_text = NULL;
     sa.dash = sb.dash = NULL;
     sa.stroke_gradient = sb.stroke_gradient = NULL;
+    if (sa.nfilters != sb.nfilters) { snprintf(why, cap, "filter count"); return why; }
+    for (int i = 0; i < sa.nfilters; i++) {
+        const gp_filter_op *x = &sa.filters[i], *y = &sb.filters[i];
+        if (x->kind != y->kind || x->v != y->v || x->dx != y->dx || x->dy != y->dy || memcmp(&x->color, &y->color, sizeof x->color) != 0) { snprintf(why, cap, "filter %d", i); return why; }
+    }
+    sa.filters = sb.filters = NULL;
     if (memcmp(&sa, &sb, sizeof sa) != 0) {
         const unsigned char *x = (const unsigned char *)&sa, *y = (const unsigned char *)&sb;
         size_t i = 0;
