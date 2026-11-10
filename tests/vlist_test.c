@@ -143,6 +143,15 @@ int main(void) {
         gp_vlist_free(vl);
     }
 
+    {   /* a list that never had a row has no arrays: splicing nothing into it, then rows, must not hand memmove a null pointer (-fsanitize=undefined) */
+        gp_vlist *vl = gp_vlist_new(20);
+        gp_vlist_splice(vl, 0, 0, 0);
+        CHECK(vl->n == 0 && gp_vlist_total(vl) == 0, "nothing spliced into nothing");
+        gp_vlist_splice(vl, 0, 0, 3);
+        CHECK(vl->n == 3, "then three rows: %zu", vl->n);
+        gp_vlist_free(vl);
+    }
+
     {   /* anchor bookkeeping across splices */
         gp_vlist *vl = gp_vlist_new(20);
         gp_vlist_resize(vl, 100);

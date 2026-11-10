@@ -117,8 +117,10 @@ widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-h
 against a model), `tests/text_test.c` (fonts and shaping, against the fonts actually installed) and
 `tests/vlist_test.c` (the row-height index against a brute-force model). The first three need a
 display, like the examples. `tests/observe_test.c` (entity observers and events) and `tests/views_test.c`
-(dirty tracking and cached views) need one too. `cmake -DCMAKE_C_FLAGS=-fsanitize=address,undefined` and
-`-fsanitize=thread` builds both run clean (ASan only warns that it can't fully model `ucontext`).
+(dirty tracking and cached views) need one too. `cmake -DGPUIC_SANITIZE=ON` builds
+with AddressSanitizer and UndefinedBehaviorSanitizer, with undefined behavior fatal (`-fno-sanitize-recover=undefined`: a report fails the test
+instead of scrolling past in its output), and the suite runs clean under it with GCC and with clang (`CC=clang CXX=clang++`, whose UBSan checks
+more, such as a null pointer given to `memcpy` for zero bytes); a `-fsanitize=thread` build does too. ASan only warns that it can't fully model `ucontext`.
 
 ## How GPUI's model maps to C
 

@@ -980,7 +980,7 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
         vv->chunk = realloc(vv->chunk, vv->cap_chunk * sizeof *vv->chunk);
         if (!vv->chunk) abort();
     }
-    memcpy(vv->chunk, pc->scene->items + start, count * sizeof *vv->chunk);
+    if (count) memcpy(vv->chunk, pc->scene->items + start, count * sizeof *vv->chunk);   /* (a view that paints nothing may have no copy yet, nor the scene any items: NULL, even for 0 bytes, is undefined) */
     vv->nchunk = count;
     memcpy(vv->chunk_sig, sig, sizeof sig);
     vv->chunk_x = x;

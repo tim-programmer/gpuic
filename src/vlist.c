@@ -114,7 +114,7 @@ void gp_vlist_splice(gp_vlist *vl, size_t start, size_t old, size_t fresh) {
     g_generation++;
     size_t tail = vl->n - start - old, n = vl->n - old + fresh;
     reserve(vl, n);
-    memmove(vl->h + start + fresh, vl->h + start + old, tail * sizeof *vl->h);
+    if (tail) memmove(vl->h + start + fresh, vl->h + start + old, tail * sizeof *vl->h);   /* (a list that never had a row has no array: NULL, even for 0 bytes, is undefined) */
     for (size_t i = 0; i < fresh; i++) vl->h[start + i] = -1;
     vl->n = n;
     rebuild(vl);

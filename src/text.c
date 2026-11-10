@@ -776,7 +776,7 @@ static void cache_load(scan_ctx *c, const char *file) {
         }
     }
     if ((unsigned long long)c->nfiles != want_files) goto bad;
-    qsort(c->files, (size_t)c->nfiles, sizeof *c->files, cached_cmp);
+    if (c->nfiles) qsort(c->files, (size_t)c->nfiles, sizeof *c->files, cached_cmp);   /* (a cache with no files has no array) */
     return;
 bad:
     free(c->buf);
