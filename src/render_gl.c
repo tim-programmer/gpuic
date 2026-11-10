@@ -81,6 +81,7 @@ static const char *vs_src =
     "uniform vec2 u_viewport;\n"
     "flat out vec4 v_bounds, v_clip, v_color, v_border, v_radii, v_params, v_uvr, v_s0, v_s1, v_s2, v_bsty;\n"
     "flat out float v_mag;\n"
+    "flat out vec4 v_xf0, v_xf1;\n"
     "out vec2 v_local;\n"
     "out vec2 v_pos;\n"
     "out vec2 v_uv;\n"
@@ -93,6 +94,7 @@ static const char *vs_src =
     "  vec2 pos = pos0 + vec2(a_xf0.x * pos0.x + a_xf0.z * pos0.y + a_xf1.x, a_xf0.y * pos0.x + a_xf0.w * pos0.y + a_xf1.y);\n"
     "  v_pos = pos;\n"                                      /* the clip is in screen space */
     "  v_mag = 1.0 + a_xf1.z;\n"
+    "  v_xf0 = a_xf0; v_xf1 = a_xf1;\n"
     "  v_local = pos0 - (a_bounds.xy + a_bounds.zw * 0.5);\n"
     "  v_uv = a_uv.xy + corner * a_uv.zw;\n"
     "  v_bounds = a_bounds; v_clip = a_clip; v_color = a_color; v_border = a_border;\n"
@@ -105,6 +107,8 @@ static const char *fs_src =
     "#version 330 core\n"
     "flat in vec4 v_bounds, v_clip, v_color, v_border, v_radii, v_params, v_uvr, v_s0, v_s1, v_s2, v_bsty;\n"
     "flat in float v_mag;\n"
+    "flat in vec4 v_xf0, v_xf1;\n"
+    "uniform vec2 u_viewport;\n"
     "in vec2 v_local;\n"
     "in vec2 v_pos;\n"
     "in vec2 v_uv;\n"
@@ -183,7 +187,7 @@ static const char *fs_src =
     "  } else if (kind == 9.0) {\n" /* a piece of a stroke: the capsule of segment a-b (v_uvr), half width v_radii.x, the style of its two ends in v_radii.yz (0 round, 1 miter, 2 flat),
                                       the planes that divide it from its neighbours in v_s0 (a normal pointing out of this piece's side; zero: none) */
     "    vec2 a = v_uvr.xy, b = v_uvr.zw, p = v_local, na = v_s0.xy, nb = v_s0.zw;\n"
-    "    float hw = v_radii.x, cov = 0.0;\n"
+    "    float hw = v_radii.x, cov = 0.0, u = 0.0;\n"
     "    bool mine = !((dot(na, na) > 0.0 && dot(p - a, na) >= -0.001) || (dot(nb, nb) > 0.0 && dot(p - b, nb) > 0.001));\n"   /* (a point on the plane is the A piece's: a hair of slack, so the two pieces' rounding cannot make it both's or neither's) */
     "    if (mine) {\n"
     "      vec2 ba = b - a, pa = p - a;\n"
@@ -193,11 +197,37 @@ static const char *fs_src =
     "      } else {\n"
     "        vec2 dir = ba / L;\n"
     "        float t = dot(pa, dir), perp = abs(dot(pa, vec2(-dir.y, dir.x)));\n"
+    "        u = clamp(t / L, 0.0, 1.0);\n"
     "        if (t < 0.0) d = v_radii.y < 0.5 ? length(pa) - hw : (v_radii.y < 1.5 ? perp - hw : max(perp - hw, -t));\n"
     "        else if (t > L) d = v_radii.z < 0.5 ? length(p - b) - hw : (v_radii.z < 1.5 ? perp - hw : max(perp - hw, t - L));\n"
     "        else d = perp - hw;\n"
     "      }\n"
     "      cov = clamp(0.5 - d * us, 0.0, 1.0);\n"
+    "    }\n"
+    "    vec4 sc = v_bsty.z > 0.0 ? texture(u_ramps, vec2(mix(v_border.x, v_border.y, u), v_bsty.z)) * v_color.a : premul(v_color);\n" /* along a gradient: v_border.xy the piece's ends on it */
+    "    frag = sc * cov;\n"
+    "  } else if (kind == 10.0) {\n" /* a triangle (corners v_uvr.xy, v_uvr.zw, v_s0.xy); each edge (v_radii.xyz) soft (0), hard on a line shared with a neighbour (1: a pixel on
+                                      the line is this one's, -1: the neighbour's), or an arrowhead's base (2 / -2: hard where the stroke meets it, within v_radii.w of its middle) */
+    "    vec2 sp = vec2(gl_FragCoord.x, u_viewport.y * u_scale - gl_FragCoord.y) / u_scale;\n" /* the pixel's center in the window, then in the layout: the same numbers for */
+    "    vec2 p = inverse(mat2(1.0 + v_xf0.x, v_xf0.y, v_xf0.z, 1.0 + v_xf0.w)) * (sp - v_xf1.xy);\n"   /* every instance, so two triangles sharing an edge see one line */
+    "    vec2 tv[3] = vec2[3](v_uvr.xy, v_uvr.zw, v_s0.xy);\n"
+    "    float cov = 1.0;\n"
+    "    for (int i = 0; i < 3; i++) {\n"
+    "      vec2 a = tv[i], b = tv[(i + 1) % 3], c = tv[(i + 2) % 3];\n"
+    "      if (a.x > b.x || (a.x == b.x && a.y > b.y)) { vec2 t = a; a = b; b = t; }\n" /* the edge's ends in one order, whichever triangle asks */
+    "      vec2 e = b - a;\n"
+    "      float le = length(e);\n"
+    "      if (le < 1e-6) continue;\n"
+    "      vec2 nn = vec2(e.y, -e.x) / le;\n"
+    "      float d = dot(p - a, nn), mode = v_radii[i];\n"
+    "      if (dot(c - a, nn) > 0.0) d = -d;\n" /* positive outside this triangle */
+    "      if (abs(mode) > 1.5) {\n" /* an arrowhead's base: shared with a stroke piece, which divides by its own plane, with a hair of slack either way */
+    "        if (abs(dot(p - (a + b) * 0.5, e / le)) < v_radii.w + 0.5 / us) { if (d >= (mode > 0.0 ? 0.001 : -0.001)) cov = 0.0; continue; }\n"
+    "        mode = 0.0;\n"
+    "      }\n"
+    "      if (mode > 0.0) { if (d > 0.0) cov = 0.0; }\n"   /* a line on the line is the owner's: exactly one of the two takes it */
+    "      else if (mode < 0.0) { if (d >= 0.0) cov = 0.0; }\n"
+    "      else if (d > 0.0 || abs(dot(p - (a + b) * 0.5, e / le)) <= le * 0.5) cov = min(cov, clamp(0.5 - d * us, 0.0, 1.0));\n" /* (inside, the edge's line past its ends is not the outline: another piece's edge is) */
     "    }\n"
     "    frag = premul(v_color) * cov;\n"
     "  } else if (kind == 1.0) {\n"

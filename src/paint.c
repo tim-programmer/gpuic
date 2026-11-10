@@ -89,64 +89,244 @@ static void push(paint_ctx *pc, gp_instance *inst) {
 
 /* ---------------------------------------------------------------- stroked curves */
 
-/* The stroke as one instance a piece: every piece is a capsule (or, at a joint, the part of the stroke on its own side of the plane that bisects the angle there), drawn by the
- * fragment shader from the distance to the piece, so edges are anti-aliased exactly, round caps and joins come out of the distance, and no pixel is covered by two pieces: a translucent
- * stroke is blended once everywhere. The planes make the pieces tile the stroke (a pixel belongs to the piece whose side of both planes it is on). */
-static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, float opacity, gp_color color) {
+/* How a stroke is colored: a color, or a gradient along its whole length (ramp row `row`, `total` the length). */
+typedef struct { gp_color color; float opacity; int row; float total; const gp_gradient *grad; } stroke_paint;
+
+/* The gradient's color at t (0..1), interpolated premultiplied as the ramp is; returned straight. */
+static gp_color ramp_at(const gp_gradient *g, float t) {
+    if (g->n <= 0) return (gp_color){ 0, 0, 0, 0 };
+    const gp_color_stop *st = g->stops;
+    if (t <= st[0].at || g->n == 1) return st[0].color;
+    for (int i = 1; i < g->n; i++)
+        if (t <= st[i].at) {
+            float span = st[i].at - st[i - 1].at, u = span > 0.f ? (t - st[i - 1].at) / span : 1.f;
+            gp_color c0 = st[i - 1].color, c1 = st[i].color;
+            float al = c0.a + (c1.a - c0.a) * u;
+            if (al <= 0.f) return (gp_color){ 0, 0, 0, 0 };
+            return (gp_color){ (c0.r * c0.a + (c1.r * c1.a - c0.r * c0.a) * u) / al, (c0.g * c0.a + (c1.g * c1.a - c0.g * c0.a) * u) / al,
+                               (c0.b * c0.a + (c1.b * c1.a - c0.b * c0.a) * u) / al, al };
+        }
+    return st[g->n - 1].color;
+}
+
+static void stroke_color_at(gp_instance *inst, const stroke_paint *sp, float t) {
+    set_color(inst->color, sp->grad ? ramp_at(sp->grad, t) : sp->color, sp->opacity);
+}
+
+/* One open (or closed) run of the stroke, p[0..m) starting at length arc0 of the whole: one instance a piece, each a capsule (or, at a joint, the part of the stroke on its own
+ * side of the plane that bisects the angle there), drawn by the fragment shader from the distance to the piece, so edges are anti-aliased exactly, round caps and joins come
+ * out of the distance, and no pixel is covered by two pieces: a translucent stroke is blended once everywhere. The planes make the pieces tile the stroke (a pixel belongs to
+ * the piece whose side of both planes it is on). An end is capped (round or flat), or, with cut[e], cut square by the plane through it with normal cut[e] pointing out of the
+ * run (where an arrowhead takes over). */
+static void stroke_run(paint_ctx *pc, const gp_style *s, const gp_point *p, size_t m, float arc0, float x, float y, rect clip, float hw, bool miter, bool closed,
+                       const gp_point *cut0, const gp_point *cut1, const stroke_paint *sp) {
+    const bool butt = s->stroke_cap == 1;
+    float pad = hw * (miter ? fmaxf(1.f, s->miter_limit) : 1.f) + 1.5f;   /* (and a pixel and a half for the soft edge) */
+    if (m == 1) {   /* a point: a dot, if the ends are round */
+        if (butt || cut0 || cut1) return;
+        gp_instance inst = { 0 };
+        set4(inst.bounds, x + p[0].x - pad, y + p[0].y - pad, 2 * pad, 2 * pad);
+        set_clip(&inst, clip);
+        stroke_color_at(&inst, sp, sp->total > 0.f ? arc0 / sp->total : 0.f);
+        inst.kind = GP_PRIM_SEGMENT;
+        set4(inst.radii, hw, 0, 0, 0);
+        push(pc, &inst);
+        return;
+    }
+    if (closed && m < 4) closed = false;   /* (a closed run needs at least three corners) */
+    /* the unit directions of the pieces, and the plane at every joint: the one through the vertex whose normal is the mean direction */
+    gp_point *dir = gp_arena_alloc(pc->scratch, (m - 1) * sizeof *dir, 4);
+    gp_point *plane = gp_arena_alloc(pc->scratch, m * sizeof *plane, 4);   /* the mean direction at vertex i (1 .. m-2; 0 too when closed) */
+    uint8_t *style = gp_arena_alloc(pc->scratch, m, 1);                    /* at vertex i: 0 round, 1 miter */
+    memset(plane, 0, m * sizeof *plane);
+    memset(style, 0, m);
+    for (size_t i = 0; i + 1 < m; i++) {
+        float dx = p[i + 1].x - p[i].x, dy = p[i + 1].y - p[i].y, l = hypotf(dx, dy);
+        dir[i] = l > 0.f ? (gp_point){ dx / l, dy / l } : (gp_point){ 1, 0 };
+    }
+    for (size_t i = closed ? 0 : 1; i + 1 < m; i++) {
+        gp_point din = i ? dir[i - 1] : dir[m - 2];
+        float mx = din.x + dir[i].x, my = din.y + dir[i].y, l = hypotf(mx, my);
+        if (l < 1e-4f) { plane[i] = din; style[i] = 0; continue; }   /* a turn right back on itself: cut square */
+        plane[i] = (gp_point){ mx / l, my / l };
+        float cos_half = plane[i].x * dir[i].x + plane[i].y * dir[i].y;   /* of half the turn: the miter is 1 / cos_half times the half width */
+        style[i] = miter && cos_half > 1e-3f && 1.f / cos_half <= s->miter_limit ? 1 : 0;
+    }
+    if (closed) { plane[m - 1] = plane[0]; style[m - 1] = style[0]; }
+    float run = arc0;
+    for (size_t i = 0; i + 1 < m; i++) {
+        gp_point a = p[i], b = p[i + 1];
+        float len = hypotf(b.x - a.x, b.y - a.y);
+        float minx = fminf(a.x, b.x) - pad, maxx = fmaxf(a.x, b.x) + pad, miny = fminf(a.y, b.y) - pad, maxy = fmaxf(a.y, b.y) + pad;
+        float cx = (minx + maxx) * 0.5f, cy = (miny + maxy) * 0.5f;
+        gp_instance inst = { 0 };
+        set4(inst.bounds, x + minx, y + miny, maxx - minx, maxy - miny);
+        set_clip(&inst, clip);
+        if (sp->grad) {   /* along the stroke: the ramp from this piece's start to its end */
+            set4(inst.color, 0, 0, 0, sp->opacity);
+            inst.border_color[0] = run / sp->total;
+            inst.border_color[1] = (run + len) / sp->total;
+            inst.bsty[2] = ((float)sp->row + 0.5f) / (float)GP_GRAD_ROWS;
+        } else {
+            set_color(inst.color, sp->color, sp->opacity);
+        }
+        run += len;
+        inst.kind = GP_PRIM_SEGMENT;
+        set4(inst.uv, a.x - cx, a.y - cy, b.x - cx, b.y - cy);   /* the ends, relative to the middle of the bounds (what the shader's local position is) */
+        bool first = i == 0 && !closed, last = i + 2 == m && !closed;
+        float sa = first ? (cut0 ? 0.f : butt ? 2.f : 0.f) : (float)style[i], sb = last ? (cut1 ? 0.f : butt ? 2.f : 0.f) : (float)style[i + 1];
+        set4(inst.radii, hw, sa, sb, 0);
+        gp_point na = first ? (cut0 ? *cut0 : (gp_point){ 0, 0 }) : (gp_point){ -plane[i].x, -plane[i].y };
+        gp_point nb = last ? (cut1 ? *cut1 : (gp_point){ 0, 0 }) : plane[i + 1];
+        set4(inst.side[0], na.x, na.y, nb.x, nb.y);
+        push(pc, &inst);
+    }
+}
+
+/* A triangle, its corners relative to (x, y); edge[j] for the edge from corner j to j + 1: 0 anti-aliased (an outline), 1 / -1 cut hard on a line shared with another piece
+ * (1: a pixel on the line is this one's), 2 / -2 the base of an arrowhead: hard as 1 / -1 where the stroke meets it (within `hw` of its middle), anti-aliased beyond. */
+static void push_triangle(paint_ctx *pc, const gp_point v[3], const int8_t edge[3], float hw, float x, float y, rect clip, gp_color color, float opacity) {
+    float minx = fminf(v[0].x, fminf(v[1].x, v[2].x)) - 1.5f, maxx = fmaxf(v[0].x, fmaxf(v[1].x, v[2].x)) + 1.5f;
+    float miny = fminf(v[0].y, fminf(v[1].y, v[2].y)) - 1.5f, maxy = fmaxf(v[0].y, fmaxf(v[1].y, v[2].y)) + 1.5f;
+    float cx = (minx + maxx) * 0.5f, cy = (miny + maxy) * 0.5f;
+    gp_instance inst = { 0 };
+    set4(inst.bounds, x + minx, y + miny, maxx - minx, maxy - miny);
+    set_clip(&inst, clip);
+    set_color(inst.color, color, opacity);
+    inst.kind = GP_PRIM_TRIANGLE;
+    set4(inst.uv, x + v[0].x, y + v[0].y, x + v[1].x, y + v[1].y);   /* in the layout, not relative to the bounds: see the shader */
+    set4(inst.side[0], x + v[2].x, y + v[2].y, 0, 0);
+    (void)cx; (void)cy;
+    set4(inst.radii, edge[0], edge[1], edge[2], hw);
+    push(pc, &inst);
+}
+
+/* Text along the centerline: each glyph turned to the direction at its middle, its baseline on the line (moved `path_text_dy` to the right of the direction of travel),
+ * placed by the text's alignment (start, center, end) along the length. A glyph that would run off either end is not drawn. */
+static void paint_path_text(paint_ctx *pc, gp_el *n, const gp_point *p, const float *arc, size_t m, float x, float y, rect clip, float opacity) {
+    const char *text = n->style.path_text;
+    size_t len = strlen(text);
+    if (!len || m < 2) return;
+    int cap = (int)len + 1;
+    gp_glyph_pos *g = gp_arena_alloc(pc->scratch, (size_t)cap * sizeof *g, 8);
+    float lw = 0;
+    int ng = gp_text_shape_dir(pc->ts, GP_TEXT_SEL(n->ts), n->ts.size, text, len, GP_BIDI_LTR, g, cap, &lw);
+    if (ng > cap) {
+        cap = ng;
+        g = gp_arena_alloc(pc->scratch, (size_t)cap * sizeof *g, 8);
+        ng = gp_text_shape_dir(pc->ts, GP_TEXT_SEL(n->ts), n->ts.size, text, len, GP_BIDI_LTR, g, cap, &lw);
+    }
+    float total = arc[m - 1], start = 0.f;
+    if (n->ts.align == GP_TEXT_ALIGN_CENTER) start = (total - lw) * 0.5f;
+    else if (n->ts.align == GP_TEXT_ALIGN_END || n->ts.align == GP_TEXT_ALIGN_RIGHT) start = total - lw;
+    const float scale = pc->scale, px_size = n->ts.size * scale, inv_alpha = 1.f / (float)GP_ATLAS_SIZE, inv_color = 1.f / (float)GP_COLOR_ATLAS_SIZE;
+    const bool had = pc->has_xf;
+    const gp_affine outer = had ? pc->xf : gp_aff_identity();
+    for (int i = 0; i < ng; i++) {
+        float mid = start + g[i].x + g[i].advance * 0.5f;
+        if (start + g[i].x < -0.01f || start + g[i].x + g[i].advance > total + 0.01f) continue;
+        size_t piece;
+        gp_point c = gp_curve_at(p, arc, m, mid, &piece);
+        float dx = p[piece + 1].x - p[piece].x, dy = p[piece + 1].y - p[piece].y, l = hypotf(dx, dy);
+        if (!(l > 0.f)) continue;
+        dx /= l; dy /= l;
+        float dyb = n->style.path_text_dy + g[i].y;
+        gp_point o = { x + c.x - dx * g[i].advance * 0.5f - dy * dyb, y + c.y - dy * g[i].advance * 0.5f + dx * dyb };   /* the glyph's origin on the baseline */
+        gp_glyph_entry e = gp_text_glyph_lcd(pc->ts, g[i].font, g[i].glyph, px_size, 0, 0);
+        if (e.w == 0) continue;
+        gp_affine turn = { dx, dy, -dy, dx, 0, 0 };   /* about the origin */
+        turn.tx = o.x - (dx * o.x - dy * o.y);
+        turn.ty = o.y - (dy * o.x + dx * o.y);
+        pc->xf = gp_aff_mul(outer, turn);
+        pc->has_xf = true;
+        gp_instance inst = { 0 };
+        set4(inst.bounds, o.x + e.left / scale, o.y - e.top / scale, e.w / scale, e.h / scale);
+        set_clip(&inst, clip);
+        float inv = e.color ? inv_color : inv_alpha;
+        set4(inst.uv, e.u * inv, e.v * inv, e.w * inv, e.h * inv);
+        if (e.color) { set_color(inst.color, (gp_color){ 1, 1, 1, 1 }, opacity); inst.kind = GP_PRIM_COLOR_GLYPH; }
+        else { set_color(inst.color, n->ts.color, opacity); inst.kind = GP_PRIM_GLYPH; }
+        push(pc, &inst);
+    }
+    pc->has_xf = had;
+    pc->xf = outer;
+}
+
+/* A stroked curve: its fill, the stroke (dashed or not, cut short for its arrowheads), the arrowheads, and text along it. */
+static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, float opacity, gp_color color, bool recolored) {
     const gp_style *s = &n->style;
     float hw = s->stroke_w * 0.5f;
-    if (!(hw > 0.f) || color.a <= 0.f) return;
     float mag = 1.f;
     if (pc->has_xf) mag = sqrtf(fabsf(pc->xf.a * pc->xf.d - pc->xf.b * pc->xf.c));
     float tol = 0.25f / (pc->scale * (mag > 1e-4f ? mag : 1e-4f));   /* a quarter of a device pixel, in the element's own units */
     gp_point *p;
     size_t m = gp_curve_flatten(n, tol, pc->scratch, &p);
     if (!m) return;
-    const bool butt = s->stroke_cap == 1, miter = s->stroke_join == 1 && n->curve_kind == 1;
-    float pad = hw * (miter ? fmaxf(1.f, s->miter_limit) : 1.f) + 1.5f;   /* (and a pixel and a half for the soft edge) */
-    if (m == 1) {   /* a point: a dot, if the ends are round */
-        if (butt) return;
-        gp_instance inst = { 0 };
-        set4(inst.bounds, x + p[0].x - pad, y + p[0].y - pad, 2 * pad, 2 * pad);
-        set_clip(&inst, clip);
-        set_color(inst.color, color, opacity);
-        inst.kind = GP_PRIM_SEGMENT;
-        set4(inst.radii, hw, 0, 0, 0);
-        push(pc, &inst);
-        return;
+    float *arc = gp_curve_arcs(p, m, pc->scratch);
+    if (s->has_fill && s->fill_color.a > 0.f && m >= 3) {   /* under the stroke: triangles, outline edges soft, the diagonals between them hard and owned by one */
+        gp_point *t;
+        int8_t *ed;
+        size_t nt = gp_curve_triangulate(p, m, pc->scratch, &t, &ed);
+        for (size_t i = 0; i < nt; i++) push_triangle(pc, t + 3 * i, ed + 3 * i, 0.f, x, y, clip, s->fill_color, opacity);
     }
-    /* the unit directions of the pieces, and the plane at every joint: the one through the vertex whose normal is the mean direction */
-    gp_point *dir = gp_arena_alloc(pc->scratch, (m - 1) * sizeof *dir, 4);
-    gp_point *plane = gp_arena_alloc(pc->scratch, m * sizeof *plane, 4);   /* the mean direction at vertex i (1 .. m-2) */
-    uint8_t *style = gp_arena_alloc(pc->scratch, m, 1);                    /* at vertex i: 0 round, 1 miter */
-    for (size_t i = 0; i + 1 < m; i++) {
-        float dx = p[i + 1].x - p[i].x, dy = p[i + 1].y - p[i].y, l = hypotf(dx, dy);
-        dir[i] = l > 0.f ? (gp_point){ dx / l, dy / l } : (gp_point){ 1, 0 };
+    if (hw > 0.f && color.a > 0.f) {
+        stroke_paint sp = { color, opacity, -1, arc[m - 1], NULL };
+        const gp_gradient *grad = s->stroke_gradient;
+        if (grad && grad->n > 0 && !recolored && arc[m - 1] > 0.f) {
+            gp_gfx *gfx = gp_text_gfx(pc->ts);
+            int row = gfx ? gp_gfx_gradient_row(gfx, grad) : -1;
+            if (row >= 0) { sp.row = row; sp.grad = grad; }
+            else sp.color = grad->stops[0].color;   /* the ramp table is full: repainted after it is cleared */
+        }
+        const bool miter = s->stroke_join == 1 && n->curve_kind == 1;
+        gp_point tri[2][3], cutn[2];
+        float cut[2] = { 0.f, arc[m - 1] };
+        bool head[2];
+        for (int e = 0; e < 2; e++) {
+            head[e] = gp_curve_arrow(n, p, arc, m, e, tri[e], &cut[e]);
+            if (head[e]) {
+                gp_point b = { (tri[e][1].x + tri[e][2].x) * 0.5f, (tri[e][1].y + tri[e][2].y) * 0.5f };
+                float dx = tri[e][0].x - b.x, dy = tri[e][0].y - b.y, l = hypotf(dx, dy);
+                cutn[e] = (gp_point){ dx / l, dy / l };   /* out of the stroke, towards the tip */
+            }
+        }
+        if (cut[1] < cut[0]) cut[1] = cut[0];
+        float pat[16], period = 0.f;
+        int np = 0;
+        for (int i = 0; i < s->dash_n && i < 8; i++) pat[np++] = fmaxf(s->dash[i], 0.f);
+        if (np % 2) { memcpy(pat + np, pat, (size_t)np * sizeof *pat); np *= 2; }
+        for (int i = 0; i < np; i++) period += pat[i];
+        if (np && period > 1e-3f) {   /* dashes: each one an open run of its own, capped as the stroke is; the arrowheads' cuts stay square */
+            float off = fmodf(s->dash_off, period);
+            if (off < 0.f) off += period;
+            int k = 0;
+            float at = cut[0] - off;   /* where the current entry of the pattern starts, in lengths along the stroke */
+            size_t guard = 0;
+            while (at < cut[1] && guard++ < 1000000) {
+                float d0 = at, d1 = at + pat[k];
+                if (k % 2 == 0 && d1 > cut[0] && pat[k] > 0.f) {
+                    float a0 = fmaxf(d0, cut[0]), a1 = fminf(d1, cut[1]);
+                    gp_point *q;
+                    size_t mq = gp_curve_cut(p, arc, m, a0, a1, pc->scratch, &q);
+                    if (mq) stroke_run(pc, s, q, mq, a0, x, y, clip, hw, miter, false, head[0] && a0 <= cut[0] ? &cutn[0] : NULL,
+                                       head[1] && a1 >= cut[1] ? &cutn[1] : NULL, &sp);
+                }
+                at = d1;
+                k = (k + 1) % np;
+            }
+        } else {
+            gp_point *q = p;
+            size_t mq = m;
+            if (head[0] || head[1]) mq = gp_curve_cut(p, arc, m, cut[0], cut[1], pc->scratch, &q);
+            if (mq) stroke_run(pc, s, q, mq, cut[0], x, y, clip, hw, miter, s->closed, head[0] ? &cutn[0] : NULL, head[1] ? &cutn[1] : NULL, &sp);
+        }
+        for (int e = 0; e < 2; e++)
+            if (head[e]) {
+                const int8_t ed[3] = { 0, (int8_t)(e ? -2 : 2), 0 };   /* tip to corner, the base (shared with the stroke: at the start a pixel on the line is the head's, at the end the stroke's), corner to tip */
+                push_triangle(pc, tri[e], ed, hw, x, y, clip, sp.grad ? ramp_at(sp.grad, (float)e) : sp.color, opacity);
+            }
     }
-    for (size_t i = 1; i + 1 < m; i++) {
-        float mx = dir[i - 1].x + dir[i].x, my = dir[i - 1].y + dir[i].y, l = hypotf(mx, my);
-        if (l < 1e-4f) { plane[i] = dir[i - 1]; style[i] = 0; continue; }   /* a turn right back on itself: cut square */
-        plane[i] = (gp_point){ mx / l, my / l };
-        float cos_half = plane[i].x * dir[i].x + plane[i].y * dir[i].y;   /* of half the turn: the miter is 1 / cos_half times the half width */
-        style[i] = miter && cos_half > 1e-3f && 1.f / cos_half <= s->miter_limit ? 1 : 0;
-    }
-    for (size_t i = 0; i + 1 < m; i++) {
-        gp_point a = p[i], b = p[i + 1];
-        float minx = fminf(a.x, b.x) - pad, maxx = fmaxf(a.x, b.x) + pad, miny = fminf(a.y, b.y) - pad, maxy = fmaxf(a.y, b.y) + pad;
-        float cx = (minx + maxx) * 0.5f, cy = (miny + maxy) * 0.5f;
-        gp_instance inst = { 0 };
-        set4(inst.bounds, x + minx, y + miny, maxx - minx, maxy - miny);
-        set_clip(&inst, clip);
-        set_color(inst.color, color, opacity);
-        inst.kind = GP_PRIM_SEGMENT;
-        set4(inst.uv, a.x - cx, a.y - cy, b.x - cx, b.y - cy);   /* the ends, relative to the middle of the bounds (what the shader's local position is) */
-        float sa = i == 0 ? (butt ? 2.f : 0.f) : (float)style[i], sb = i + 2 == m ? (butt ? 2.f : 0.f) : (float)style[i + 1];
-        set4(inst.radii, hw, sa, sb, 0);
-        gp_point na = i == 0 ? (gp_point){ 0, 0 } : (gp_point){ -plane[i].x, -plane[i].y };
-        gp_point nb = i + 2 == m ? (gp_point){ 0, 0 } : plane[i + 1];
-        set4(inst.side[0], na.x, na.y, nb.x, nb.y);
-        push(pc, &inst);
-    }
+    if (s->path_text && n->ts.color.a > 0.f) paint_path_text(pc, n, p, arc, m, x, y, clip, opacity);
 }
 
 static void paint_text(paint_ctx *pc, gp_el *n, float x, float y, rect clip, float opacity) {
@@ -474,7 +654,7 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
         if (hovered && pc->pressed && s->has_active_bg) c = s->active_bg;
         else if (hovered && s->has_hover_bg) c = s->hover_bg;
         if (focused && s->has_focus_bg && !(hovered && s->has_hover_bg)) c = s->focus_bg;
-        paint_curve(pc, n, x, y, clip, opacity, c);
+        paint_curve(pc, n, x, y, clip, opacity, c, (hovered && pc->pressed && s->has_active_bg) || (hovered && s->has_hover_bg) || (focused && s->has_focus_bg));
         return;
     }
     float r4[4];

@@ -65,6 +65,7 @@ enum {
     M_IMG_BRIGHTNESS, M_IMG_CONTRAST, M_IMG_SATURATE, M_IMG_GRAYSCALE, M_IMG_BLUR, M_IMG_TINT, M_MARGIN_AUTO, M_WRAP, M_ALIGN_CONTENT,
     M_HOVER_STYLE, M_ACTIVE_STYLE, M_FOCUS_STYLE, M_ROTATE, M_SCALE, M_TRANSLATE, M_XF_ORIGIN,
     M_STROKE_W, M_STROKE_COLOR, M_STROKE_CAP, M_STROKE_JOIN, M_MITER_LIMIT, M_HIT_TOL,
+    M_DASH, M_DASH_OFF, M_STROKE_GRADIENT, M_ARROW, M_FILL, M_CLOSED, M_PATH_TEXT, M_PATH_TEXT_DY,
 };
 
 enum { SIDE_L = 1, SIDE_T = 2, SIDE_R = 4, SIDE_B = 8, SIDE_ALL = 15 };
@@ -471,6 +472,32 @@ gp_node *gp_stroke_join_round(void) { return mod_f(M_STROKE_JOIN, 0); }
 gp_node *gp_stroke_join_miter(void) { return mod_f(M_STROKE_JOIN, 1); }
 gp_node *gp_miter_limit(float ratio) { return mod_f(M_MITER_LIMIT, ratio); }
 gp_node *gp_hit_tolerance(float px) { return mod_f(M_HIT_TOL, px); }
+gp_node *gp_stroke_dash(const float *pattern, int n) {
+    gp_mod *m = mod_new(M_DASH);
+    int k = pattern && n > 0 ? (n > 8 ? 8 : n) : 0;
+    float *copy = gp_arena_alloc(g_bc->arena, (k ? (size_t)k : 1) * sizeof *copy, 4);
+    float sum = 0.f;
+    for (int i = 0; i < k; i++) { copy[i] = isfinite(pattern[i]) && pattern[i] > 0.f ? pattern[i] : 0.f; sum += copy[i]; }
+    m->data = copy;
+    m->f[0] = sum > 0.f ? (float)k : 0.f;   /* a pattern of nothing is a solid stroke, as in SVG */
+    return &m->base;
+}
+gp_node *gp_stroke_dash_offset(float px) { return mod_f(M_DASH_OFF, isfinite(px) ? px : 0.f); }
+gp_node *gp_stroke_gradient_stops(const gp_color_stop *stops, int n) {
+    gp_gradient g = { 0 };
+    gp_gradient_normalize(&g, stops, n);
+    return gradient_mod_kind(M_STROKE_GRADIENT, g);
+}
+gp_node *gp_arrow_start(float length) { return mod_f2(M_ARROW, 0, length); }
+gp_node *gp_arrow_end(float length) { return mod_f2(M_ARROW, 1, length); }
+gp_node *gp_fill_color(gp_color c) { return mod_c(M_FILL, c); }
+gp_node *gp_closed(void) { return mod_f(M_CLOSED, 1); }
+gp_node *gp_path_text(const char *text) {
+    gp_mod *m = mod_new(M_PATH_TEXT);
+    m->name = text ? gp_arena_strdup(g_bc->arena, text) : NULL;
+    return &m->base;
+}
+gp_node *gp_path_text_dy(float px) { return mod_f(M_PATH_TEXT_DY, isfinite(px) ? px : 0.f); }
 gp_node *gp_rotate(float degrees) { return mod_f2(M_ROTATE, degrees, 0); }
 gp_node *gp_scale(float s) { return mod_f2(M_SCALE, s, s); }
 gp_node *gp_scale_xy(float sx, float sy) { return mod_f2(M_SCALE, sx, sy); }
@@ -663,6 +690,14 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_STROKE_JOIN: s->stroke_join = (uint8_t)m->f[0]; break;
     case M_MITER_LIMIT: s->miter_limit = m->f[0] >= 1.f ? m->f[0] : 1.f; break;
     case M_HIT_TOL: s->hit_tol = m->f[0] > 0.f ? m->f[0] : 0.f; break;
+    case M_DASH: s->dash = m->data; s->dash_n = (uint8_t)m->f[0]; break;
+    case M_DASH_OFF: s->dash_off = m->f[0]; break;
+    case M_STROKE_GRADIENT: s->stroke_gradient = m->data; break;
+    case M_ARROW: s->arrow[m->f[0] > 0.5f] = isfinite(m->f[1]) && m->f[1] > 0.f ? m->f[1] : 0.f; break;
+    case M_FILL: s->fill_color = m->c; s->has_fill = true; break;
+    case M_CLOSED: s->closed = true; break;
+    case M_PATH_TEXT: s->path_text = m->name; break;
+    case M_PATH_TEXT_DY: s->path_text_dy = m->f[0]; break;
     case M_ROTATE: s->xf_rot = m->f[0]; s->has_xf = true; break;
     case M_SCALE: s->xf_sx = m->f[0]; s->xf_sy = m->f[1]; s->has_xf = true; break;
     case M_TRANSLATE: s->xf_tx = m->f[0]; s->xf_ty = m->f[1]; s->has_xf = true; break;
@@ -794,6 +829,8 @@ static gp_node *make_curve(int kind, const gp_point *pts, size_t n, va_list ap) 
     if (!good) x0 = y0 = x1 = y1 = 0;
     float hw = s->stroke_w * 0.5f;
     float pad = hw * (s->stroke_join == 1 && kind == 1 ? fmaxf(1.f, s->miter_limit) : 1.f) + s->hit_tol;
+    pad = fmaxf(pad, fmaxf(s->arrow[0], s->arrow[1]) * 0.5f + s->hit_tol);   /* an arrowhead is as wide as it is long */
+    if (s->path_text) pad = fmaxf(pad, (s->font_size > 0.f ? s->font_size : 16.f) * 1.5f + fabsf(s->path_text_dy));   /* text along it stands up to about a line from the centerline */
     el->curve_n = (uint32_t)good;
     el->curve_pts = gp_arena_alloc(g_bc->arena, (good ? good : 1) * sizeof *el->curve_pts, 4);
     for (size_t i = 0; i < good; i++) el->curve_pts[i] = (gp_point){ pts[i].x - (x0 - pad), pts[i].y - (y0 - pad) };

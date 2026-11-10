@@ -620,6 +620,11 @@ public:
     // ---- the border painted with a gradient (the colors as a braced list, as for the background's)
     Element& border_gradient(float angle_deg, std::initializer_list<gp_color_stop> s) & { return add(gp_border_linear_gradient(angle_deg, s.begin(), (int)s.size())); }
     Element&& border_gradient(float angle_deg, std::initializer_list<gp_color_stop> s) && { return std::move(border_gradient(angle_deg, s)); }
+    // a stroke's color along its length, `.stroke_gradient({stop(red(), 0), stop(blue(), 1)})`, and its dashes, `.stroke_dashes({8, 4})`
+    Element& stroke_gradient(std::initializer_list<gp_color_stop> s) & { return add(gp_stroke_gradient_stops(s.begin(), (int)s.size())); }
+    Element&& stroke_gradient(std::initializer_list<gp_color_stop> s) && { return std::move(stroke_gradient(s)); }
+    Element& stroke_dashes(std::initializer_list<float> d) & { return add(gp_stroke_dash(d.begin(), (int)d.size())); }
+    Element&& stroke_dashes(std::initializer_list<float> d) && { return std::move(stroke_dashes(d)); }
     Element& border_radial(float cx, float cy, std::initializer_list<gp_color_stop> s) & { return add(gp_border_radial_gradient(cx, cy, s.begin(), (int)s.size())); }
     Element&& border_radial(float cx, float cy, std::initializer_list<gp_color_stop> s) && { return std::move(border_radial(cx, cy, s)); }
     Element& border_conic(float cx, float cy, float from_deg, std::initializer_list<gp_color_stop> s) & { return add(gp_border_conic_gradient(cx, cy, from_deg, s.begin(), (int)s.size())); }

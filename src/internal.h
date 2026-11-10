@@ -88,6 +88,15 @@ typedef struct gp_style {
     gp_color stroke_color;
     bool has_stroke_color;
     uint8_t stroke_cap, stroke_join;   /* 0 round, 1 butt / 0 round, 1 miter */
+    uint8_t dash_n;                     /* entries in dash (0: a solid stroke); an odd count is used twice, as SVG does */
+    bool closed, has_fill;              /* the last point joins the first / the inside is filled with fill_color */
+    const float *dash;                  /* on, off, on, ... lengths (arena of the element) */
+    float dash_off;                     /* where in the pattern the stroke starts */
+    const struct gp_gradient *stroke_gradient;   /* the stroke's color along its length, start to end (arena of the element), or NULL */
+    float arrow[2];                     /* the length of an arrowhead at the start / end; 0: none */
+    gp_color fill_color;
+    const char *path_text;              /* text set along the centerline (arena of the element), or NULL */
+    float path_text_dy;                 /* its baseline this far to the right of the direction of travel */
     bool has_xf;
     float xf_rot, xf_sx, xf_sy, xf_tx, xf_ty, xf_ox, xf_oy;   /* degrees; scale; px; fractions of the box (0.5: the middle) */
     const struct gp_style *hover_style, *active_style, *focus_style;   /* gp_hover_style...: what the state paints over this style (arena of the element) */
@@ -503,7 +512,7 @@ void gp_image_premultiply(uint8_t *rgba, size_t pixels);
 /* ---------------------------------------------------------------- scene / renderer */
 
 enum { GP_PRIM_QUAD = 0, GP_PRIM_SHADOW = 1, GP_PRIM_GLYPH = 2, GP_PRIM_COLOR_GLYPH = 3, GP_PRIM_LCD_GLYPH = 4,
-       GP_PRIM_LINEAR_GRADIENT = 5, GP_PRIM_RADIAL_GRADIENT = 6, GP_PRIM_IMAGE = 7, GP_PRIM_CONIC_GRADIENT = 8, GP_PRIM_SEGMENT = 9 };
+       GP_PRIM_LINEAR_GRADIENT = 5, GP_PRIM_RADIAL_GRADIENT = 6, GP_PRIM_IMAGE = 7, GP_PRIM_CONIC_GRADIENT = 8, GP_PRIM_SEGMENT = 9, GP_PRIM_TRIANGLE = 10 };
 
 typedef struct {
     float bounds[4];       /* x y w h, logical px */
@@ -532,7 +541,12 @@ typedef struct {
 typedef struct { float a, b, c, d, tx, ty; } gp_affine;
 size_t gp_curve_flatten(const gp_el *n, float tol, gp_arena *a, gp_point **out);   /* curve.c: the centerline as straight pieces (arena) */
 float gp_curve_distance(const gp_el *n, float x, float y);   /* to the centerline; x, y in the element's own coordinates */
-bool gp_curve_hit(const gp_el *n, float x, float y);          /* on the stroke: within half the width plus the hit tolerance */
+bool gp_curve_hit(const gp_el *n, float x, float y);          /* on the stroke: within half the width plus the hit tolerance; or in its fill or an arrowhead */
+float *gp_curve_arcs(const gp_point *p, size_t m, gp_arena *a);
+gp_point gp_curve_at(const gp_point *p, const float *arc, size_t m, float s, size_t *piece);
+size_t gp_curve_cut(const gp_point *p, const float *arc, size_t m, float s0, float s1, gp_arena *a, gp_point **out);
+bool gp_curve_arrow(const gp_el *n, const gp_point *p, const float *arc, size_t m, int e, gp_point tri[3], float *cut);
+size_t gp_curve_triangulate(const gp_point *p, size_t m, gp_arena *a, gp_point **out, int8_t **edge);
 gp_affine gp_style_affine(const struct gp_style *s, float x, float y, float w, float h);   /* what a transformed element does to what is in it (paint.c) */
 static inline gp_affine gp_aff_identity(void) { return (gp_affine){ 1, 0, 0, 1, 0, 0 }; }
 /* p after n: the map that does n first */

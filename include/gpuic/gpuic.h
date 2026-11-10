@@ -32,6 +32,7 @@ extern "C" {
 typedef struct { float x, y; } gp_point;
 typedef struct { float w, h; } gp_size;
 typedef struct { float r, g, b, a; } gp_color;
+typedef struct { gp_color color; float at; } gp_color_stop;   /* a gradient's stop: see gp_bg_gradient */
 
 /* A value of a struct type, written for both languages: C's compound literal `(T){ ... }` is not C++ (-Wpedantic says so), a braced `T{ ... }` is not C. */
 #ifdef __cplusplus
@@ -706,6 +707,33 @@ gp_node *gp_miter_limit(float ratio);
  * The element has no children. Changing the points means building it again, which is the business of the view that builds it: put a cable in a cached view of its own
  * (gp_child_view_cached) and only that view is built and painted again when it moves. */
 gp_node *gp_hit_tolerance(float px);
+
+/* Dashes: `gp_stroke_dashes(8, 4)` is 8 px drawn, 4 px not, along the centerline (up to 8 lengths; an odd count is used twice, as in SVG; all zero is a solid stroke), each
+ * dash capped as the stroke is (round or flat), starting `gp_stroke_dash_offset` into the pattern. The gaps are still the stroke's for the pointer (a dashed cable is as easy to
+ * click as a solid one). */
+gp_node *gp_stroke_dash(const float *pattern, int n);
+#define gp_stroke_dashes(...) gp_stroke_dash((const float[]){ __VA_ARGS__ }, (int)(sizeof((const float[]){ __VA_ARGS__ }) / sizeof(float)))
+gp_node *gp_stroke_dash_offset(float px);
+/* The stroke's color along its length: `gp_stroke_gradient(gp_stop(red, 0), gp_stop(blue, 1))` goes from red at the first point to blue at the last, by distance along the line
+ * (the stops as gp_bg_gradient's, interpolated the same way). A hover, pressed or focus color replaces it, as it does a background gradient. */
+gp_node *gp_stroke_gradient_stops(const gp_color_stop *stops, int n);
+#define gp_stroke_gradient(...) \
+    gp_stroke_gradient_stops((gp_color_stop[]){ __VA_ARGS__ }, (int)(sizeof((gp_color_stop[]){ __VA_ARGS__ }) / sizeof(gp_color_stop)))
+/* Arrowheads: a filled triangle `length` long (and as wide, or as wide as the stroke if that is wider) with its tip on the first or last point, pointing along the line there;
+ * the stroke stops at its base, so the two meet without a seam and a translucent one is blended once. In the stroke's color (with a gradient, the color at that end). Part of the
+ * stroke for the pointer. Not on a closed outline. */
+gp_node *gp_arrow_start(float length);
+gp_node *gp_arrow_end(float length);
+/* A shape: gp_closed() joins the last point back to the first (the stroke goes round, with a join there, and has no ends), and gp_fill_color(c) fills the inside, under the
+ * stroke, whether or not the stroke is closed (gp_stroke_width(0) for a fill alone). The fill is for an outline that does not cross itself (concave is fine; one that crosses
+ * itself or has holes is filled, but not as even-odd or non-zero would). Inside the fill is the shape's for the pointer. A Bezier is closed by a straight line. */
+gp_node *gp_fill_color(gp_color c);
+gp_node *gp_closed(void);
+/* Text along the centerline, in the element's text style (gp_text_size, gp_text_color, the font), each glyph turned to the line where it stands, its baseline on the line
+ * (moved `gp_path_text_dy` px to the right of the direction of travel: negative is above a line drawn left to right). gp_text_center / gp_text_right place it along the length
+ * (from the start by default). Glyphs that do not fit are left out. Left to right only; not hit tested (the stroke is). The string is copied. */
+gp_node *gp_path_text(const char *text);
+gp_node *gp_path_text_dy(float px);
 gp_node *gp_svg_img_(gp_svg svg, ...);
 #define gp_div(...)        gp_div_(0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 #define gp_text(str, ...)  gp_text_((str) __VA_OPT__(,) __VA_ARGS__, GP_END)
@@ -939,7 +967,6 @@ gp_node *gp_bg(gp_color c);
  *
  *   gp_bg_gradient(90, gp_stop(gp_rgb(0xff0000), 0), gp_stop(gp_rgb(0x0000ff), 1))   left to right
  *   gp_bg_radial(0.5, 0.5, gp_stop(white, 0), gp_stop(black, 1))                      from the middle outwards */
-typedef struct { gp_color color; float at; } gp_color_stop;
 
 /* ---- images ----
  * An image is decoded once into a handle and drawn by any number of elements, in any number of windows. gp_img is a

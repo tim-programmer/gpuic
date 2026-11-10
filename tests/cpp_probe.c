@@ -165,7 +165,13 @@ const char *cpp_probe_el_same(gp_app *app, int ia, int ib, char *why, size_t cap
     sa.font_variations = sb.font_variations = NULL;
     sa.font_family = sb.font_family = NULL;
     sa.font_features = sb.font_features = NULL;
+    if ((sa.path_text == NULL) != (sb.path_text == NULL) || (sa.path_text && strcmp(sa.path_text, sb.path_text) != 0)) { snprintf(why, cap, "path text"); return why; }
+    if (sa.dash_n != sb.dash_n || (sa.dash_n && memcmp(sa.dash, sb.dash, sa.dash_n * sizeof *sa.dash) != 0)) { snprintf(why, cap, "dashes"); return why; }
+    if ((sa.stroke_gradient == NULL) != (sb.stroke_gradient == NULL) || (sa.stroke_gradient && memcmp(sa.stroke_gradient, sb.stroke_gradient, sizeof *sa.stroke_gradient) != 0)) { snprintf(why, cap, "stroke gradient"); return why; }
     sa.bg_gradient = sb.bg_gradient = NULL;
+    sa.path_text = sb.path_text = NULL;
+    sa.dash = sb.dash = NULL;
+    sa.stroke_gradient = sb.stroke_gradient = NULL;
     if (memcmp(&sa, &sb, sizeof sa) != 0) {
         const unsigned char *x = (const unsigned char *)&sa, *y = (const unsigned char *)&sb;
         size_t i = 0;

@@ -18,6 +18,20 @@
     Element&& miter_limit(float ratio) && { return std::move(add(gp_miter_limit(ratio))); }
     Element& hit_tolerance(float px) & { return add(gp_hit_tolerance(px)); }
     Element&& hit_tolerance(float px) && { return std::move(add(gp_hit_tolerance(px))); }
+    Element& stroke_dash_offset(float px) & { return add(gp_stroke_dash_offset(px)); }
+    Element&& stroke_dash_offset(float px) && { return std::move(add(gp_stroke_dash_offset(px))); }
+    Element& arrow_start(float length) & { return add(gp_arrow_start(length)); }
+    Element&& arrow_start(float length) && { return std::move(add(gp_arrow_start(length))); }
+    Element& arrow_end(float length) & { return add(gp_arrow_end(length)); }
+    Element&& arrow_end(float length) && { return std::move(add(gp_arrow_end(length))); }
+    Element& fill_color(gp_color c) & { return add(gp_fill_color(c)); }
+    Element&& fill_color(gp_color c) && { return std::move(add(gp_fill_color(c))); }
+    Element& closed() & { return add(gp_closed()); }
+    Element&& closed() && { return std::move(add(gp_closed())); }
+    Element& path_text(Str text) & { return add(gp_path_text(text.c_str())); }
+    Element&& path_text(Str text) && { return std::move(add(gp_path_text(text.c_str()))); }
+    Element& path_text_dy(float px) & { return add(gp_path_text_dy(px)); }
+    Element&& path_text_dy(float px) && { return std::move(add(gp_path_text_dy(px))); }
     Element& object_fit(int fit) & { return add(gp_object_fit(fit)); }
     Element&& object_fit(int fit) && { return std::move(add(gp_object_fit(fit))); }
     Element& image_pixelated() & { return add(gp_image_pixelated()); }

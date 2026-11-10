@@ -21,7 +21,7 @@ HAND = {
     "with_animation", "children", "mods", "child_view", "child_view_cached", "div_", "text_", "img_", "svg_img_", "group_",
     "uniform_list_", "list_",
     "bg_linear_gradient", "bg_radial_gradient", "bg_repeating_gradient", "bg_repeating_radial_gradient", "bg_conic_gradient",
-    "border_linear_gradient", "border_radial_gradient", "border_conic_gradient",
+    "border_linear_gradient", "border_radial_gradient", "border_conic_gradient", "stroke_gradient_stops", "stroke_dash",
     "on_action", "on_action_data", "on_key_up", "on_key_up_data", "on_key_down", "on_key_down_data", "on_text_input",
     "on_text_input_data", "on_click", "on_click_data", "on_mouse_down", "on_mouse_down_data", "on_drag", "on_mouse_up",
     "on_layout", "on_ime", "on_scroll", "on_wheel", "on_wheel_data", "list_sticky", "hover_style", "active_style", "focus_style",
