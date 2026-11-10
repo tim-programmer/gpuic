@@ -1237,7 +1237,7 @@ a typed character at the end reaches the screen in ~25 ms, and selecting all, de
   (Arabic number signs), and an Indic consonant joined to the next by a virama (Devanagari, Bengali, Gujarati, Oriya, Telugu, Malayalam: `क्ष` is
   one character; Tamil, Kannada and Gurmukhi have no such rule and are not joined). Arrow keys, Backspace, Delete, double-click word
   bounds, and the mouse's caret stops all use the same state machine (`gp_gstate_joins` in `text.c`), going back from a codepoint that
-  certainly starts a cluster. `tests/grapheme_test.c` compares it with the `regex` module's own segmentation (`\X`) of 933 strings, hand-picked
+  certainly starts a cluster. `tests/grapheme_test.c` compares it with a separate rule-by-rule reading of UAX #29 in the generator (character properties from the Python `regex` module; its own `\X` once dropped the conjunct rule, so it is not the reference) over 933 strings, hand-picked
   and random over an alphabet of everything the rules look at, as the state machine alone and in the widget three ways (forwards, backwards,
   the caret stops of a laid-out row); `tools/gen_grapheme.py` makes the Unicode tables (`src/grapheme_data.h`) and the strings. The shaping of
   such text into the right glyphs is HarfBuzz's, and needs a font with the script.

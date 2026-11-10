@@ -159,7 +159,7 @@ if(GPUIC_BUILD_TESTS)
       add_test(NAME cpp_chain_fresh COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_cpp_chain.py --check)
     endif()
   endif()
-  # the grapheme tables and test strings come from the Python `regex` module: check them when it is there
+  # the grapheme tables and test strings use the Python `regex` module's Unicode properties: check them when it is there
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_FOUND)
     execute_process(COMMAND ${Python3_EXECUTABLE} -c "import regex" RESULT_VARIABLE _regex_missing OUTPUT_QUIET ERROR_QUIET)

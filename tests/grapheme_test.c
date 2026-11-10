@@ -1,7 +1,7 @@
 /*
  * Grapheme clusters: where a character ends, for the caret, backspace and the mouse. The rules (UAX #29, with Hangul jamo and the Indic
- * conjunct rule GB9c) are implemented in src/text.c as a state machine; the expected boundaries here come from the `regex` module's
- * own segmentation (\X) of 960 strings: hand-picked ones (a conjunct, a decomposed Hangul syllable, flags, family emoji, a prepended
+ * conjunct rule GB9c) are implemented in src/text.c as a state machine; the expected boundaries here come from a separate,
+ * rule-by-rule reading of UAX #29 in tools/gen_grapheme.py (Unicode properties from the `regex` module), applied to 933 strings: hand-picked ones (a conjunct, a decomposed Hangul syllable, flags, family emoji, a prepended
  * sign, Tamil and Kannada, which have no conjuncts) and random strings over an alphabet of everything the rules look at. Each is checked
  * as the state machine alone, then in the widget three ways (forwards, backwards, and the caret stops of a laid-out row), which must
  * all give the same boundaries, or the mouse could put the caret where the keyboard never can. tools/gen_grapheme.py makes the data.
