@@ -101,6 +101,10 @@ typedef struct gp_style {
     float xf_rot, xf_sx, xf_sy, xf_tx, xf_ty, xf_ox, xf_oy;   /* degrees; scale; px; fractions of the box (0.5: the middle) */
     float xf_kx, xf_ky;    /* skew: degrees along x and along y (CSS skew(ax, ay)) */
     const struct gp_style *hover_style, *active_style, *focus_style;   /* gp_hover_style...: what the state paints over this style (arena of the element) */
+    /* What modifiers set the layout properties (GP_LSET_*) and which sides of the padding, margin and inset; read only on the style of a state
+     * (gp_hover_style...), where it says which properties the state lays out (the others keep the element's own) */
+    uint32_t lset;
+    uint8_t lpad, lmargin, linset;
     gp_color bg, border_color, text_color, hover_bg, active_bg, focus_bg, focus_border;
     gp_color scrollbar_color;
     struct { float dx, dy, blur; gp_color color; } shadow;
@@ -118,6 +122,19 @@ typedef struct {
     int features;          /* gp_text_features id; 0 = none */
     int variations;        /* gp_text_variations id; 0 = none */
 } gp_text_style;
+
+/* The layout properties a state style can set (gp_style.lset) */
+enum {
+    GP_LSET_DIR = 1u << 0, GP_LSET_GROW = 1u << 1, GP_LSET_SHRINK = 1u << 2, GP_LSET_BASIS = 1u << 3, GP_LSET_W = 1u << 4, GP_LSET_H = 1u << 5,
+    GP_LSET_MIN_W = 1u << 6, GP_LSET_MIN_H = 1u << 7, GP_LSET_MAX_W = 1u << 8, GP_LSET_MAX_H = 1u << 9, GP_LSET_GAP = 1u << 10,
+    GP_LSET_ALIGN_ITEMS = 1u << 11, GP_LSET_ALIGN_SELF = 1u << 12, GP_LSET_JUSTIFY = 1u << 13, GP_LSET_WRAP = 1u << 14, GP_LSET_ALIGN_CONTENT = 1u << 15,
+    GP_LSET_PAD = 1u << 16, GP_LSET_MARGIN = 1u << 17, GP_LSET_INSET = 1u << 18, GP_LSET_BORDER = 1u << 19, GP_LSET_BORDER_SIDE = 1u << 20,
+    GP_LSET_FONT_SIZE = 1u << 21, GP_LSET_FONT_WEIGHT = 1u << 22, GP_LSET_FONT_FAMILY = 1u << 23, GP_LSET_FONT_STYLE = 1u << 24,
+    GP_LSET_FONT_FEATURES = 1u << 25, GP_LSET_FONT_VARIATIONS = 1u << 26, GP_LSET_TEXT_ALIGN = 1u << 27, GP_LSET_TEXT_DIR = 1u << 28,
+    GP_LSET_WHITESPACE = 1u << 29,
+};
+/* The states (gp_el.lstates, gp_lstate.bits) */
+enum { GP_LSTATE_HOVER = 1, GP_LSTATE_ACTIVE = 2, GP_LSTATE_FOCUS = 4 };
 
 enum { GP_TAG_END = 1, GP_TAG_ELEMENT, GP_TAG_MOD };
 enum { GP_EL_DIV = 1, GP_EL_TEXT, GP_EL_LIST, GP_EL_IMAGE, GP_EL_SVG, GP_EL_CURVE };
@@ -163,6 +180,7 @@ enum {
     GP_SUB_AUTOHIDE = 16,   /* scrollbars that fade: painting depends on the window's scroll_vis_gen */
     GP_SUB_CLIP = 32,   /* overflow hidden: the instances below are clipped to a box that moves with the subtree */
     GP_SUB_XF = 64,     /* a transform: the instances below carry its matrix */
+    GP_SUB_LSTATE = 128,   /* a state style that lays out (sizes, padding, fonts...): layout depends on the mouse and the focus */
     GP_SUB_DYN_LAYOUT = GP_SUB_LIST | GP_SUB_SCROLL
 };
 
@@ -208,6 +226,10 @@ struct gp_el {
     gp_point scroll;       /* current offset */
     gp_point scroll_max;
     uint64_t path;         /* hash of the position in the tree (set at layout) */
+    /* State styles that lay out: which states have such a style (GP_LSTATE_*, set by prepare), which are applied to `style` now, and the
+     * style as it is without them (allocated at build when the element has such a style, with the element) */
+    uint8_t lstates, lstate_on;
+    struct gp_style *lsave;
 
     /* uniform list: rows are built at layout time, see layout.c */
     gp_list_item_fn list_fn;
@@ -677,6 +699,13 @@ void gp_scroll_drag_to(gp_window *w, gp_point p);
 void gp_layout_root(gp_el *root, gp_text_system *ts, gp_size viewport, gp_scroll_table *scrolls, gp_vviews *views, gp_anim_table *anims);
 /* A list's offset changed without a rebuild: realize the rows now in view. */
 void gp_layout_list_scrolled(gp_el *list, gp_text_system *ts, gp_scroll_table *scrolls, gp_anim_table *anims);
+/* State styles that lay out: an element's path and the states (GP_LSTATE_*) it is in, sorted by path. Painting finds which elements
+ * with such a style are hovered, pressed or focused (it is what shows them so), and layout lays them out in the states of the last paint. */
+typedef struct { uint64_t path; uint8_t bits; } gp_lstate;
+typedef struct { gp_lstate *items; size_t len, cap; } gp_lstate_set;
+void gp_layout_use_states(const gp_lstate_set *states);    /* what the next layouts read (NULL: no element is in a state) */
+void gp_paint_collect_states(gp_lstate_set *out);           /* where the next paints put what they find (NULL: nowhere) */
+void gp_style_overlay_layout(gp_style *dst, const gp_style *state);   /* the layout properties `state` sets, over `dst` */
 /* Builds rows [first, first+n) of `list` into `arena` (element.c). */
 gp_el **gp_list_build(gp_el *list, size_t first, size_t n, gp_arena *arena);
 bool gp_list_group_build(gp_el *list, size_t row, gp_arena *arena, gp_list_group *out, gp_el **header);   /* gp_list_sticky's function for a row */
@@ -897,6 +926,9 @@ struct gp_window {
     bool dirty_render, dirty_paint;
     int64_t last_frame_ns; /* when frame requests tied to this window last ran */
     uint32_t scroll_vis_gen;   /* bumped when an auto-hiding scrollbar's visibility changed: painted copies of views with one are stale */
+    gp_lstate_set lstates, lstates_seen;   /* the states layout reads; what the last paint found */
+    uint64_t lstate_situation;   /* the pointer, button, focus and scroll offsets when lstate_budget was last set */
+    int lstate_budget;           /* how many more times layout may follow a change of states in this situation (a style that moves its element off the pointer would flicker) */
     uint64_t smooth_keys[8];   /* scrollers with a smooth scroll under way, and when the last step was taken */
     int nsmooth;
     int64_t smooth_last_ns;

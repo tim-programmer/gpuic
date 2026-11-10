@@ -1,7 +1,7 @@
 /*
  * State styles (gp_hover_style, gp_active_style, gp_focus_style) from frames read back from the renderer: what the state sets (background, a
  * gradient, border color, opacity, shadow, rounded corners) is painted only while the state holds and is gone after; hover then pressed then
- * focus stack; gp_hover_bg still wins; what would resize or move the element is ignored (the layout does not change); an element inside a cached
+ * focus stack; gp_hover_bg still wins; what resizes the element lays it out again (more in lstate_test); an element inside a cached
  * view and a child of a hovered parent behave; the state is looked up per frame, so moving the pointer is enough. Needs a display, at scale 1.
  */
 #include "../src/internal.h"
@@ -56,7 +56,7 @@ static gp_node *render(void *self, gp_ctx *cx) {
         /* 6: focus */ BOX(gp_track_focus(g_focus), gp_focus_style(gp_group(gp_bg(BLUE)))),
         /* 7: hover, then pressed on top of it */ BOX(gp_hover_style(gp_group(gp_bg(RED), gp_opacity(0.5f))), gp_active_style(gp_group(gp_bg(BLUE)))),
         /* 8: gp_hover_bg wins */ BOX(gp_hover_bg(GREEN), gp_hover_style(gp_group(gp_bg(RED)))),
-        /* 9: layout properties are ignored */ BOX(gp_hover_style(gp_group(gp_w(200), gp_h(120), gp_p(30), gp_bg(RED)))),
+        /* 9: layout properties lay out */ BOX(gp_hover_style(gp_group(gp_w(200), gp_h(120), gp_p(30), gp_bg(RED)))),
         /* 10: inside a cached view */ gp_child_view_cached(g_cached),
         /* 11: a gradient */ BOX(gp_hover_style(gp_group(gp_bg_linear_gradient(90, stops, 2)))),
         /* 12: a parent's state does not reach its children */ BOX(gp_hover_style(gp_group(gp_bg(RED))), gp_div(gp_w(20), gp_h(20), gp_bg(GREEN))),
@@ -191,12 +191,14 @@ static void run(void) {
     p = sample(8, cx, cy, 0, 0);
     CHECK(p && is_color(p, GREEN, 2), "8: gp_hover_bg over the state style: %d %d %d", p ? p[0] : -1, p ? p[1] : -1, p ? p[2] : -1);
 
-    /* 9: the size does not change, the background does */
+    /* 9: the size and the background change */
     at(9, &cx, &cy);
     float w0 = box(9)->size.w, h0 = box(9)->size.h;
     p = sample(9, cx, cy, 0, 0);
-    CHECK(p && is_color(p, RED, 2) && box(9)->size.w == w0 && box(9)->size.h == h0 && w0 == 80 && h0 == 50,
-          "9: hovered, the background changes and the box stays %g x %g (was %g x %g)", box(9)->size.w, box(9)->size.h, w0, h0);
+    CHECK(p && is_color(p, RED, 2) && box(9)->size.w == 200 && box(9)->size.h == 120 && w0 == 80 && h0 == 50,
+          "9: hovered, the background changes and the box grows to %g x %g (was %g x %g)", box(9)->size.w, box(9)->size.h, w0, h0);
+    p = sample(9, AWAY, 0, 0);
+    CHECK(box(9)->size.w == 80 && box(9)->size.h == 50, "9: back to %g x %g", box(9)->size.w, box(9)->size.h);
 
     /* 10: in a cached view */
     at(10, &cx, &cy);

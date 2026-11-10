@@ -104,6 +104,7 @@ static void eval_element(walk *w, gp_el *n) {
         head->base_valid = true;
     } else {
         n->style = head->base;
+        n->lstate_on = 0;   /* (a state style it was laid out in is gone with the rest: layout puts it back over what the animation sets) */
     }
     gp_arena_reset(&t->arena);
     for (gp_anim *a = n->anim; a; a = a->next) {

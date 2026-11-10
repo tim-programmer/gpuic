@@ -1140,11 +1140,20 @@ gp_node *gp_tab_index(int index);
 gp_node *gp_focus_bg(gp_color c);
 gp_node *gp_focus_border_color(gp_color c);
 /* A style for a state, over the element's own: `gp_hover_style(gp_group(gp_bg(c), gp_opacity(.8f)))` while the pointer is over it (also
- * `gp_active_style` while it is pressed on top of that, `gp_focus_style` while it has focus). What can change is what only repaints: background
- * (color or gradient), border colors, border style and gradient, rounded corners, shadow, opacity, and text color (gp_text_color: the element's text and
- * everything in it that does not set a color of its own, as inheritance goes; a stroke whose color is the text color too); anything that would move or
- * resize the element (sizes, padding, border widths, font, text) is ignored there. The states stack (hover,
- * then pressed, then focus), and gp_hover_bg / gp_active_bg / gp_focus_bg / gp_focus_border_color still work and win over these. */
+ * `gp_active_style` while it is pressed on top of that, `gp_focus_style` while it has focus). What can change: background (color or gradient), border
+ * colors, border style and gradient, rounded corners, shadow, opacity, and text color (gp_text_color: the element's text and everything in it that does
+ * not set a color of its own, as inheritance goes; a stroke whose color is the text color too); and what lays out: sizes (gp_w, gp_h, the minimums and
+ * maximums, flex grow, shrink and basis), padding, margins, insets, border widths, gap, direction and alignment, wrapping, and the font (size, weight,
+ * family, style, features, variations, alignment, direction: inherited by the text inside, as the element's own would be). The element is laid out
+ * again in the state, and what is around it moves; a modifier that is neither (a handler, a scroller, a transform, the cursor) is ignored there.
+ * The states stack (hover, then pressed, then focus: a later one's value wins), and gp_hover_bg / gp_active_bg / gp_focus_bg / gp_focus_border_color
+ * still work and win over these.
+ *
+ * Which elements are hovered for layout is what the frame painted before showed: as in a browser, a style that grows the element keeps the pointer over
+ * it, and one that moves it away (shrinking it, pushing a child from under the pointer with padding) leaves it, so it is laid out out of the state again.
+ * The frame is drawn once the two agree; one that keeps going back and forth is laid out only a few times while the pointer, the button, the focus
+ * and the scroll offsets stay as they are, and shows the last of those until one of them changes. An element is known by its place in the tree, so
+ * one that moves to another place (a sibling before it comes or goes) starts out of its state for a frame. */
 /* Transforms, as in CSS: they move what is painted, not the layout (nothing around the element moves or resizes), and apply to the element and everything in it.
  * They are made about the middle of the element's box (gp_transform_origin(fx, fy) moves that point: fractions of the box, 0 0 its top left corner), in the order
  * skew, scale, rotate, translate; a later one of the same kind replaces an earlier one. Nested elements compose. An angle is in degrees, clockwise (the y axis goes down).

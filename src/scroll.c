@@ -149,7 +149,11 @@ static void store_offset(gp_window *w, gp_el *n) {
     st->y = (float)(n->scroll_base_y + n->scroll.y);
     st->smooth = false;              /* (gp_scroll_smooth_update sets it again if the glide goes on) */
     st->activity_ns = gp_now_ns();   /* an auto-hiding scrollbar shows for a while */
-    if (n->kind == GP_EL_LIST) gp_layout_list_scrolled(n, w->app->text, &w->scrolls, &w->anims);
+    if (n->kind == GP_EL_LIST) {
+        gp_layout_use_states(&w->lstates);
+        gp_layout_list_scrolled(n, w->app->text, &w->scrolls, &w->anims);
+        gp_layout_use_states(NULL);
+    }
     gp_scroll_notify(w, n);   /* (an element that draws only what is in view may need to draw something else now) */
 }
 

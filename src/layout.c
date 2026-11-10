@@ -68,7 +68,50 @@ static bool same_text_style(const gp_text_style *a, const gp_text_style *b) {
  * its key is a function of its path.) A list below has rows that come and go, and memoized sizes above
  * it that go stale as rows are measured, so such a root is walked, but a walk that finds the same place
  * leaves the verdict that its layout is still valid alone. */
-static uint8_t prepare(gp_el *n, gp_text_style parent, uint64_t path) {
+enum { PREP_STATE_CHANGED = 0x100 };   /* (prepare's result, above the GP_SUB_* flags: a state style was put on or taken off below) */
+
+static const gp_lstate_set *g_lstates;
+void gp_layout_use_states(const gp_lstate_set *states) { g_lstates = states; }
+
+static uint8_t lstate_lookup(uint64_t path) {
+    if (!g_lstates) return 0;
+    size_t lo = 0, hi = g_lstates->len;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        uint64_t p = g_lstates->items[mid].path;
+        if (p == path) return g_lstates->items[mid].bits;
+        if (p < path) lo = mid + 1; else hi = mid;
+    }
+    return 0;
+}
+
+/* State styles that lay out: which states have one, and of those which the last paint found the element in (by its path). The
+ * element's style is put back to what it is without states (lsave) and the ones it is in now put over it, hover, then pressed, then focus.
+ * Returns whether that changed anything. */
+static bool apply_lstates(gp_el *n, uint64_t path) {
+    uint8_t avail = 0;
+    if (n->lsave) {
+        const gp_style *s = &n->style;
+        if (s->hover_style && s->hover_style->lset) avail |= GP_LSTATE_HOVER;
+        if (s->active_style && s->active_style->lset) avail |= GP_LSTATE_ACTIVE;
+        if (s->focus_style && s->focus_style->lset) avail |= GP_LSTATE_FOCUS;
+    }
+    n->lstates = avail;
+    uint8_t want = avail ? lstate_lookup(path) & avail : 0;
+    if (want == n->lstate_on) return false;
+    if (n->lstate_on) n->style = *n->lsave;
+    if (want) {
+        *n->lsave = n->style;
+        if (want & GP_LSTATE_HOVER) gp_style_overlay_layout(&n->style, n->style.hover_style);
+        if (want & GP_LSTATE_ACTIVE) gp_style_overlay_layout(&n->style, n->style.active_style);
+        if (want & GP_LSTATE_FOCUS) gp_style_overlay_layout(&n->style, n->style.focus_style);
+    }
+    n->lstate_on = want;
+    return true;
+}
+
+static unsigned prepare(gp_el *n, gp_text_style parent, uint64_t path) {
+    bool state_changed = apply_lstates(n, path);
     gp_text_style ts = parent;
     if (n->style.font_size > 0) ts.size = n->style.font_size;
     if (n->style.font_weight) ts.weight = n->style.font_weight;
@@ -82,14 +125,15 @@ static uint8_t prepare(gp_el *n, gp_text_style parent, uint64_t path) {
 
     bool cached_root = n->cached_view.generation != 0;
     bool same_place = cached_root && g_frame_caches && n->prep_valid && n->path == path && same_text_style(&ts, &n->ts);
-    if (same_place && !(n->sub_flags & GP_SUB_LIST)) return n->sub_flags;
+    if (same_place && !state_changed && !(n->sub_flags & (GP_SUB_LIST | GP_SUB_LSTATE))) return n->sub_flags;
     bool was_laid_out = same_place && n->lk_valid;
 
     bool style_changed = ts.size != n->ts.size || ts.weight != n->ts.weight || ts.family != n->ts.family || ts.italic != n->ts.italic || ts.features != n->ts.features || ts.variations != n->ts.variations || ts.align != n->ts.align || ts.dir != n->ts.dir;
     n->ts = ts;
     n->scroll_key = n->scroll_id ? n->scroll_id : (path & ~GP_SCROLL_EXPLICIT) | 1;
     n->path = path;
-    uint8_t flags = 0;
+    unsigned flags = state_changed ? PREP_STATE_CHANGED : 0;
+    if (n->lstates) flags |= GP_SUB_LSTATE;
     if (n->kind == GP_EL_LIST) flags |= GP_SUB_LIST;
     if (n->style.overflow_x_scroll || n->style.overflow_y_scroll) flags |= GP_SUB_SCROLL;
     if (n->style.overflow_hidden) flags |= GP_SUB_CLIP;
@@ -99,10 +143,10 @@ static uint8_t prepare(gp_el *n, gp_text_style parent, uint64_t path) {
     if (n->style.autohide_scrollbar) flags |= GP_SUB_AUTOHIDE;
     for (uint32_t i = 0; i < n->nchildren; i++)
         flags |= prepare(n->children[i], ts, (path ^ (i + 1)) * 1099511628211ull);
-    if (style_changed || (flags & GP_SUB_LIST)) n->ncache = 0;
-    n->sub_flags = flags;
+    if (style_changed || (flags & (GP_SUB_LIST | PREP_STATE_CHANGED))) n->ncache = 0;   /* (a state put on or taken off below: the sizes measured differ) */
+    n->sub_flags = (uint8_t)flags;
     n->prep_valid = cached_root;
-    n->lk_valid = was_laid_out;   /* any other subtree was walked again: whatever it was laid out for may differ */
+    n->lk_valid = was_laid_out && !(flags & PREP_STATE_CHANGED);   /* any other subtree was walked again: whatever it was laid out for may differ */
     return flags;
 }
 

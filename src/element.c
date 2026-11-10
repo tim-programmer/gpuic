@@ -552,8 +552,91 @@ static void fold_borders(gp_style *s) {
     }
 }
 
+/* The layout properties a modifier sets (what a state style can change in layout: see gp_style_overlay_layout) */
+static uint32_t lset_of(const gp_mod *m) {
+    switch (m->kind) {
+    case M_DIR: return GP_LSET_DIR;
+    case M_GROW: return GP_LSET_GROW;
+    case M_SHRINK: return GP_LSET_SHRINK;
+    case M_FLEX1: return GP_LSET_GROW | GP_LSET_SHRINK | GP_LSET_BASIS;
+    case M_FLEX_NONE: return GP_LSET_GROW | GP_LSET_SHRINK;
+    case M_BASIS: return GP_LSET_BASIS;
+    case M_W: return GP_LSET_W | (m->mask ? GP_LSET_H : 0);
+    case M_H: return GP_LSET_H;
+    case M_MIN_W: return GP_LSET_MIN_W;
+    case M_MIN_H: return GP_LSET_MIN_H;
+    case M_MAX_W: return GP_LSET_MAX_W;
+    case M_MAX_H: return GP_LSET_MAX_H;
+    case M_GAP: return GP_LSET_GAP;
+    case M_PAD: return GP_LSET_PAD;
+    case M_MARGIN: case M_MARGIN_AUTO: return GP_LSET_MARGIN;
+    case M_INSET: return GP_LSET_INSET;
+    case M_ALIGN_ITEMS: return GP_LSET_ALIGN_ITEMS;
+    case M_ALIGN_SELF: return GP_LSET_ALIGN_SELF;
+    case M_JUSTIFY: return GP_LSET_JUSTIFY;
+    case M_WRAP: return GP_LSET_WRAP;
+    case M_ALIGN_CONTENT: return GP_LSET_ALIGN_CONTENT;
+    case M_BORDER_W: return GP_LSET_BORDER;
+    case M_BORDER_SIDE: return GP_LSET_BORDER_SIDE;
+    case M_TEXT_SIZE: return GP_LSET_FONT_SIZE;
+    case M_FONT_WEIGHT: return GP_LSET_FONT_WEIGHT;
+    case M_FONT_FAMILY: return GP_LSET_FONT_FAMILY;
+    case M_FONT_STYLE: return GP_LSET_FONT_STYLE;
+    case M_FONT_FEATURES: return GP_LSET_FONT_FEATURES;
+    case M_FONT_VARIATIONS: return GP_LSET_FONT_VARIATIONS;
+    case M_TEXT_ALIGN: return GP_LSET_TEXT_ALIGN;
+    case M_TEXT_DIR: return GP_LSET_TEXT_DIR;
+    case M_WHITESPACE_PRE: return GP_LSET_WHITESPACE;
+    default: return 0;
+    }
+}
+
+/* The layout properties a state style sets, put over `d` in the order a modifier list would set them: the sides it names of the padding,
+ * margin and inset, its border widths (all sides first, which clears the sides set before, then the sides it names), and the rest whole. */
+void gp_style_overlay_layout(gp_style *d, const gp_style *st) {
+    uint32_t b = st->lset;
+    if (!b) return;
+    if (b & GP_LSET_DIR) d->dir = st->dir;
+    if (b & GP_LSET_GROW) d->grow = st->grow;
+    if (b & GP_LSET_SHRINK) d->shrink = st->shrink;
+    if (b & GP_LSET_BASIS) d->basis = st->basis;
+    if (b & GP_LSET_W) d->w = st->w;
+    if (b & GP_LSET_H) d->h = st->h;
+    if (b & GP_LSET_MIN_W) d->min_w = st->min_w;
+    if (b & GP_LSET_MIN_H) d->min_h = st->min_h;
+    if (b & GP_LSET_MAX_W) d->max_w = st->max_w;
+    if (b & GP_LSET_MAX_H) d->max_h = st->max_h;
+    if (b & GP_LSET_GAP) d->gap = st->gap;
+    if (b & GP_LSET_ALIGN_ITEMS) d->align_items = st->align_items;
+    if (b & GP_LSET_ALIGN_SELF) d->align_self = st->align_self;
+    if (b & GP_LSET_JUSTIFY) d->justify = st->justify;
+    if (b & GP_LSET_WRAP) d->wrap = st->wrap;
+    if (b & GP_LSET_ALIGN_CONTENT) d->align_content = st->align_content;
+    for (int i = 0; i < 4; i++) {
+        uint8_t bit = (uint8_t)(1 << i);
+        if (st->lpad & bit) d->pad_user[i] = st->pad_user[i];
+        if (st->lmargin & bit) { d->margin[i] = st->margin[i]; d->margin_auto = (uint8_t)((d->margin_auto & ~bit) | (st->margin_auto & bit)); }
+        if (st->linset & bit) d->inset[i] = st->inset[i];
+    }
+    if (b & GP_LSET_BORDER) { d->border_uniform = st->border_uniform; d->border_set = 0; }
+    if (b & (GP_LSET_BORDER | GP_LSET_BORDER_SIDE))
+        for (int i = 0; i < 4; i++)
+            if (st->border_set >> i & 1) { d->border_side[i] = st->border_side[i]; d->border_set |= (uint8_t)(1 << i); }
+    if (b & (GP_LSET_PAD | GP_LSET_BORDER | GP_LSET_BORDER_SIDE)) fold_borders(d);
+    if (b & GP_LSET_FONT_SIZE) d->font_size = st->font_size;
+    if (b & GP_LSET_FONT_WEIGHT) d->font_weight = st->font_weight;
+    if (b & GP_LSET_FONT_FAMILY) d->font_family = st->font_family;
+    if (b & GP_LSET_FONT_STYLE) d->font_italic = st->font_italic;
+    if (b & GP_LSET_FONT_FEATURES) d->font_features = st->font_features;
+    if (b & GP_LSET_FONT_VARIATIONS) d->font_variations = st->font_variations;
+    if (b & GP_LSET_TEXT_ALIGN) { d->text_align = st->text_align; d->has_text_align = true; }
+    if (b & GP_LSET_TEXT_DIR) { d->text_dir = st->text_dir; d->has_text_dir = true; }
+    if (b & GP_LSET_WHITESPACE) d->whitespace_pre = st->whitespace_pre;
+}
+
 static void apply_mod(gp_el *el, const gp_mod *m) {
     gp_style *s = &el->style;
+    s->lset |= lset_of(m);
     switch (m->kind) {
     case M_ANIM: {
         if (g_in_animation) break;
@@ -586,18 +669,22 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_GAP: s->gap = m->f[0]; break;
     case M_PAD:
         for (int i = 0; i < 4; i++) if (m->mask & (1 << i)) s->pad_user[i] = m->f[0];
+        s->lpad |= m->mask & 15;
         fold_borders(s);
         break;
     case M_MARGIN:
         for (int i = 0; i < 4; i++) if (m->mask & (1 << i)) { s->margin[i] = m->f[0]; s->margin_auto &= (uint8_t)~(1 << i); }
+        s->lmargin |= m->mask & 15;
         break;
     case M_MARGIN_AUTO:
         for (int i = 0; i < 4; i++) if (m->mask & (1 << i)) { s->margin[i] = 0; s->margin_auto |= (uint8_t)(1 << i); }
+        s->lmargin |= m->mask & 15;
         break;
     case M_WRAP: s->wrap = true; break;
     case M_ALIGN_CONTENT: s->align_content = (uint8_t)m->f[0]; break;
     case M_INSET:
         for (int i = 0; i < 4; i++) if (m->mask & (1 << i)) s->inset[i] = PX(m->f[0]);
+        s->linset |= m->mask & 15;
         break;
     case M_ALIGN_ITEMS: s->align_items = (uint8_t)m->f[0]; break;
     case M_ALIGN_SELF: s->align_self = (uint8_t)m->f[0]; break;
@@ -705,10 +792,12 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_XF_ORIGIN: s->xf_ox = m->f[0]; s->xf_oy = m->f[1]; break;
     case M_SKEW: s->xf_kx = isfinite(m->f[0]) ? m->f[0] : 0.f; s->xf_ky = isfinite(m->f[1]) ? m->f[1] : 0.f; s->has_xf = true; break;
     case M_HOVER_STYLE: case M_ACTIVE_STYLE: case M_FOCUS_STYLE: {
-        /* the group is applied to an element of its own, whose style is what the state paints over this one's (the paint-only part of it) */
+        /* the group is applied to an element of its own, whose style is what the state paints over this one's, and what it lays out
+         * (layout keeps the element's style without the states in lsave) */
         gp_el *tmp = gp_el_new(g_bc->arena, GP_EL_DIV);
         gp_node *g = m->data;
         if (g && g->tag == GP_TAG_MOD) apply_mod(tmp, (const gp_mod *)g);
+        if (tmp->style.lset && !el->lsave && !g_in_animation) el->lsave = gp_arena_alloc(g_bc->arena, sizeof *el->lsave, 16);
         if (m->kind == M_HOVER_STYLE) s->hover_style = &tmp->style;
         else if (m->kind == M_ACTIVE_STYLE) s->active_style = &tmp->style;
         else s->focus_style = &tmp->style;

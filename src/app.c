@@ -177,6 +177,8 @@ static void window_destroy(gp_app *app, gp_window *w) {
         gp_vlist_free(w->scrolls.items[i].vl);
     }
     free(w->scrolls.items);
+    free(w->lstates.items);
+    free(w->lstates_seen.items);
     free(w);
 }
 
@@ -372,13 +374,7 @@ static void run_layout_handlers(gp_window *w, gp_el *n) {
     for (uint32_t i = 0; i < n->nchildren; i++) run_layout_handlers(w, n->children[i]);
 }
 
-static void window_draw(gp_app *app, gp_window *w) {
-    /* GPUIC_IME=text: show a composition once the scripted keys are done. Applied right before
-     * every draw, because the compositor answers each text-input-area update with its own (for a
-     * simulated IME: empty) preedit, which would otherwise erase it before the frame is drawn. */
-    if (app->ime_text && app->ime_shot_set)
-        gp_window_on_ime(w, app->ime_text, (int)strlen(app->ime_text));
-
+static void build_and_layout(gp_app *app, gp_window *w) {
     /* Build and lay out. gp_on_layout handlers run after each layout and may ask for another round
      * (a text field that learned its width re-wraps); iterate so that nothing is painted from a
      * tree that was about to be replaced. Capped: a handler that always asks would otherwise spin. */
@@ -395,7 +391,9 @@ static void window_draw(gp_app *app, gp_window *w) {
             w->views.all_dirty = false;
         }
         int64_t t1 = gp_now_ns();
+        gp_layout_use_states(&w->lstates);
         gp_layout_root(w->tree, app->text, w->size, &w->scrolls, &w->views, &w->anims);
+        gp_layout_use_states(NULL);
         if (rebuild) gp_views_sweep(w);
         app->stat_build_ns += t1 - t0;
         app->stat_layout_ns += gp_now_ns() - t1;
@@ -403,6 +401,71 @@ static void window_draw(gp_app *app, gp_window *w) {
         gp_input_after_render(w);
         update_cursor(w);
     }
+}
+
+static int lstate_cmp(const void *a, const void *b) {
+    uint64_t x = ((const gp_lstate *)a)->path, y = ((const gp_lstate *)b)->path;
+    return x < y ? -1 : x > y;
+}
+
+/* What the states of elements depend on, besides layout: where the pointer is, the button, the focus, and the scroll offsets. */
+static uint64_t lstate_situation(const gp_window *w) {
+    uint64_t h = 1469598103934665603ull;
+    float v[3] = { w->mouse.x, w->mouse.y, (float)w->mouse_in + 2.f * (float)w->pressed };
+    uint32_t bits[3];
+    memcpy(bits, v, sizeof bits);
+    for (int i = 0; i < 3; i++) h = (h ^ bits[i]) * 1099511628211ull;
+    h = (h ^ w->focused) * 1099511628211ull;
+    for (size_t i = 0; i < w->scrolls.len; i++) {
+        float o[2] = { w->scrolls.items[i].x, w->scrolls.items[i].y };
+        uint32_t ob[2];
+        memcpy(ob, o, sizeof ob);
+        h = (h ^ ob[0]) * 1099511628211ull;
+        h = (h ^ ob[1]) * 1099511628211ull;
+    }
+    return h;
+}
+
+/* Paints, and lays out again if what was painted is in other states than it was laid out in (a hover style that lays out: the element
+ * under the pointer grows), until the two agree. A style that moves its element away from the pointer would have it go back and forth
+ * for ever, so only so many layouts follow while the pointer, the button, the focus and the scroll offsets stay where they are; then
+ * what was last laid out stays (as in a browser, which looks again only when the pointer moves). */
+static void paint_window(gp_app *app, gp_window *w) {
+    for (;;) {
+        int64_t tp = gp_now_ns();
+        gp_paint_collect_states(&w->lstates_seen);
+        gp_paint_tree(&w->scene, &w->scratch, app->text, w->tree, w->scale, w->mouse, w->mouse_in,
+                      w->pressed, w->focused, w->drag_key, w->scroll_vis_gen, &w->views, app);
+        gp_paint_collect_states(NULL);
+        app->stat_paint_ns += gp_now_ns() - tp;
+        gp_lstate_set *seen = &w->lstates_seen, *used = &w->lstates;
+        if (seen->len > 1) qsort(seen->items, seen->len, sizeof *seen->items, lstate_cmp);
+        bool same = seen->len == used->len;
+        for (size_t i = 0; same && i < seen->len; i++) same = seen->items[i].path == used->items[i].path && seen->items[i].bits == used->items[i].bits;
+        if (same) return;
+        uint64_t sit = lstate_situation(w);
+        if (sit != w->lstate_situation || w->anims.running) {
+            w->lstate_situation = sit;
+            w->lstate_budget = 4;
+        }
+        if (w->lstate_budget <= 0) return;
+        w->lstate_budget--;
+        gp_lstate_set t = *used;
+        *used = *seen;
+        *seen = t;
+        w->dirty_layout = true;
+        build_and_layout(app, w);
+    }
+}
+
+static void window_draw(gp_app *app, gp_window *w) {
+    /* GPUIC_IME=text: show a composition once the scripted keys are done. Applied right before
+     * every draw, because the compositor answers each text-input-area update with its own (for a
+     * simulated IME: empty) preedit, which would otherwise erase it before the frame is drawn. */
+    if (app->ime_text && app->ime_shot_set)
+        gp_window_on_ime(w, app->ime_text, (int)strlen(app->ime_text));
+
+    build_and_layout(app, w);
     gp_scroll_track_repeat(w);
     gp_scroll_fling_update(w);
     gp_scroll_smooth_update(w);
@@ -415,10 +478,7 @@ static void window_draw(gp_app *app, gp_window *w) {
     if (w->anims.running && !w->anims.job_pending) gp_exec_window_frame(app, w, GP_WAKE_LAYOUT);
     w->dirty_paint = false;
     gp_scroll_autohide_update(w);   /* how visible the fading scrollbars are now, and when to look again */
-    int64_t tp = gp_now_ns();
-    gp_paint_tree(&w->scene, &w->scratch, app->text, w->tree, w->scale, w->mouse, w->mouse_in,
-                  w->pressed, w->focused, w->drag_key, w->scroll_vis_gen, &w->views, app);
-    app->stat_paint_ns += gp_now_ns() - tp;
+    paint_window(app, w);
 
     gp_platform_make_current(w);
     int64_t ts = gp_now_ns();

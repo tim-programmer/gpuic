@@ -640,6 +640,12 @@ static void overlay_style(gp_style *dst, const gp_style *src) {
         if (src->corner_set & (1 << i)) { dst->corner[i] = src->corner[i]; dst->corner_set |= (uint8_t)(1 << i); }
 }
 
+static gp_lstate_set *g_collect;
+void gp_paint_collect_states(gp_lstate_set *out) {
+    g_collect = out;
+    if (out) out->len = 0;
+}
+
 static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, float opacity) {
     const gp_style *s = &n->style;
     float x = ox + n->pos.x, y = oy + n->pos.y;
@@ -652,6 +658,18 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
         hovered = (cs->has_hover_bg || cs->has_active_bg || cs->hover_style || cs->active_style) && gp_curve_hit(n, pc->mouse_local.x - x, pc->mouse_local.y - y);
     }
     bool focused = n->focus_id && n->focus_id == pc->focused;
+    if (n->lstates && g_collect) {   /* a state style that lays out: what layout is to lay it out in */
+        uint8_t bits = (uint8_t)((hovered ? GP_LSTATE_HOVER : 0) | (hovered && pc->pressed ? GP_LSTATE_ACTIVE : 0) | (focused ? GP_LSTATE_FOCUS : 0)) & n->lstates;
+        if (bits) {
+            gp_lstate_set *o = g_collect;
+            if (o->len == o->cap) {
+                o->cap = o->cap ? o->cap * 2 : 16;
+                o->items = realloc(o->items, o->cap * sizeof *o->items);
+                if (!o->items) abort();
+            }
+            o->items[o->len++] = (gp_lstate){ n->path, bits };
+        }
+    }
     gp_style stated;
     if ((hovered && (s->hover_style || (pc->pressed && s->active_style))) || (focused && s->focus_style)) {
         stated = *s;
