@@ -86,20 +86,41 @@ bool gp_scroll_thumb(const gp_el *n, int axis, float ox, float oy, gp_thumb *t) 
 /* ---------------------------------------------------------------- wheel */
 
 /* chain[0..len) = root .. topmost element under p (ancestors need not contain p). */
+/* A transformed ancestor: `fwd` maps layout coordinates to the window (when `moved`); the element's box is tested with the point taken back through it, and the clip, which is in
+ * the window, with the point itself. A clip box through a transform that keeps the axes is the box it becomes; at any other angle it does not clip (as painting does). */
+static bool aff_box(gp_affine m, rect r, rect *out) {
+    bool straight = (fabsf(m.b) < 1e-5f && fabsf(m.c) < 1e-5f) || (fabsf(m.a) < 1e-5f && fabsf(m.d) < 1e-5f);
+    if (!straight) return false;
+    gp_point p0 = gp_aff_apply(m, (gp_point){ r.x0, r.y0 }), p1 = gp_aff_apply(m, (gp_point){ r.x1, r.y1 });
+    *out = (rect){ fminf(p0.x, p1.x), fminf(p0.y, p1.y), fmaxf(p0.x, p1.x), fmaxf(p0.y, p1.y) };
+    return true;
+}
+static gp_point enter(const gp_el *n, float x, float y, gp_point p, gp_affine *fwd, bool *moved) {
+    if (n->style.has_xf) {
+        *fwd = gp_aff_mul(*moved ? *fwd : gp_aff_identity(), gp_style_affine(&n->style, x, y, n->size.w, n->size.h));
+        *moved = true;
+    }
+    return *moved ? gp_aff_apply(gp_aff_inverse(*fwd), p) : p;
+}
+static rect clip_to(rect clip, rect b, gp_affine fwd, bool moved) {
+    rect box = b;
+    if (moved && !aff_box(fwd, b, &box)) return clip;
+    return (rect){ fmaxf(clip.x0, box.x0), fmaxf(clip.y0, box.y0), fminf(clip.x1, box.x1), fminf(clip.y1, box.y1) };
+}
+
 static bool chain_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_el **chain,
-                      int depth, int *len) {
+                      int depth, int *len, gp_affine fwd, bool moved) {
     if (depth >= MAX_DEPTH) return false;
     chain[depth] = n;
     float x = ox + n->pos.x, y = oy + n->pos.y;
     rect b = { x, y, x + n->size.w, y + n->size.h };
+    gp_point q = enter(n, x, y, p, &fwd, &moved);
     rect cc = clip;
-    if (n->style.overflow_hidden || is_scroller(n)) {
-        cc = (rect){ fmaxf(clip.x0, b.x0), fmaxf(clip.y0, b.y0), fminf(clip.x1, b.x1), fminf(clip.y1, b.y1) };
-    }
+    if (n->style.overflow_hidden || is_scroller(n)) cc = clip_to(clip, b, fwd, moved);
     for (uint32_t i = n->nchildren; i-- > 0;)
-        if (chain_rec(n->children[i], x - n->scroll.x, y - n->scroll.y, cc, p, chain, depth + 1, len))
+        if (chain_rec(n->children[i], x - n->scroll.x, y - n->scroll.y, cc, p, chain, depth + 1, len, fwd, moved))
             return true;
-    if (rect_has(clip, p) && rect_has(b, p)) {
+    if (rect_has(clip, p) && rect_has(b, q)) {
         *len = depth + 1;
         return true;
     }
@@ -211,7 +232,7 @@ static bool scroll_at(gp_window *w, gp_point p, float dx, float dy, bool direct)
     gp_el *chain[MAX_DEPTH];
     int len = 0;
     rect all = { -1e9f, -1e9f, 1e9f, 1e9f };
-    if (!chain_rec(w->tree, 0, 0, all, p, chain, 0, &len)) return false;
+    if (!chain_rec(w->tree, 0, 0, all, p, chain, 0, &len, gp_aff_identity(), false)) return false;
     if (!direct && w->app->smooth_scroll_s > 0) return wheel_smooth(w, chain, len, dx, dy);
     return scroll_direct(w, chain, len, dx, dy);
 }
@@ -415,43 +436,42 @@ bool gp_scroll_reveal(gp_window *w, uint64_t focus_id) {
 
 /* ---------------------------------------------------------------- thumb dragging */
 
-typedef struct { gp_el *n; int axis; float ox, oy; gp_thumb t; int page; } thumb_hit;   /* page: -1 / 1 for a press on the track before / after the thumb, 0 on the thumb */
+typedef struct { gp_el *n; int axis; float ox, oy; gp_thumb t; int page; gp_point q; } thumb_hit;   /* q: the point in the scroller's own coordinates */   /* page: -1 / 1 for a press on the track before / after the thumb, 0 on the thumb */
 
-static bool thumb_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, thumb_hit *out) {
+static bool thumb_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, thumb_hit *out, gp_affine fwd, bool moved) {
     float x = ox + n->pos.x, y = oy + n->pos.y;
     rect b = { x, y, x + n->size.w, y + n->size.h };
+    gp_point q = enter(n, x, y, p, &fwd, &moved);
     rect cc = clip;
-    if (n->style.overflow_hidden || is_scroller(n)) {
-        cc = (rect){ fmaxf(clip.x0, b.x0), fmaxf(clip.y0, b.y0), fminf(clip.x1, b.x1), fminf(clip.y1, b.y1) };
-    }
-    if (is_scroller(n) && rect_has(cc, p)) {
+    if (n->style.overflow_hidden || is_scroller(n)) cc = clip_to(clip, b, fwd, moved);
+    if (is_scroller(n) && rect_has(cc, p) && rect_has(b, q)) {
         /* a container's own thumbs paint after its children, so they are on top */
         for (int axis = 1; axis >= 0; axis--) {
             gp_thumb t;
             if (!gp_scroll_thumb(n, axis, x, y, &t)) continue;
             rect r = { t.x, t.y, t.x + t.w, t.y + t.h };
             if (axis == 1) r.x0 -= THUMB_GRAB_PAD; else r.y0 -= THUMB_GRAB_PAD;
-            if (rect_has(r, p)) {
-                *out = (thumb_hit){ n, axis, x, y, t, 0 };
+            if (rect_has(r, q)) {
+                *out = (thumb_hit){ n, axis, x, y, t, 0, q };
                 return true;
             }
             /* the rest of the track, over its whole length, on the same strip */
             rect tr = axis == 1 ? (rect){ r.x0, t.track_start, r.x1, t.track_start + t.track_len}
                                 : (rect){ t.track_start, r.y0, t.track_start + t.track_len, r.y1 };
-            if (rect_has(tr, p)) {
-                float mouse = axis == 1 ? p.y : p.x, start = axis == 1 ? t.y : t.x;
-                *out = (thumb_hit){ n, axis, x, y, t, mouse < start ? -1 : 1 };
+            if (rect_has(tr, q)) {
+                float mouse = axis == 1 ? q.y : q.x, start = axis == 1 ? t.y : t.x;
+                *out = (thumb_hit){ n, axis, x, y, t, mouse < start ? -1 : 1, q };
                 return true;
             }
         }
     }
     for (uint32_t i = n->nchildren; i-- > 0;)
-        if (thumb_rec(n->children[i], x - n->scroll.x, y - n->scroll.y, cc, p, out)) return true;
+        if (thumb_rec(n->children[i], x - n->scroll.x, y - n->scroll.y, cc, p, out, fwd, moved)) return true;
     return false;
 }
 
 static bool chain_to_key(gp_el *n, uint64_t key, gp_el **chain, int depth, int *len);
-static gp_el *find_by_key(gp_el *n, uint64_t key, float ox, float oy, float *fx, float *fy);
+static gp_el *find_by_key(gp_el *n, uint64_t key, float ox, float oy, float *fx, float *fy, gp_affine *inv);
 
 /* One page along `axis` toward `dir` (-1 / 1); false if the scroller is already at that end. */
 static bool page_scroller(gp_window *w, gp_el *n, int axis, int dir) {
@@ -486,11 +506,13 @@ void gp_scroll_track_repeat(gp_window *w) {
     if (!w->page_key) return;
     if (!w->tree || gp_now_ns() < w->page_due_ns) return;
     float ox, oy;
-    gp_el *n = find_by_key(w->tree, w->page_key, 0, 0, &ox, &oy);
+    gp_affine inv;
+    gp_el *n = find_by_key(w->tree, w->page_key, 0, 0, &ox, &oy, &inv);
     gp_thumb t;
     if (!n || !gp_scroll_thumb(n, w->page_axis, ox, oy, &t)) { gp_scroll_stop_repeat(w); return; }
     /* toward the pointer, until the thumb is under it */
-    float m = w->page_axis == 1 ? w->mouse.y : w->mouse.x, start = w->page_axis == 1 ? t.y : t.x, len = w->page_axis == 1 ? t.h : t.w;
+    gp_point mq = gp_aff_apply(inv, w->mouse);
+    float m = w->page_axis == 1 ? mq.y : mq.x, start = w->page_axis == 1 ? t.y : t.x, len = w->page_axis == 1 ? t.h : t.w;
     if (m >= start && m <= start + len) { gp_scroll_stop_repeat(w); return; }
     if (!page_scroller(w, n, w->page_axis, m < start ? -1 : 1)) { gp_scroll_stop_repeat(w); return; }
     repeat_in(w, TRACK_REPEAT_NS);
@@ -499,7 +521,7 @@ void gp_scroll_track_repeat(gp_window *w) {
 bool gp_scroll_begin_drag(gp_window *w, gp_point p) {
     thumb_hit hit;
     rect all = { -1e9f, -1e9f, 1e9f, 1e9f };
-    if (!w->tree || !thumb_rec(w->tree, 0, 0, all, p, &hit)) return false;
+    if (!w->tree || !thumb_rec(w->tree, 0, 0, all, p, &hit, gp_aff_identity(), false)) return false;
     if (hit.page) {   /* a press on the track pages toward it, by most of a view, and goes on while the button is held */
         if (page_scroller(w, hit.n, hit.axis, hit.page)) {
             w->page_key = hit.n->scroll_key;
@@ -511,21 +533,33 @@ bool gp_scroll_begin_drag(gp_window *w, gp_point p) {
     w->drag_key = hit.n->scroll_key;
     w->drag_axis = hit.axis;
     float start = hit.axis == 1 ? hit.t.y : hit.t.x;
-    float mouse = hit.axis == 1 ? p.y : p.x;
+    float mouse = hit.axis == 1 ? hit.q.y : hit.q.x;
     /* grabbing outside the thumb itself (the padded hit area) pins the grab to its edge */
     w->drag_grab = fminf(fmaxf(mouse - start, 0), hit.t.thumb_len);
     w->dirty_paint = true;
     return true;
 }
 
-static gp_el *find_by_key(gp_el *n, uint64_t key, float ox, float oy, float *fx, float *fy) {
+/* The scroller with this key, where its box is, and (`inv`) the map from the window to its coordinates: the inverse of the transforms above it, if any. */
+static gp_el *find_rec(gp_el *n, uint64_t key, float ox, float oy, float *fx, float *fy, gp_affine fwd, bool moved, gp_affine *inv) {
     float x = ox + n->pos.x, y = oy + n->pos.y;
-    if (is_scroller(n) && n->scroll_key == key) { *fx = x; *fy = y; return n; }
+    if (n->style.has_xf) {
+        fwd = gp_aff_mul(moved ? fwd : gp_aff_identity(), gp_style_affine(&n->style, x, y, n->size.w, n->size.h));
+        moved = true;
+    }
+    if (is_scroller(n) && n->scroll_key == key) {
+        *fx = x; *fy = y;
+        if (inv) *inv = moved ? gp_aff_inverse(fwd) : gp_aff_identity();
+        return n;
+    }
     for (uint32_t i = 0; i < n->nchildren; i++) {
-        gp_el *r = find_by_key(n->children[i], key, x - n->scroll.x, y - n->scroll.y, fx, fy);
+        gp_el *r = find_rec(n->children[i], key, x - n->scroll.x, y - n->scroll.y, fx, fy, fwd, moved, inv);
         if (r) return r;
     }
     return NULL;
+}
+static gp_el *find_by_key(gp_el *n, uint64_t key, float ox, float oy, float *fx, float *fy, gp_affine *inv) {
+    return find_rec(n, key, ox, oy, fx, fy, gp_aff_identity(), false, inv);
 }
 
 /* The elements from the root down to the scroller with this key (`chain[0..len)`), or false. */
@@ -540,10 +574,12 @@ static bool chain_to_key(gp_el *n, uint64_t key, gp_el **chain, int depth, int *
 
 void gp_scroll_drag_to(gp_window *w, gp_point p) {
     float ox, oy;
-    gp_el *n = w->tree ? find_by_key(w->tree, w->drag_key, 0, 0, &ox, &oy) : NULL;
+    gp_affine inv;
+    gp_el *n = w->tree ? find_by_key(w->tree, w->drag_key, 0, 0, &ox, &oy, &inv) : NULL;
     gp_thumb t;
     if (!n || !gp_scroll_thumb(n, w->drag_axis, ox, oy, &t)) return;
-    float mouse = w->drag_axis == 1 ? p.y : p.x;
+    gp_point q = gp_aff_apply(inv, p);   /* (along the track as the scroller sees it: under a turned ancestor the drag turns with it) */
+    float mouse = w->drag_axis == 1 ? q.y : q.x;
     float range = t.track_len - t.thumb_len;
     float frac = range > 0 ? fminf(fmaxf((mouse - w->drag_grab - t.track_start) / range, 0), 1) : 0;
     if (w->drag_axis == 1) n->scroll.y = (float)((double)frac * t.max - n->scroll_base_y);

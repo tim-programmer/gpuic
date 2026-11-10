@@ -1141,12 +1141,13 @@ gp_node *gp_focus_bg(gp_color c);
 gp_node *gp_focus_border_color(gp_color c);
 /* A style for a state, over the element's own: `gp_hover_style(gp_group(gp_bg(c), gp_opacity(.8f)))` while the pointer is over it (also
  * `gp_active_style` while it is pressed on top of that, `gp_focus_style` while it has focus). What can change is what only repaints: background
- * (color or gradient), border colors, border style and gradient, rounded corners, shadow and opacity; anything that would move or resize the
- * element (sizes, padding, border widths, text) is ignored there, and so is text color, which the children inherit. The states stack (hover,
+ * (color or gradient), border colors, border style and gradient, rounded corners, shadow, opacity, and text color (gp_text_color: the element's text and
+ * everything in it that does not set a color of its own, as inheritance goes; a stroke whose color is the text color too); anything that would move or
+ * resize the element (sizes, padding, border widths, font, text) is ignored there. The states stack (hover,
  * then pressed, then focus), and gp_hover_bg / gp_active_bg / gp_focus_bg / gp_focus_border_color still work and win over these. */
 /* Transforms, as in CSS: they move what is painted, not the layout (nothing around the element moves or resizes), and apply to the element and everything in it.
  * They are made about the middle of the element's box (gp_transform_origin(fx, fy) moves that point: fractions of the box, 0 0 its top left corner), in the order
- * scale, rotate, translate; a later one of the same kind replaces an earlier one. Nested elements compose. An angle is in degrees, clockwise (the y axis goes down).
+ * skew, scale, rotate, translate; a later one of the same kind replaces an earlier one. Nested elements compose. An angle is in degrees, clockwise (the y axis goes down).
  * The pointer follows them: a click or a hover lands on what is seen where it is. Meant for gp_with_animation (a spinner: gp_rotate(t * 360), a pop-in:
  * gp_scale(0.8 + 0.2 * t)). Text is drawn rotated without LCD antialiasing. An overflow clip (and so a scroller) inside a transformed element is cut to the transformed box only
  * when the transform keeps the axes (a scale, a move, a quarter turn); at another angle it does not clip. */
@@ -1154,6 +1155,10 @@ gp_node *gp_rotate(float degrees);
 gp_node *gp_scale(float s);
 gp_node *gp_scale_xy(float sx, float sy);
 gp_node *gp_translate(float dx, float dy);
+/* A skew, as CSS skew(ax, ay): x moves by tan(ax) times y, and y by tan(ay) times x, about the transform origin (angles in degrees, held within 89). The pointer follows it;
+ * edges are anti-aliased as under a scale that is not the same both ways (the soft edge is a little narrower across a steeply sheared side), and a clip inside a skewed
+ * element is not cut (as at an angle that is not a quarter turn). */
+gp_node *gp_skew(float ax_deg, float ay_deg);
 gp_node *gp_transform_origin(float fx, float fy);
 gp_node *gp_hover_style(gp_node *group);
 gp_node *gp_active_style(gp_node *group);

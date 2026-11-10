@@ -18,6 +18,8 @@ typedef struct {
     gp_app *app;          /* for statistics, may be NULL */
     uint32_t atlas_gen;
     uint32_t vis_gen;     /* the window's scroll_vis_gen: auto-hiding scrollbars changed */
+    gp_color tc;          /* with has_tc: the text color a state style above set, for everything below that does not set its own */
+    bool has_tc;
 } paint_ctx;
 
 void gp_scene_push(gp_scene *s, const gp_instance *i) {
@@ -61,6 +63,11 @@ gp_affine gp_style_affine(const gp_style *s, float x, float y, float w, float h)
         sn = q == 1 ? 1.f : q == 3 ? -1.f : 0.f;
     }
     gp_affine m = { cs * s->xf_sx, sn * s->xf_sx, -sn * s->xf_sy, cs * s->xf_sy, 0, 0 };
+    if (s->xf_kx != 0.f || s->xf_ky != 0.f) {   /* a skew first: x += tan(ax) y, y += tan(ay) x (beyond 89 degrees it is held there: a tangent that large is a line) */
+        float kx = tanf(fminf(fmaxf(s->xf_kx, -89.f), 89.f) * (float)M_PI / 180.f), ky = tanf(fminf(fmaxf(s->xf_ky, -89.f), 89.f) * (float)M_PI / 180.f);
+        gp_affine k = { 1, ky, kx, 1, 0, 0 };
+        m = gp_aff_mul(m, k);
+    }
     m.tx = cx + s->xf_tx - (m.a * cx + m.c * cy);
     m.ty = cy + s->xf_ty - (m.b * cx + m.d * cy);
     return m;
@@ -554,6 +561,11 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
     memcpy(sig, vals, sizeof vals);
     if (pc->has_xf) memcpy(sig + 16, &pc->xf, sizeof pc->xf);   /* what it is painted under */
     sig[8] = pc->atlas_gen;
+    if (pc->has_tc) {   /* a text color from a state style above (to the 8 bits a channel it is drawn with) */
+        const float *c = &pc->tc.r;
+        for (int i = 0; i < 4; i++) sig[22] = sig[22] << 8 | (uint32_t)lroundf(fminf(fmaxf(c[i], 0.f), 1.f) * 255.f);
+        sig[23] = 1;
+    }
     if (n->sub_flags & GP_SUB_FOCUS) {   /* only subtrees that can show focus depend on it */
         sig[9] = (uint32_t)pc->focused;
         sig[10] = (uint32_t)(pc->focused >> 32);
@@ -610,10 +622,11 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
 }
 
 /* What a state style (gp_hover_style, gp_active_style, gp_focus_style) changes: the paint-only properties it sets (background, border
- * colors, style and gradient, corner radii, shadow, opacity), put over `dst`. Anything that would move or resize the element is not here. */
+ * colors, style and gradient, corner radii, shadow, opacity, text color), put over `dst`. Anything that would move or resize the element is not here. */
 static void overlay_style(gp_style *dst, const gp_style *src) {
     if (src->has_bg) { dst->bg = src->bg; dst->has_bg = true; dst->bg_gradient = NULL; }
     if (src->has_stroke_color) { dst->stroke_color = src->stroke_color; dst->has_stroke_color = true; }
+    if (src->has_text_color) { dst->text_color = src->text_color; dst->has_text_color = true; }
     if (src->bg_gradient) dst->bg_gradient = src->bg_gradient;
     if (src->border_color.a > 0) { dst->border_color = src->border_color; dst->bcolor_set = 0; dst->border_gradient = NULL; }
     for (int i = 0; i < 4; i++)
@@ -647,6 +660,10 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
         if (focused && s->focus_style) overlay_style(&stated, s->focus_style);
         s = &stated;
     }
+    /* the text color: an element's own stops what a state style above it set; a state style of its own sets it for it and everything in it (the caller puts both back) */
+    if (n->style.has_text_color) pc->has_tc = false;
+    if (s == &stated && s->has_text_color) { pc->tc = s->text_color; pc->has_tc = true; }
+    if (pc->has_tc) n->ts.color = pc->tc;
     opacity *= s->opacity;
     if (opacity <= 0) return;
     if (n->kind == GP_EL_CURVE) {
@@ -803,9 +820,19 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
 }
 
 /* An element with a transform paints itself and everything in it under it: the pointer is taken back through it for what hover looks at. */
+/* The body, with what it changes for its subtree put back after: the text color a state style set (and the element's own copy of it, which only painting reads). */
+static void paint_node_scoped(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, float opacity) {
+    const gp_color keep = n->ts.color, tc = pc->tc;
+    const bool has_tc = pc->has_tc;
+    paint_node_body(pc, n, ox, oy, clip, opacity);
+    n->ts.color = keep;
+    pc->tc = tc;
+    pc->has_tc = has_tc;
+}
+
 static void paint_node_inner(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, float opacity) {
     if (!n->style.has_xf) {
-        paint_node_body(pc, n, ox, oy, clip, opacity);
+        paint_node_scoped(pc, n, ox, oy, clip, opacity);
         return;
     }
     paint_ctx saved = *pc;
@@ -814,7 +841,7 @@ static void paint_node_inner(paint_ctx *pc, gp_el *n, float ox, float oy, rect c
     pc->has_xf = true;
     pc->inv = gp_aff_inverse(pc->xf);
     pc->mouse_local = gp_aff_apply(pc->inv, pc->mouse);
-    paint_node_body(pc, n, ox, oy, clip, opacity);
+    paint_node_scoped(pc, n, ox, oy, clip, opacity);
     pc->xf = saved.xf;
     pc->inv = saved.inv;
     pc->has_xf = saved.has_xf;

@@ -332,6 +332,8 @@
     Element&& scale_xy(float sx, float sy) && { return std::move(add(gp_scale_xy(sx, sy))); }
     Element& translate(float dx, float dy) & { return add(gp_translate(dx, dy)); }
     Element&& translate(float dx, float dy) && { return std::move(add(gp_translate(dx, dy))); }
+    Element& skew(float ax_deg, float ay_deg) & { return add(gp_skew(ax_deg, ay_deg)); }
+    Element&& skew(float ax_deg, float ay_deg) && { return std::move(add(gp_skew(ax_deg, ay_deg))); }
     Element& transform_origin(float fx, float fy) & { return add(gp_transform_origin(fx, fy)); }
     Element&& transform_origin(float fx, float fy) && { return std::move(add(gp_transform_origin(fx, fy))); }
     Element& key_context(Str name) & { return add(gp_key_context(name.c_str())); }

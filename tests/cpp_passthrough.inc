@@ -331,6 +331,8 @@
 { "scale_xy (named)", [] { Element e = div(); e.scale_xy(0.375f, 0.625f); return e; }, [] { return gp_div(gp_scale_xy(0.375f, 0.625f)); } },
 { "translate", [] { return div().translate(0.375f, 0.625f); }, [] { return gp_div(gp_translate(0.375f, 0.625f)); } },
 { "translate (named)", [] { Element e = div(); e.translate(0.375f, 0.625f); return e; }, [] { return gp_div(gp_translate(0.375f, 0.625f)); } },
+{ "skew", [] { return div().skew(0.375f, 0.625f); }, [] { return gp_div(gp_skew(0.375f, 0.625f)); } },
+{ "skew (named)", [] { Element e = div(); e.skew(0.375f, 0.625f); return e; }, [] { return gp_div(gp_skew(0.375f, 0.625f)); } },
 { "transform_origin", [] { return div().transform_origin(0.375f, 0.625f); }, [] { return gp_div(gp_transform_origin(0.375f, 0.625f)); } },
 { "transform_origin (named)", [] { Element e = div(); e.transform_origin(0.375f, 0.625f); return e; }, [] { return gp_div(gp_transform_origin(0.375f, 0.625f)); } },
 { "key_context", [] { return div().key_context("ab,cd0"); }, [] { return gp_div(gp_key_context("ab,cd0")); } },

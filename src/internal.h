@@ -99,6 +99,7 @@ typedef struct gp_style {
     float path_text_dy;                 /* its baseline this far to the right of the direction of travel */
     bool has_xf;
     float xf_rot, xf_sx, xf_sy, xf_tx, xf_ty, xf_ox, xf_oy;   /* degrees; scale; px; fractions of the box (0.5: the middle) */
+    float xf_kx, xf_ky;    /* skew: degrees along x and along y (CSS skew(ax, ay)) */
     const struct gp_style *hover_style, *active_style, *focus_style;   /* gp_hover_style...: what the state paints over this style (arena of the element) */
     gp_color bg, border_color, text_color, hover_bg, active_bg, focus_bg, focus_border;
     gp_color scrollbar_color;

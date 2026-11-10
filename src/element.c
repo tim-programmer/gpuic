@@ -63,7 +63,7 @@ enum {
     M_CHILDREN, M_MODS, M_ON_DRAG, M_ON_MOUSE_UP, M_ON_IME, M_IME_RECT, M_CURSOR_TEXT,
     M_ON_LAYOUT, M_ON_SCROLL, M_ON_WHEEL, M_FONT_VARIATIONS, M_LIST_STICKY, M_LIST_HORIZ, M_BORDER_SIDE_COLOR, M_BORDER_STYLE, M_BORDER_GRADIENT, M_TEXT_DIR, M_LIST_STICK, M_ANIM, M_AUTOHIDE, M_BG_GRADIENT, M_OBJECT_FIT, M_PIXELATED, M_BORDER_SIDE, M_CORNER, M_CORNERS,
     M_IMG_BRIGHTNESS, M_IMG_CONTRAST, M_IMG_SATURATE, M_IMG_GRAYSCALE, M_IMG_BLUR, M_IMG_TINT, M_MARGIN_AUTO, M_WRAP, M_ALIGN_CONTENT,
-    M_HOVER_STYLE, M_ACTIVE_STYLE, M_FOCUS_STYLE, M_ROTATE, M_SCALE, M_TRANSLATE, M_XF_ORIGIN,
+    M_HOVER_STYLE, M_ACTIVE_STYLE, M_FOCUS_STYLE, M_ROTATE, M_SCALE, M_TRANSLATE, M_XF_ORIGIN, M_SKEW,
     M_STROKE_W, M_STROKE_COLOR, M_STROKE_CAP, M_STROKE_JOIN, M_MITER_LIMIT, M_HIT_TOL,
     M_DASH, M_DASH_OFF, M_STROKE_GRADIENT, M_ARROW, M_FILL, M_CLOSED, M_PATH_TEXT, M_PATH_TEXT_DY,
 };
@@ -502,6 +502,7 @@ gp_node *gp_rotate(float degrees) { return mod_f2(M_ROTATE, degrees, 0); }
 gp_node *gp_scale(float s) { return mod_f2(M_SCALE, s, s); }
 gp_node *gp_scale_xy(float sx, float sy) { return mod_f2(M_SCALE, sx, sy); }
 gp_node *gp_translate(float dx, float dy) { return mod_f2(M_TRANSLATE, dx, dy); }
+gp_node *gp_skew(float ax_deg, float ay_deg) { return mod_f2(M_SKEW, ax_deg, ay_deg); }
 gp_node *gp_transform_origin(float fx, float fy) { return mod_f2(M_XF_ORIGIN, fx, fy); }
 gp_node *gp_hover_style(gp_node *group) { return mod_style(M_HOVER_STYLE, group); }
 gp_node *gp_active_style(gp_node *group) { return mod_style(M_ACTIVE_STYLE, group); }
@@ -702,6 +703,7 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_SCALE: s->xf_sx = m->f[0]; s->xf_sy = m->f[1]; s->has_xf = true; break;
     case M_TRANSLATE: s->xf_tx = m->f[0]; s->xf_ty = m->f[1]; s->has_xf = true; break;
     case M_XF_ORIGIN: s->xf_ox = m->f[0]; s->xf_oy = m->f[1]; break;
+    case M_SKEW: s->xf_kx = isfinite(m->f[0]) ? m->f[0] : 0.f; s->xf_ky = isfinite(m->f[1]) ? m->f[1] : 0.f; s->has_xf = true; break;
     case M_HOVER_STYLE: case M_ACTIVE_STYLE: case M_FOCUS_STYLE: {
         /* the group is applied to an element of its own, whose style is what the state paints over this one's (the paint-only part of it) */
         gp_el *tmp = gp_el_new(g_bc->arena, GP_EL_DIV);
