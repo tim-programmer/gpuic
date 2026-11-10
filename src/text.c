@@ -1714,7 +1714,7 @@ static void assign_fonts(gp_text_system *ts, int style, size_t ncp) {
 }
 
 static void shape_run(gp_text_system *ts, int fid, float size, const char *text, size_t len,
-                      size_t byte_start, size_t byte_end, int level, float *pen, const feature_entry *feat) {
+                      size_t byte_start, size_t byte_end, int level, double *pen, const feature_entry *feat) {
     gp_font *f = &ts->fonts[fid];
     hb_buffer_reset(ts->hbuf);
     hb_buffer_add_utf8(ts->hbuf, text, (int)len, (unsigned)byte_start, (int)(byte_end - byte_start));
@@ -1729,7 +1729,7 @@ static void shape_run(gp_text_system *ts, int fid, float size, const char *text,
     for (unsigned i = 0; i < n; i++) { /* HarfBuzz already returns RTL runs in visual order */
         float adv = (float)gp[i].x_advance * k + (gp[i].x_advance ? extra : 0.f); /* marks stay zero-width */
         gv_push(&ts->gv, (gp_glyph_pos){ gi[i].codepoint, (uint16_t)fid, (uint8_t)level, gi[i].cluster,
-                                         *pen + (float)gp[i].x_offset * k, -(float)gp[i].y_offset * k, adv });
+                                         (float)(*pen + (float)gp[i].x_offset * k), -(float)gp[i].y_offset * k, adv });
         *pen += adv;
     }
 }
@@ -1737,7 +1737,7 @@ static void shape_run(gp_text_system *ts, int fid, float size, const char *text,
 static void shape_uncached(gp_text_system *ts, int style, float size, const char *text, size_t len,
                            int dir, float *width) {
     ts->gv.n = 0;
-    float pen = 0;
+    double pen = 0;   /* (in double: added up in float, the pen drifts by pixels over a long text) */
     size_t ncp = decode_all(ts, text, len);
     assign_fonts(ts, style, ncp);
 
@@ -1780,7 +1780,7 @@ static void shape_uncached(gp_text_system *ts, int style, float size, const char
         if (font >= 0) shape_run(ts, font, size, text, len, ts->boff[lo], ts->boff[hi + 1], level, &pen, &ts->features[ts->styles[style].features]);
         v = w;
     }
-    *width = pen;
+    *width = (float)pen;
 }
 
 static uint64_t fnv(const char *s, size_t n) {

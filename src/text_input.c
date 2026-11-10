@@ -59,6 +59,19 @@ typedef struct {
     uint32_t *brk;               /* n - 1 entries, NULL when n <= 1 */
 } LineRows;
 
+/* A long left-to-right row, cut into segments that are shaped one at a time (see "long rows"). Segment k is bytes [ls + off[k], ls + off[k + 1]),
+ * w[k] its width (< 0: not measured yet), x[k] its left edge, known for k <= nx (every segment before nx is measured). */
+typedef struct {
+    bool live;
+    size_t ls, le;
+    size_t n, nx, cap;
+    size_t *off;
+    float *w;
+    double *x;                   /* (double: a long row is millions of pixels wide, where a float's step is a fraction of a pixel) */
+    uint64_t used;
+} Segs;
+#define NSEGS 8
+
 /* A document this small is wrapped whole (everything about its rows is exact); a bigger one only where it is looked at. */
 #define EAGER_WRAP_BYTES 65536
 
@@ -100,8 +113,13 @@ typedef struct {
     size_t nrows, cap_rows;
     /* Soft wrap is lazy (see "rows"): every hard line has a row count, MEASURED (its breaks are known) or ESTIMATED from its length, and a
      * Fenwick tree over the counts gives the row a line starts at and the line a row is in. Only the lines that are looked at are wrapped. */
-    LineRows *lr;                /* parallel to ls */
-    size_t *fw;                  /* Fenwick tree over lr[].n, 1-based, nl + 1 entries when fw_valid */
+    /* ...over UNITS: a unit is a hard line, or a piece of one longer than LONG_WRAP_BYTES (see "units"); us[u] is where unit u starts, uh[u] its
+     * hard line. Units are cut once and kept through edits, whatever the width. */
+    size_t *us;
+    uint32_t *uh;
+    size_t nu, cap_u;
+    LineRows *lr;                /* parallel to us */
+    size_t *fw;                  /* Fenwick tree over lr[].n, 1-based, nu + 1 entries when fw_valid */
     size_t fw_cap, total_rows, unmeasured;
     bool fw_valid, lr_valid;
     double k_bytes, k_width;     /* the lines measured so far: bytes and shaped width, for the estimates */
@@ -126,6 +144,14 @@ typedef struct {
      * start of the next; this says which one the user means (End and clicks past the end of a row
      * choose the end of the row, everything else the start of the next). */
     bool upstream;
+
+    Segs segs[NSEGS];            /* the long rows seen lately */
+    uint64_t seg_clock;
+    size_t cx_ls;                /* the composition's extra width in a long row (cached for cx_rev / cx_pre) */
+    uint64_t cx_rev, cx_pre;
+    float cx_w;
+    bool span_built;             /* the last render built long rows only between x span_x0 and span_x1 (what every long row built covers) */
+    float span_x0, span_x1;
 
     int drag_mode;               /* 0 chars, 1 words, 2 lines */
     size_t drag_lo, drag_hi;     /* the initially selected word / line */
@@ -291,6 +317,7 @@ static size_t line_end_of(const TextInput *ti, size_t off) {
  * include row_off, the shift that right-aligns right-to-left paragraphs. */
 typedef struct {
     size_t start, end;           /* real byte range */
+    size_t row_end;              /* the end of the row it is (part of): a long row is built in parts, see "long rows" */
     const char *disp;            /* what is drawn: password bullets, IME text spliced in */
     size_t disp_len;
     size_t n;                    /* stops: n-1 cells, then the end of the line */
@@ -307,6 +334,9 @@ typedef struct {
     float pre_cursor_x;          /* the caret inside the composition */
     uint32_t *cpf, *cpl;         /* the first and the last codepoint of cell k (what line breaking looks at; the text's, or the composition's) */
     size_t *pbyte;               /* for a cell of the composition, its byte in it (else SIZE_MAX) */
+    size_t nseg;                 /* a part of a long row: the segments it is made of, each drawn as its own text: disp[seg_disp[i], seg_disp[i + 1]) */
+    size_t *seg_disp;
+    double *seg_x;               /* ...and where each starts (content x) */
 } Line;
 
 typedef struct { size_t cs; float x0, x1; int level; } ClusterBox;
@@ -457,6 +487,9 @@ static void build_line_ex(TextInput *ti, gp_text_system *ts, size_t ls, size_t l
     float row_off = para_rtl && ti->avail_w > width ? ti->avail_w - width : 0;
     L->start = ls;
     L->end = le;
+    L->row_end = le;
+    L->nseg = 0;
+    L->seg_disp = NULL;
     L->disp = disp;
     L->disp_len = dl;
     L->width = width;
@@ -559,7 +592,7 @@ static size_t offset_in_line(const Line *L, float x, bool *upstream) {
     }
     if (upstream) /* without right-to-left text only the end of the row can be reached from the
                      other side, and that is the only place the distinction is visible */
-        *upstream = L->has_rtl ? up : (up && best_off == L->end);
+        *upstream = L->has_rtl ? up : (up && best_off == L->row_end);
     return best_off;
 }
 
@@ -643,9 +676,19 @@ static void lines_reserve(TextInput *ti, size_t need) {
     while (c < need) c *= 2;
     ti->ls = realloc(ti->ls, c * sizeof *ti->ls);
     ti->lrtl = realloc(ti->lrtl, c);
-    ti->lr = realloc(ti->lr, c * sizeof *ti->lr);
-    if (!ti->ls || !ti->lrtl || !ti->lr) abort();
+    if (!ti->ls || !ti->lrtl) abort();
     ti->cap_l = c;
+}
+
+static void units_reserve(TextInput *ti, size_t need) {
+    if (need <= ti->cap_u) return;
+    size_t c = ti->cap_u ? ti->cap_u : 64;
+    while (c < need) c *= 2;
+    ti->us = realloc(ti->us, c * sizeof *ti->us);
+    ti->uh = realloc(ti->uh, c * sizeof *ti->uh);
+    ti->lr = realloc(ti->lr, c * sizeof *ti->lr);
+    if (!ti->us || !ti->uh || !ti->lr) abort();
+    ti->cap_u = c;
 }
 
 static bool wrapping(const TextInput *ti) { return ti->o.multiline && ti->o.soft_wrap; }
@@ -662,7 +705,7 @@ static uint32_t est_rows(const TextInput *ti, size_t bytes) {
     return n < 1 ? 1 : n > 1e9 ? 1000000000u : (uint32_t)n;
 }
 
-/* The line's row count is now `n` (the tree follows if it is built). */
+/* The unit's row count is now `n` (the tree follows if it is built). */
 static void set_count(TextInput *ti, size_t h, uint32_t n) {
     uint32_t old = ti->lr[h].n;
     if (n == old) return;
@@ -670,16 +713,173 @@ static void set_count(TextInput *ti, size_t h, uint32_t n) {
     ti->total_rows = ti->total_rows + n - old;
     if (ti->fw_valid) {
         size_t d = (size_t)n - (size_t)old;   /* (unsigned wrap-around adds a negative change correctly) */
-        for (size_t i = h + 1; i <= ti->nl; i += i & (~i + 1)) ti->fw[i] += d;
+        for (size_t i = h + 1; i <= ti->nu; i += i & (~i + 1)) ti->fw[i] += d;
     }
 }
 
-static void line_forget(TextInput *ti, size_t h) {
-    LineRows *e = &ti->lr[h];
-    free(e->brk);
-    e->brk = NULL;
-    if (e->state != 0) ti->unmeasured++;
-    e->state = 0;
+/* ---- units: a hard line longer than LONG_WRAP_BYTES is wrapped in PIECES of about PIECE_BYTES, each on its own, as if a row ended where a
+ * piece does (a slightly short row every ~32 KB of a minified file): pieces are units like lines, wrapped only when looked at, and an edit
+ * in a long line wraps again only the piece it is in. */
+#define LONG_WRAP_BYTES 65536
+#define PIECE_BYTES 32768
+
+static size_t snap_cluster(const TextInput *ti, size_t p) { return p == 0 ? 0 : char_next(ti, char_prev(ti, p)); }
+
+/* Places to cut bytes [a, b) of the text into parts of about `size`: just after a space if there is one near, at a cluster boundary.
+ * Appended to *out (absolute offsets, a and b not included); returns how many. */
+static size_t cut_points(const TextInput *ti, size_t a, size_t b, size_t size, size_t **out, size_t *cap) {
+    size_t n = 0, p = a;
+    while (b - p > size + size / 2) {
+        size_t q = p + size;
+        for (size_t k = 0; k < 96; k++)
+            if (ti->text[q - k - 1] == ' ') { q -= k; break; }
+        q = snap_cluster(ti, q);
+        if (q <= p || q >= b) break;
+        if (n == *cap) {
+            *cap = *cap ? *cap * 2 : 64;
+            *out = realloc(*out, *cap * sizeof **out);
+            if (!*out) abort();
+        }
+        (*out)[n++] = q;
+        p = q;
+    }
+    return n;
+}
+
+static bool unit_last(const TextInput *ti, size_t u) { return u + 1 >= ti->nu || ti->uh[u + 1] != ti->uh[u]; }
+static size_t unit_end(const TextInput *ti, size_t u) {
+    if (u + 1 >= ti->nu) return ti->len;
+    return unit_last(ti, u) ? ti->us[u + 1] - 1 : ti->us[u + 1];
+}
+
+/* The unit holding offset `off`: the last that starts at or before it. */
+static size_t unit_of(const TextInput *ti, size_t off) {
+    size_t lo = 0, hi = ti->nu;
+    while (hi - lo > 1) { size_t mid = lo + (hi - lo) / 2; if (ti->us[mid] <= off) lo = mid; else hi = mid; }
+    return lo;
+}
+
+/* The starts of hard line k's units, appended to *v. */
+static size_t line_units(const TextInput *ti, size_t k, size_t **v, size_t *n, size_t *cap) {
+    size_t ls = ti->ls[k], le = line_end(ti, k), n0 = *n;
+    if (*n == *cap) { *cap = *cap ? *cap * 2 : 64; *v = realloc(*v, *cap * sizeof **v); if (!*v) abort(); }
+    (*v)[(*n)++] = ls;
+    if (le - ls > LONG_WRAP_BYTES) {
+        size_t *cuts = NULL, cc = 0, nc = cut_points(ti, ls, le, PIECE_BYTES, &cuts, &cc);
+        for (size_t i = 0; i < nc; i++) {
+            if (*n == *cap) { *cap *= 2; *v = realloc(*v, *cap * sizeof **v); if (!*v) abort(); }
+            (*v)[(*n)++] = cuts[i];
+        }
+        free(cuts);
+    }
+    return *n - n0;
+}
+
+/* Units u0..u1 (old, inclusive; u1 = u0 - 1: none) become `fresh` units starting at starts[] with hard lines hards[]: not wrapped, estimated.
+ * The units after them move by `delta` bytes and `dh` hard lines. */
+static void units_splice(TextInput *ti, size_t u0, size_t u1, const size_t *starts, const uint32_t *hards, size_t fresh, long delta, long dh) {
+    size_t old = u1 + 1 - u0, tail = ti->nu - (u1 + 1);
+    uint32_t *old_n = malloc((old ? old : 1) * sizeof *old_n);
+    if (!old_n) abort();
+    for (size_t u = u0; u <= u1 && old; u++) {
+        free(ti->lr[u].brk);
+        if (ti->lr[u].state == 0) ti->unmeasured--;
+        old_n[u - u0] = ti->lr[u].n;
+    }
+    bool same = fresh == old && ti->fw_valid;
+    if (!same) {
+        for (size_t i = 0; i < old; i++) ti->total_rows -= old_n[i];
+        ti->fw_valid = false;
+    }
+    units_reserve(ti, ti->nu - old + fresh);
+    memmove(ti->us + u0 + fresh, ti->us + u1 + 1, tail * sizeof *ti->us);
+    memmove(ti->uh + u0 + fresh, ti->uh + u1 + 1, tail * sizeof *ti->uh);
+    memmove(ti->lr + u0 + fresh, ti->lr + u1 + 1, tail * sizeof *ti->lr);
+    ti->nu = ti->nu - old + fresh;
+    for (size_t u = u0 + fresh; u < ti->nu; u++) {
+        ti->us[u] = (size_t)((long)ti->us[u] + delta);
+        ti->uh[u] = (uint32_t)((long)ti->uh[u] + dh);
+    }
+    for (size_t i = 0; i < fresh; i++) { ti->us[u0 + i] = starts[i]; ti->uh[u0 + i] = hards[i]; }
+    for (size_t i = 0; i < fresh; i++) {
+        size_t u = u0 + i;
+        uint32_t n = est_rows(ti, unit_end(ti, u) - ti->us[u]);
+        if (same) {
+            ti->lr[u] = (LineRows){ old_n[i], 0, 0, 0, NULL };
+            set_count(ti, u, n);   /* (the same number of units: the tree follows the new counts) */
+        } else {
+            ti->lr[u] = (LineRows){ n, 0, 0, 0, NULL };
+            ti->total_rows += n;
+        }
+        ti->unmeasured++;
+    }
+    free(old_n);
+}
+
+/* After lines_replace: old hard lines a..b (the old line b ended at old_end_b) became m lines, and [start, end) of the old text ilen bytes.
+ * An edit inside a long line cuts again only the pieces it touched; anything else makes the units of the new lines afresh. */
+static void units_replace(TextInput *ti, size_t a, size_t b, size_t m, size_t old_end_b, size_t start, size_t end, size_t ilen) {
+    long delta = (long)ilen - (long)(end - start);
+    size_t removed = b - a + 1;
+    size_t ua = 0, hi = ti->nu;   /* the first unit of line a (lines before it did not move) */
+    while (ua < hi) { size_t mid = (ua + hi) / 2; if (ti->us[mid] < ti->ls[a]) ua = mid + 1; else hi = mid; }
+    size_t ub = ua; hi = ti->nu;  /* the first unit of the old line b + 1, then the one before */
+    while (ub < hi) { size_t mid = (ub + hi) / 2; if (ti->us[mid] <= old_end_b) ub = mid + 1; else hi = mid; }
+    ub--;
+    size_t *v = NULL, nv = 0, cv = 0;
+    if (a == b && m == 1 && ub > ua && line_end(ti, a) - ti->ls[a] > LONG_WRAP_BYTES) {
+        size_t lo = ua, h2 = ub + 1;   /* p0: the piece holding start (and the one before, if start begins it) */
+        while (h2 - lo > 1) { size_t mid = (lo + h2) / 2; if (ti->us[mid] <= start) lo = mid; else h2 = mid; }
+        size_t p0 = lo > ua && ti->us[lo] == start ? lo - 1 : lo;
+        lo = ua; h2 = ub + 1;          /* p1: the piece holding end */
+        while (h2 - lo > 1) { size_t mid = (lo + h2) / 2; if (ti->us[mid] <= end) lo = mid; else h2 = mid; }
+        size_t p1 = lo;
+        size_t rb = (size_t)((long)(p1 < ub ? ti->us[p1 + 1] : old_end_b) + delta);   /* the region's end in the new text */
+        if (nv == cv) { cv = 64; v = malloc(cv * sizeof *v); if (!v) abort(); }
+        v[nv++] = ti->us[p0];
+        size_t *cuts = NULL, cc = 0, nc = cut_points(ti, ti->us[p0], rb, PIECE_BYTES, &cuts, &cc);
+        for (size_t i = 0; i < nc; i++) {
+            if (nv == cv) { cv *= 2; v = realloc(v, cv * sizeof *v); if (!v) abort(); }
+            v[nv++] = cuts[i];
+        }
+        free(cuts);
+        uint32_t *hs = malloc(nv * sizeof *hs);
+        if (!hs) abort();
+        for (size_t i = 0; i < nv; i++) hs[i] = (uint32_t)a;
+        units_splice(ti, p0, p1, v, hs, nv, delta, 0);
+        free(hs);
+        free(v);
+        return;
+    }
+    uint32_t *hs = NULL;
+    size_t ch = 0;
+    for (size_t k = a; k < a + m; k++) {
+        size_t got = line_units(ti, k, &v, &nv, &cv);
+        if (nv > ch) { ch = cv; hs = realloc(hs, ch * sizeof *hs); if (!hs) abort(); }
+        for (size_t i = nv - got; i < nv; i++) hs[i] = (uint32_t)k;
+    }
+    units_splice(ti, ua, ub, v, hs, nv, delta, (long)m - (long)removed);
+    free(hs);
+    free(v);
+}
+
+/* All the units, made from the line index (when the field first wraps). */
+static void units_build(TextInput *ti) {
+    size_t *v = NULL, nv = 0, cv = 0;
+    uint32_t *hs = NULL;
+    size_t ch = 0;
+    for (size_t k = 0; k < ti->nl; k++) {
+        size_t got = line_units(ti, k, &v, &nv, &cv);
+        if (nv > ch) { ch = cv; hs = realloc(hs, ch * sizeof *hs); if (!hs) abort(); }
+        for (size_t i = nv - got; i < nv; i++) hs[i] = (uint32_t)k;
+    }
+    units_reserve(ti, nv);
+    memcpy(ti->us, v, nv * sizeof *v);
+    memcpy(ti->uh, hs, nv * sizeof *hs);
+    for (size_t u = 0; u < nv; u++) ti->lr[u] = (LineRows){ 1, 0, 0, 0, NULL };
+    ti->nu = nv;
+    free(v);
+    free(hs);
 }
 
 /* Brings the index up to date after the text changed: [start, end) of the old text became `ilen` bytes (the text is already the new one).
@@ -701,19 +901,9 @@ static void lines_replace(TextInput *ti, size_t start, size_t end, size_t ilen) 
     size_t removed = b - a + 1;
     size_t tail = ti->nl - (b + 1);
     for (size_t i = a; i <= b; i++) ti->rtl_lines -= ti->lrtl[i];
-    bool rows = ti->lr_valid;   /* (a wrapped field's rows: the lines the edit touched are new and not wrapped, the others keep theirs) */
-    if (rows) {
-        for (size_t i = a; i <= b; i++) line_forget(ti, i);
-        if (m != removed) {   /* lines came or went: the tree is built again when it is next needed */
-            for (size_t i = a; i <= b; i++) ti->total_rows -= ti->lr[i].n;
-            ti->unmeasured -= removed;
-            ti->fw_valid = false;
-        }
-    }
     lines_reserve(ti, ti->nl - removed + m);
     memmove(ti->ls + a + m, ti->ls + b + 1, tail * sizeof *ti->ls);
     memmove(ti->lrtl + a + m, ti->lrtl + b + 1, tail);
-    if (rows) memmove(ti->lr + a + m, ti->lr + b + 1, tail * sizeof *ti->lr);
     if (delta) for (size_t i = a + m; i < a + m + tail; i++) ti->ls[i] = (size_t)((long)ti->ls[i] + delta);
     ti->nl = ti->nl - removed + m;
     size_t k = a, lo = region_lo;
@@ -723,20 +913,269 @@ static void lines_replace(TextInput *ti, size_t start, size_t end, size_t ilen) 
         ti->ls[k] = lo;
         ti->lrtl[k] = span_has_rtl(ti->text + lo, hi - lo);
         ti->rtl_lines += ti->lrtl[k];
-        if (rows) {
-            if (m != removed) {
-                ti->lr[k] = (LineRows){ est_rows(ti, hi - lo), 0, 0, 0, NULL };
-                ti->total_rows += ti->lr[k].n;
-                ti->unmeasured++;
-            } else {
-                set_count(ti, k, est_rows(ti, hi - lo));   /* (the same lines: the tree follows the new counts) */
-            }
-        }
         k++;
         if (!nl) break;
         lo = hi + 1;
     }
+    /* a wrapped field's rows: the units of the lines the edit touched are new and not wrapped, the others keep theirs */
+    if (ti->lr_valid) units_replace(ti, a, b, m, old_end_b, start, end, ilen);
 }
+
+/* ---------------------------------------------------------------- long rows */
+
+/* A left-to-right row longer than LONG_ROW_BYTES (a minified file, a log line) is never shaped whole. It is cut into SEGMENTS of about
+ * SEG_BYTES at cluster boundaries (just after a space when there is one near), each shaped on its own; their widths, measured once and from
+ * the left only as far as something needs them, say where each segment starts. Drawing, the caret, clicks and Up/Down build only the
+ * segments they need (build_row_part), and an edit measures again only the segments it touched. Each segment is drawn as its own text
+ * element, so what is drawn is exactly what is measured; the price is no kerning or ligature across a segment boundary. Right-to-left rows
+ * (bidi reorders across the whole paragraph) are built whole, as before. */
+#define LONG_ROW_BYTES 8192
+#define SEG_BYTES 2048
+
+static void segs_reserve(Segs *S, size_t n) {
+    if (n + 1 <= S->cap) return;
+    S->cap = (n + 1) * 2;
+    S->off = realloc(S->off, S->cap * sizeof *S->off);
+    S->w = realloc(S->w, S->cap * sizeof *S->w);
+    S->x = realloc(S->x, S->cap * sizeof *S->x);
+    if (!S->off || !S->w || !S->x) abort();
+}
+
+/* The segments of row [ls, le), cut now if they are not kept. */
+static Segs *segs_get(TextInput *ti, size_t ls, size_t le) {
+    Segs *S = NULL;
+    for (int i = 0; i < NSEGS; i++)
+        if (ti->segs[i].live && ti->segs[i].ls == ls && ti->segs[i].le == le) { S = &ti->segs[i]; break; }
+    if (!S) {
+        S = &ti->segs[0];
+        for (int i = 0; i < NSEGS; i++) {
+            if (!ti->segs[i].live) { S = &ti->segs[i]; break; }
+            if (ti->segs[i].used < S->used) S = &ti->segs[i];
+        }
+        size_t *cuts = NULL, ccap = 0, nc = cut_points(ti, ls, le, SEG_BYTES, &cuts, &ccap);
+        segs_reserve(S, nc + 1);
+        S->live = true;
+        S->ls = ls;
+        S->le = le;
+        S->n = nc + 1;
+        S->off[0] = 0;
+        for (size_t i = 0; i < nc; i++) S->off[i + 1] = cuts[i] - ls;
+        S->off[S->n] = le - ls;
+        for (size_t i = 0; i < S->n; i++) S->w[i] = -1;
+        S->x[0] = 0;
+        S->nx = 0;
+        free(cuts);
+    }
+    S->used = ++ti->seg_clock;
+    return S;
+}
+
+/* An edit replaced [start, end) of the old text with ins (the text is the new one): rows it is inside are cut again where it was (their other
+ * segments keep their widths), rows after it move, rows it joined or split are forgotten. */
+static void segs_edit(TextInput *ti, size_t start, size_t end, const char *ins, size_t ilen) {
+    long delta = (long)ilen - (long)(end - start);
+    bool nl = ilen && memchr(ins, '\n', ilen);
+    for (int i = 0; i < NSEGS; i++) {
+        Segs *S = &ti->segs[i];
+        if (!S->live) continue;
+        if (end < S->ls) { S->ls = (size_t)((long)S->ls + delta); S->le = (size_t)((long)S->le + delta); continue; }
+        if (start > S->le) continue;
+        if (start < S->ls || end > S->le || nl) { S->live = false; continue; }
+        size_t rs = start - S->ls, re = end - S->ls;
+        size_t lo = 0, hi = S->n;   /* k0: the segment holding rs (and the one before, if rs starts it: the edit can change the cluster that ends it) */
+        while (hi - lo > 1) { size_t mid = (lo + hi) / 2; if (S->off[mid] <= rs) lo = mid; else hi = mid; }
+        size_t k0 = lo > 0 && S->off[lo] == rs ? lo - 1 : lo;
+        lo = 0; hi = S->n;          /* k1: the segment holding re */
+        while (hi - lo > 1) { size_t mid = (lo + hi) / 2; if (S->off[mid] <= re) lo = mid; else hi = mid; }
+        size_t k1 = lo;
+        size_t a = S->ls + S->off[k0], b = (size_t)((long)(S->ls + S->off[k1 + 1]) + delta);   /* the region again, in the new text */
+        size_t *cuts = NULL, ccap = 0, nc = cut_points(ti, a, b, SEG_BYTES, &cuts, &ccap);
+        size_t old = k1 - k0 + 1, fresh = nc + 1, n = S->n - old + fresh;
+        segs_reserve(S, n);
+        size_t tail = S->n - (k1 + 1);
+        memmove(S->off + k0 + fresh, S->off + k1 + 1, (tail + 1) * sizeof *S->off);   /* (with the end) */
+        memmove(S->w + k0 + fresh, S->w + k1 + 1, tail * sizeof *S->w);
+        for (size_t k = k0 + fresh; k <= n; k++) S->off[k] = (size_t)((long)S->off[k] + delta);
+        for (size_t c = 0; c < nc; c++) S->off[k0 + 1 + c] = cuts[c] - S->ls;
+        for (size_t k = k0; k < k0 + fresh; k++) S->w[k] = -1;
+        S->n = n;
+        if (S->nx > k0) S->nx = k0;
+        S->le = (size_t)((long)S->le + delta);
+        free(cuts);
+    }
+}
+
+/* A segment's width: shaped as build_line_ex shapes it (the same call on the same text, so the same width), without the caret stops. */
+static void seg_measure(TextInput *ti, gp_text_system *ts, Segs *S, size_t k) {
+    gp_arena tmp = { .chunk_size = 16384 };
+    const char *t = ti->text + S->ls + S->off[k];
+    size_t n = S->off[k + 1] - S->off[k];
+    if (ti->o.password) {   /* (drawn as bullets, one per codepoint) */
+        char *b = gp_arena_alloc(&tmp, n * 3 + 1, 1);
+        size_t bl = 0;
+        for (size_t i = 0; i < n; i++)
+            if (((unsigned char)t[i] & 0xc0) != 0x80) { memcpy(b + bl, "\xe2\x80\xa2", 3); bl += 3; }
+        t = b;
+        n = bl;
+    }
+    int cap = (int)n + 1;
+    gp_glyph_pos *g = gp_arena_alloc(&tmp, (size_t)cap * sizeof *g, 8);
+    float width = 0;
+    int ng = gp_text_shape_dir(ts, 400, ti->o.font_size, t, n, GP_BIDI_LTR, g, cap, &width);
+    if (ng > cap) {
+        g = gp_arena_alloc(&tmp, (size_t)ng * sizeof *g, 8);
+        gp_text_shape_dir(ts, 400, ti->o.font_size, t, n, GP_BIDI_LTR, g, ng, &width);
+    }
+    S->w[k] = width;
+    gp_arena_free(&tmp);
+}
+
+/* The left edge of segment k (k == n: the row's right end), measuring the segments before it that are not measured yet. */
+static double seg_x(TextInput *ti, gp_text_system *ts, Segs *S, size_t k) {
+    while (S->nx < k) {
+        if (S->w[S->nx] < 0) seg_measure(ti, ts, S, S->nx);
+        S->x[S->nx + 1] = S->x[S->nx] + S->w[S->nx];
+        S->nx++;
+    }
+    return S->x[k];
+}
+
+static size_t seg_of_byte(const Segs *S, size_t rel) {
+    size_t lo = 0, hi = S->n;
+    while (hi - lo > 1) { size_t mid = (lo + hi) / 2; if (S->off[mid] <= rel) lo = mid; else hi = mid; }
+    return lo;
+}
+
+static size_t seg_of_x(TextInput *ti, gp_text_system *ts, Segs *S, float x) {
+    while (S->nx < S->n && S->x[S->nx] <= x) seg_x(ti, ts, S, S->nx + 1);
+    size_t lo = 0, hi = S->nx < S->n ? S->nx + 1 : S->n;
+    while (hi - lo > 1) { size_t mid = (lo + hi) / 2; if (S->x[mid] <= x) lo = mid; else hi = mid; }
+    return lo;
+}
+
+/* The row's width: measured as far as it is, the rest estimated from the bytes per pixel so far. */
+static float seg_total(const TextInput *ti, const Segs *S) {
+    if (S->nx == S->n) return (float)S->x[S->n];
+    double k = S->off[S->nx] > 0 ? S->x[S->nx] / (double)S->off[S->nx] : ti->o.font_size * 0.5;
+    return (float)(S->x[S->nx] + (double)(S->off[S->n] - S->off[S->nx]) * k);
+}
+
+/* Is the row long (built in parts)? Then its segments. */
+static Segs *long_segs(TextInput *ti, const Row *row) {
+    if (row->end - row->start <= LONG_ROW_BYTES || row->rtl || row->pre == 1) return NULL;
+    if (ti->o.multiline ? (ti->nl && ti->lrtl[line_of(ti, row->start)]) : text_has_rtl(ti)) return NULL;
+    return segs_get(ti, row->start, row->end);
+}
+
+/* Segments k0..k1 of a long row as one Line (x in the row's coordinates), with the composition if it is in them and with_pre; segments
+ * after the composition move right by the width it adds. */
+static void build_long(TextInput *ti, gp_text_system *ts, Segs *S, size_t k0, size_t k1, bool with_pre, gp_arena *a, Line *L) {
+    size_t kc = SIZE_MAX, plen = strlen(ti->preedit);
+    float extra = 0;
+    if (with_pre && composing(ti) && ti->head >= S->ls && ti->head <= S->le) {
+        size_t rel = ti->head - S->ls;
+        kc = seg_of_byte(S, rel);
+        if (kc > 0 && S->off[kc] == rel) kc--;   /* (at a boundary it goes at the end of the segment before) */
+        if (ti->cx_ls != S->ls || ti->cx_rev != ti->rev || ti->cx_pre != ti->pre_ver) {
+            if (S->w[kc] < 0) seg_measure(ti, ts, S, kc);
+            Line P;
+            build_line_ex(ti, ts, S->ls + S->off[kc], S->ls + S->off[kc + 1], 0, plen, false, a, &P);
+            ti->cx_w = P.width - S->w[kc];
+            ti->cx_ls = S->ls;
+            ti->cx_rev = ti->rev;
+            ti->cx_pre = ti->pre_ver;
+        }
+        extra = ti->cx_w;
+    }
+    size_t cnt = k1 - k0 + 1, stops = 1, dl = 0;
+    Line *P = gp_arena_alloc(a, cnt * sizeof *P, 8);
+    double *dx = gp_arena_alloc(a, cnt * sizeof *dx, 8);
+    for (size_t i = 0; i < cnt; i++) {
+        size_t k = k0 + i;
+        build_line_ex(ti, ts, S->ls + S->off[k], S->ls + S->off[k + 1], 0, k == kc ? plen : 0, false, a, &P[i]);
+        dx[i] = seg_x(ti, ts, S, k) + (kc != SIZE_MAX && k > kc ? extra : 0);
+        stops += P[i].n - 1;
+        dl += P[i].disp_len;
+    }
+    char *disp = gp_arena_alloc(a, dl + 1, 1);
+    L->byte = gp_arena_alloc(a, stops * sizeof(size_t), 8);
+    L->pbyte = gp_arena_alloc(a, stops * sizeof(size_t), 8);
+    L->cpf = gp_arena_alloc(a, stops * sizeof(uint32_t), 4);
+    L->cpl = gp_arena_alloc(a, stops * sizeof(uint32_t), 4);
+    L->x = gp_arena_alloc(a, stops * sizeof(float), 4);
+    L->xl = gp_arena_alloc(a, stops * sizeof(float), 4);
+    L->xr = gp_arena_alloc(a, stops * sizeof(float), 4);
+    L->rtl = gp_arena_alloc(a, stops * sizeof(bool), 1);
+    L->seg_disp = gp_arena_alloc(a, (cnt + 1) * sizeof(size_t), 8);
+    L->seg_x = dx;
+    L->composing = false;
+    L->has_rtl = false;
+    L->pre_x0 = L->pre_x1 = L->pre_cursor_x = 0;
+    size_t st = 0, d = 0;
+    for (size_t i = 0; i < cnt; i++) {
+        const Line *Q = &P[i];
+        size_t last = i + 1 == cnt ? Q->n : Q->n - 1;   /* (the end stop of a segment is the next one's first) */
+        for (size_t j = 0; j < last; j++, st++) {
+            L->byte[st] = Q->byte[j];
+            L->pbyte[st] = Q->pbyte[j];
+            L->cpf[st] = Q->cpf[j];
+            L->cpl[st] = Q->cpl[j];
+            L->x[st] = (float)(Q->x[j] + dx[i]);
+            L->xl[st] = (float)(Q->xl[j] + dx[i]);
+            L->xr[st] = (float)(Q->xr[j] + dx[i]);
+            L->rtl[st] = Q->rtl[j];
+        }
+        L->seg_disp[i] = d;
+        memcpy(disp + d, Q->disp, Q->disp_len);
+        d += Q->disp_len;
+        L->has_rtl |= Q->has_rtl;
+        if (Q->composing) {
+            L->composing = true;
+            L->pre_x0 = (float)(Q->pre_x0 + dx[i]);
+            L->pre_x1 = (float)(Q->pre_x1 + dx[i]);
+            L->pre_cursor_x = (float)(Q->pre_cursor_x + dx[i]);
+        }
+    }
+    disp[d] = 0;
+    L->seg_disp[cnt] = d;
+    L->nseg = cnt;
+    L->n = stops;
+    L->disp = disp;
+    L->disp_len = d;
+    L->start = S->ls + S->off[k0];
+    L->end = S->ls + S->off[k1 + 1];
+    L->row_end = S->le;
+    L->row_off = (float)dx[0];
+    L->width = (float)(dx[cnt - 1] + P[cnt - 1].width - dx[0]);
+    L->para_rtl = false;
+}
+
+/* A row as drawn (see build_row), or for a long row only the part of it around bytes [b0, b1] (if b0 <= b1) and x [x0, x1] (if x0 <= x1),
+ * a segment more on each side. Returns the segments of a long row, else NULL. */
+static Segs *build_row_part(TextInput *ti, gp_text_system *ts, const Row *row, bool with_pre, size_t b0, size_t b1, float x0, float x1,
+                            gp_arena *a, Line *L) {
+    Segs *S = long_segs(ti, row);
+    if (!S) { build_row(ti, ts, row, with_pre, a, L); return NULL; }
+    size_t lo = SIZE_MAX, hi = 0;
+    if (b0 <= b1) {
+        size_t r0 = b0 < S->ls ? 0 : b0 - S->ls, r1 = b1 < S->ls ? 0 : b1 - S->ls;
+        lo = seg_of_byte(S, r0);
+        hi = seg_of_byte(S, r1);
+    }
+    if (x0 <= x1) {
+        size_t k0 = seg_of_x(ti, ts, S, x0), k1 = seg_of_x(ti, ts, S, x1);
+        if (k0 < lo) lo = k0;
+        if (lo == SIZE_MAX || k1 > hi) hi = k1;
+    }
+    if (lo == SIZE_MAX) lo = hi = 0;
+    if (lo > 0) lo--;
+    if (hi + 1 < S->n) hi++;
+    build_long(ti, ts, S, lo, hi, with_pre, a, L);
+    return S;
+}
+
+#define NO_BYTES SIZE_MAX, 0
+#define NO_X 1.f, 0.f
 
 /* ---------------------------------------------------------------- rows (soft wrap) */
 
@@ -818,27 +1257,34 @@ static bool paragraph_rtl(const TextInput *ti, size_t start, size_t end, bool li
     return gp_text_is_rtl(ti->text + start, end - start, (int)ti->o.direction);
 }
 
-/* The rows of hard line `hard` = [ls, le), into ti->rows (emptied first). `*width` is the line's shaped width, or -1 if it was not shaped. */
-static void rows_for_line(TextInput *ti, gp_text_system *ts, uint32_t hard, size_t ls, size_t le, float W, gp_arena *tmp, float *width) {
+static bool comp_in_unit(const TextInput *ti, size_t u);
+
+/* The rows of unit u, into ti->rows (emptied first). `*width` is its shaped width, or -1 if it was not shaped. The last row of a piece that
+ * is not the last of its line ends softly (the line goes on in the next piece). */
+static void rows_for_line(TextInput *ti, gp_text_system *ts, size_t u, float W, gp_arena *tmp, float *width) {
     ti->nrows = 0;
     *width = -1;
-    /* the paragraph's direction, decided once for all the rows it wraps into */
-    bool rtl = paragraph_rtl(ti, ls, le, ti->lrtl[hard]);
-    if (W <= 0 || (le == ls && !(composing(ti) && ti->head == ls))) {   /* (an empty line has a row, unless a composition is in it) */
+    uint32_t hard = ti->uh[u];
+    size_t ls = ti->us[u], le = unit_end(ti, u);
+    bool comp = comp_in_unit(ti, u);
+    /* the paragraph's direction (the whole hard line's), decided once for all the rows it wraps into */
+    bool rtl = paragraph_rtl(ti, ti->ls[hard], line_end(ti, hard), ti->lrtl[hard]);
+    if (W <= 0 || (le == ls && !comp)) {   /* (an empty line has a row, unless a composition is in it) */
         rows_push(ti, (Row){ ls, le, hard, false, rtl, 0, 0, 0 });
     } else {
         Line L;
-        build_line(ti, ts, ls, le, true, rtl, tmp, &L);   /* (with the composition, if it is in this line: it wraps like the text) */
+        build_line_ex(ti, ts, ls, le, 0, comp ? strlen(ti->preedit) : 0, rtl, tmp, &L);   /* (with the composition, if it is here: it wraps like the text) */
         *width = L.width;
         wrap_line(ti, &L, W, hard, rtl, tmp);
         gp_arena_reset(tmp);
     }
+    if (!unit_last(ti, u)) ti->rows[ti->nrows - 1].soft_end = true;
 }
 
 /* ---- the Fenwick tree over the lines' row counts */
 
 static void fw_build(TextInput *ti) {
-    size_t n = ti->nl;
+    size_t n = ti->nu;
     if (ti->fw_cap < n + 1) {
         ti->fw_cap = (n + 1) * 2;
         ti->fw = realloc(ti->fw, ti->fw_cap * sizeof *ti->fw);
@@ -865,32 +1311,35 @@ static size_t fw_prefix(const TextInput *ti, size_t h) {
 /* The line row r (< total_rows) is in, and *sub its row within the line. */
 static size_t fw_find(const TextInput *ti, size_t r, size_t *sub) {
     size_t pos = 0, step = 1;
-    while (step * 2 <= ti->nl) step *= 2;
+    while (step * 2 <= ti->nu) step *= 2;
     for (; step; step >>= 1)
-        if (pos + step <= ti->nl && ti->fw[pos + step] <= r) { pos += step; r -= ti->fw[pos]; }
+        if (pos + step <= ti->nu && ti->fw[pos + step] <= r) { pos += step; r -= ti->fw[pos]; }
     *sub = r;
     return pos;
 }
 
 /* ---- lazily wrapped lines */
 
-static bool comp_in_line(const TextInput *ti, size_t h) {
-    return composing(ti) && ti->head >= ti->ls[h] && ti->head <= line_end(ti, h);
+/* Is the composition in unit u? At the boundary between two pieces of a line it is in the second (a unit's end belongs to it only if it ends a line). */
+static bool comp_in_unit(const TextInput *ti, size_t u) {
+    if (!composing(ti) || ti->head < ti->us[u]) return false;
+    size_t e = unit_end(ti, u);
+    return ti->head < e || (ti->head == e && unit_last(ti, u));
 }
 
 /* Must line h be wrapped (again) before its rows are used? It has only an estimate, or the composition came, went or changed. */
 static bool line_stale(const TextInput *ti, size_t h) {
     const LineRows *e = &ti->lr[h];
     if (e->state == 0) return true;
-    if ((e->state == 2) != comp_in_line(ti, h)) return true;
+    if ((e->state == 2) != comp_in_unit(ti, h)) return true;
     return e->state == 2 && (ti->c_rev != ti->rev || ti->c_pre != ti->pre_ver);
 }
 
 static void measure_line(TextInput *ti, gp_text_system *ts, size_t h) {
-    size_t ls = ti->ls[h], le = line_end(ti, h);
+    size_t ls = ti->us[h], le = unit_end(ti, h);
     gp_arena tmp = { .chunk_size = 32768 };
     float width;
-    rows_for_line(ti, ts, (uint32_t)h, ls, le, ti->rows_w, &tmp, &width);
+    rows_for_line(ti, ts, h, ti->rows_w, &tmp, &width);
     gp_arena_free(&tmp);
     LineRows *e = &ti->lr[h];
     if (e->state == 0) ti->unmeasured--;
@@ -899,7 +1348,7 @@ static void measure_line(TextInput *ti, gp_text_system *ts, size_t h) {
     size_t n = ti->nrows;
     e->rtl = ti->rows[0].rtl;
     e->pre = ti->rows[0].pre;
-    if (comp_in_line(ti, h)) {
+    if (comp_in_unit(ti, h)) {
         if (n > ti->cap_crow) {
             ti->cap_crow = n * 2;
             ti->crow = realloc(ti->crow, ti->cap_crow * sizeof *ti->crow);
@@ -927,14 +1376,14 @@ static void line_ready(TextInput *ti, gp_text_system *ts, size_t h) {
     if (line_stale(ti, h)) measure_line(ti, ts, h);
 }
 
-/* Row `sub` of a line that is ready. */
+/* Row `sub` of a unit that is ready. */
 static Row line_row(const TextInput *ti, size_t h, size_t sub) {
     const LineRows *e = &ti->lr[h];
     if (e->state == 2) return ti->crow[sub < ti->ncrow ? sub : ti->ncrow - 1];
-    size_t ls = ti->ls[h], le = line_end(ti, h);
+    size_t ls = ti->us[h], le = unit_end(ti, h);
     if (sub >= e->n) sub = e->n - 1;
     size_t s = sub ? ls + e->brk[sub - 1] : ls, en = sub + 1 < e->n ? ls + e->brk[sub] : le;
-    return (Row){ s, en, (uint32_t)h, sub + 1 < e->n, e->rtl, e->pre, 0, 0 };
+    return (Row){ s, en, ti->uh[h], sub + 1 < e->n || !unit_last(ti, h), e->rtl, e->pre, 0, 0 };
 }
 
 /* Brings the rows' bookkeeping up to date: everything is estimated again for a new width, a small document is wrapped whole, the tree is
@@ -942,13 +1391,15 @@ static Row line_row(const TextInput *ti, size_t h, size_t sub) {
 static void rows_sync(TextInput *ti, gp_text_system *ts) {
     if (!wrapping(ti) || !ti->nl) return;
     float W = ti->wrap_w;
-    if (!ti->lr_valid || ti->rows_w != W) {
+    bool fresh = !ti->lr_valid;
+    if (fresh) units_build(ti);
+    if (fresh || ti->rows_w != W) {
         ti->rows_w = W;
-        for (size_t h = 0; h < ti->nl; h++) {
-            if (ti->lr_valid) free(ti->lr[h].brk);
-            ti->lr[h] = (LineRows){ est_rows(ti, line_end(ti, h) - ti->ls[h]), 0, 0, 0, NULL };
+        for (size_t h = 0; h < ti->nu; h++) {
+            free(ti->lr[h].brk);
+            ti->lr[h] = (LineRows){ est_rows(ti, unit_end(ti, h) - ti->us[h]), 0, 0, 0, NULL };
         }
-        ti->unmeasured = ti->nl;
+        ti->unmeasured = ti->nu;
         ti->fw_valid = false;
         ti->lr_valid = true;
         ti->k_used = byte_width(ti);
@@ -958,15 +1409,15 @@ static void rows_sync(TextInput *ti, gp_text_system *ts) {
      * the lines not wrapped are estimated again, once per 10% that the width of a byte moved (so rarely: it settles). */
     if (ti->unmeasured && ti->k_bytes >= 1024 && fabs(byte_width(ti) - ti->k_used) > 0.1 * ti->k_used) {
         ti->k_used = byte_width(ti);
-        for (size_t h = 0; h < ti->nl; h++)
-            if (ti->lr[h].state == 0) ti->lr[h].n = est_rows(ti, line_end(ti, h) - ti->ls[h]);
+        for (size_t h = 0; h < ti->nu; h++)
+            if (ti->lr[h].state == 0) ti->lr[h].n = est_rows(ti, unit_end(ti, h) - ti->us[h]);
         ti->fw_valid = false;
     }
     if (ti->unmeasured && ti->len <= EAGER_WRAP_BYTES)
-        for (size_t h = 0; h < ti->nl; h++)
+        for (size_t h = 0; h < ti->nu; h++)
             if (ti->lr[h].state == 0) measure_line(ti, ts, h);
     if (!ti->fw_valid) fw_build(ti);
-    if (composing(ti)) line_ready(ti, ts, line_of(ti, ti->head));
+    if (composing(ti)) line_ready(ti, ts, unit_of(ti, ti->head));
 }
 
 /* Makes sure the lines covering rows [first, end) are wrapped. True if any was not (the rows' numbers after them may have changed). */
@@ -1008,7 +1459,7 @@ static Row row_at(TextInput *ti, gp_text_system *ts, size_t i) {
 static size_t row_of_off(TextInput *ti, gp_text_system *ts, size_t off, bool upstream) {
     if (!wrapping(ti) || !ti->nl) return ti->o.multiline && ti->nl ? line_of(ti, off) : 0;
     rows_sync(ti, ts);
-    size_t h = line_of(ti, off);
+    size_t h = unit_of(ti, off);
     line_ready(ti, ts, h);
     size_t n = ti->lr[h].n, lo = 0, hi = n;
     while (hi - lo > 1) {
@@ -1018,6 +1469,9 @@ static size_t row_of_off(TextInput *ti, gp_text_system *ts, size_t off, bool ups
     if (lo > 0 && upstream) {
         Row p = line_row(ti, h, lo - 1), c = line_row(ti, h, lo);
         if (p.soft_end && p.end == off && c.start == off) lo--;
+    } else if (lo == 0 && upstream && h > 0 && !unit_last(ti, h - 1) && ti->us[h] == off) {   /* the end of the piece before */
+        line_ready(ti, ts, h - 1);
+        return fw_prefix(ti, h) - 1;
     }
     return fw_prefix(ti, h) + lo;
 }
@@ -1027,7 +1481,7 @@ static size_t row_of_off(TextInput *ti, gp_text_system *ts, size_t off, bool ups
 static size_t caret_row(TextInput *ti, gp_text_system *ts) {
     size_t ri = row_of_off(ti, ts, ti->head, ti->upstream);
     if (!composing(ti) || !wrapping(ti)) return ri;
-    size_t h = line_of(ti, ti->head);
+    size_t h = unit_of(ti, ti->head);
     if (ti->lr[h].state != 2) return ri;
     size_t plen = strlen(ti->preedit), cb = 0;   /* the cursor's byte in the composition */
     for (int c = 0; c < ti->preedit_cursor && cb < plen; c++) { size_t n; cp_decode(ti->preedit, plen, cb, &n); cb += n; }
@@ -1046,9 +1500,22 @@ static void caret_xy(TextInput *ti, gp_text_system *ts, gp_arena *a, float *x, f
     size_t ri = caret_row(ti, ts);
     Row row = row_at(ti, ts, ri);
     Line L;
-    build_row(ti, ts, &row, true, a, &L);
+    build_row_part(ti, ts, &row, true, ti->head, ti->head, NO_X, a, &L);
     *x = L.composing ? L.pre_cursor_x : caret_x(&L, ti->head, ti->upstream);
     *y = (float)ri * line_height(ti);
+}
+
+/* Is the caret on a long row, past both the segments measured so far and x_limit? Then it is out of view to the right and its exact x is
+ * not worth measuring every segment before it (a document opened with the caret at its end): *x is the row's estimated end. */
+static bool caret_far_right(TextInput *ti, gp_text_system *ts, float x_limit, float *x, float *y) {
+    if (composing(ti)) return false;
+    size_t ri = caret_row(ti, ts);
+    Row row = row_at(ti, ts, ri);
+    Segs *S = long_segs(ti, &row);
+    if (!S || ti->head - S->ls <= S->off[S->nx] || S->x[S->nx] <= x_limit) return false;
+    *x = seg_total(ti, S);
+    *y = (float)ri * line_height(ti);
+    return true;
 }
 
 /* Where the caret would be drawn with the other affinity, if that is somewhere else: at a place where the direction changes, a caret at one offset has two
@@ -1058,7 +1525,7 @@ static bool caret_alt_xy(TextInput *ti, gp_text_system *ts, gp_arena *a, float *
     size_t ri = row_of_off(ti, ts, ti->head, ti->upstream);
     Row row = row_at(ti, ts, ri);
     Line L;
-    build_row(ti, ts, &row, false, a, &L);
+    build_row_part(ti, ts, &row, false, ti->head, ti->head, NO_X, a, &L);
     if (!L.has_rtl) return false;   /* one direction: both places are the same */
     float here = caret_x(&L, ti->head, ti->upstream), there = caret_x(&L, ti->head, !ti->upstream);
     /* the other affinity of an offset at a row's start or end (a soft wrap) is on another row: not a second caret */
@@ -1077,7 +1544,7 @@ static size_t offset_at(TextInput *ti, gp_text_system *ts, gp_arena *a, float x,
     if ((size_t)idx >= n) idx = (long)n - 1;
     Row row = row_at(ti, ts, (size_t)idx);
     Line L;
-    build_row(ti, ts, &row, true, a, &L);
+    build_row_part(ti, ts, &row, true, NO_BYTES, x, x, a, &L);
     return offset_in_line(&L, x, upstream);
 }
 
@@ -1101,6 +1568,7 @@ static void raw_replace(TextInput *ti, size_t start, size_t end, const char *ins
     ti->text[ti->len] = 0;
     ti->rev++; /* any cached rows are stale */
     lines_replace(ti, start, end, ilen);
+    segs_edit(ti, start, end, ins, ilen);
     /* the scroll anchor stays on its text: moved with it when the edit is before it, to the edit when the edit swallowed it (an edit right at
      * it, such as a line put in at the top row's start, stays in view) */
     if (ti->a_off > start) {
@@ -1425,7 +1893,7 @@ static void move_vertical(TextInput *ti, gp_ctx *cx, int lines, bool extend, flo
     } else {
         Row trow = row_at(ti, ts, (size_t)target);
         Line L;
-        build_line(ti, ts, trow.start, trow.end, false, trow.rtl, &tmp, &L);
+        build_row_part(ti, ts, &trow, false, NO_BYTES, ti->goal_x, ti->goal_x, &tmp, &L);
         pos = offset_in_line(&L, ti->goal_x, &upstream); /* upstream: stay on this row */
     }
     gp_arena_free(&tmp);
@@ -1456,7 +1924,7 @@ static bool visual_step(TextInput *ti, gp_ctx *cx, bool right, size_t *pos, bool
     Row vrow = row_at(ti, ts, ri);
     gp_arena tmp = { .chunk_size = 16384 };
     Line L;
-    build_line(ti, ts, vrow.start, vrow.end, false, vrow.rtl, &tmp, &L);
+    build_row_part(ti, ts, &vrow, false, ti->head, ti->head, NO_X, &tmp, &L);
     size_t m = L.n - 1;
     bool moved_ok = false;
     if (m > 0) {
@@ -1892,6 +2360,12 @@ static void window_for(const TextInput *ti, size_t nrows, float y, size_t *first
 /* The view moved: if what it shows is no longer well inside the rows that were built, build others. */
 static void on_scroll(void *self, gp_ctx *cx, gp_point offset, void *data) {
     TextInput *ti = self;
+    if (ti->span_built) {   /* long rows were built for some x only: still a half view inside it on both sides (or at the ends)? */
+        float vw = ti->avail_w > 0 ? ti->avail_w : 300;
+        bool left_ok = offset.x - vw / 2 >= ti->span_x0, right_ok = offset.x + vw * 1.5f <= ti->span_x1;
+        if (!left_ok || !right_ok) { gp_notify(cx); return; }
+    }
+    if (!ti->o.multiline) return;
     size_t nrows = rows_count(ti, cx->app->text), first, end;
     window_for(ti, nrows, offset.y, &first, &end);
     if (first == ti->win_first && end == ti->win_first + ti->win_n) return;
@@ -1957,37 +2431,68 @@ static gp_node *render(void *self, gp_ctx *cx) {
         KID(gp_div(gp_w(ti->max_w), gp_h(0), gp_flex_none()));
         if (first_row > 0) KID(gp_div(gp_w(1), gp_h((float)first_row * lh), gp_flex_none()));
     }
+    /* a long row is built only around the part of it in view, a view's width either side (on_scroll asks again when the view leaves that) */
+    float sx = gp_scroll_offset(cx, ti->scroll).x, vw = ti->avail_w > 0 ? ti->avail_w : 300;
+    bool any_long = false;
+    float span_lo = 0, span_hi = 0;
     for (size_t ri = first_row; ri < end_row; ri++) {
         Row rowv = row_at(ti, ts, ri);
         const Row *row = &rowv;
         Line L;
-        build_row(ti, ts, row, row->pre == 1 || ri == comp_row, &tmp, &L);   /* (a row with soft wrap's share of the composition shows it) */
+        Segs *S = build_row_part(ti, ts, row, row->pre == 1 || ri == comp_row, NO_BYTES, sx - vw, sx + 2 * vw, &tmp, &L);   /* (a row with soft wrap's share of the composition shows it) */
         float y = (float)ri * lh;
-        if (L.row_off + L.width > ti->max_w) ti->max_w = L.row_off + L.width;
+        float rw = S ? seg_total(ti, S) : L.row_off + L.width;
+        if (rw > ti->max_w) ti->max_w = rw;
+        if (S) {
+            float lo_x = L.start == row->start ? -1e30f : L.row_off, hi_x = L.end == row->end ? 1e30f : L.row_off + L.width;
+            if (!any_long || lo_x > span_lo) span_lo = lo_x;
+            if (!any_long || hi_x < span_hi) span_hi = hi_x;
+            any_long = true;
+        }
 
         if (has_sel(ti)) {
             /* the selected line break after a hard line's last row (not after a soft wrap) */
-            bool covers_break = o->multiline && !row->soft_end && hi > row->end && lo <= row->end;
+            bool covers_break = o->multiline && !row->soft_end && hi > row->end && lo <= row->end && L.end == row->end;
             Span *spans = gp_arena_alloc(&tmp, (L.n + 2) * sizeof *spans, 4);
             size_t ns = selection_spans(&L, lo, hi, covers_break ? o->font_size * 0.35f : 0, spans);
             for (size_t k = 0; k < ns; k++)
                 if (spans[k].x1 > spans[k].x0) KID(overlay(spans[k].x0, y, spans[k].x1 - spans[k].x0, lh, sel_color));
         }
-        KID(gp_text(L.disp, gp_whitespace_pre(), gp_text_size(o->font_size),
-                    gp_text_color(o->text_color), gp_flex_none(),
-                    gp_self_start(), /* natural width: a stretched line would never overflow */
-                    row->rtl ? gp_text_dir_rtl() : gp_text_dir_ltr(), /* the paragraph's direction, not re-detected per row */
-                    L.row_off > 0 ? gp_ml(L.row_off) : NULL)); /* right-to-left rows hug the right edge */
+        if (L.nseg) {   /* a part of a long row: each segment its own text, so that it is drawn exactly as it was measured */
+            gp_node **segs = gp_frame_alloc(L.nseg * sizeof *segs);
+            for (size_t k = 0; k < L.nseg; k++) {
+                size_t n = L.seg_disp[k + 1] - L.seg_disp[k];
+                char *t = gp_arena_alloc(&tmp, n + 1, 1);
+                memcpy(t, L.disp + L.seg_disp[k], n);
+                t[n] = 0;
+                /* (placed at their exact x: one after the other in a row, each text's width would be rounded up to a pixel and add up) */
+                segs[k] = gp_text(t, gp_absolute(), gp_left((float)(L.seg_x[k] - L.seg_x[0])), gp_top(0), gp_whitespace_pre(), gp_text_size(o->font_size),
+                                  gp_text_color(o->text_color));
+            }
+            KID(gp_div(gp_flex_none(), gp_self_start(), gp_ml(L.row_off), gp_w(L.width), gp_h(lh), gp_children(segs, L.nseg)));
+        } else {
+            KID(gp_text(L.disp, gp_whitespace_pre(), gp_text_size(o->font_size),
+                        gp_text_color(o->text_color), gp_flex_none(),
+                        gp_self_start(), /* natural width: a stretched line would never overflow */
+                        row->rtl ? gp_text_dir_rtl() : gp_text_dir_ltr(), /* the paragraph's direction, not re-detected per row */
+                        L.row_off > 0 ? gp_ml(L.row_off) : NULL)); /* right-to-left rows hug the right edge */
+        }
         if (L.composing && L.pre_x1 > L.pre_x0) /* underline the not-yet-committed text */
             KID(overlay(L.pre_x0, y + lh - 2, L.pre_x1 - L.pre_x0, 1.5f, o->text_color));
     }
     gp_arena_free(&tmp);
     if (windowed && end_row < nrows) KID(gp_div(gp_w(1), gp_h((float)(nrows - end_row) * lh), gp_flex_none()));
+    ti->span_built = any_long;
+    ti->span_x0 = span_lo;
+    ti->span_x1 = span_hi;
+    if (any_long) KID(gp_div(gp_w(ti->max_w), gp_h(0), gp_flex_none()));   /* (the content is as wide as the long rows, not the parts built) */
 
     float cx_, cy_;
-    gp_arena tmp2 = { .chunk_size = 16384 };
-    caret_xy(ti, ts, &tmp2, &cx_, &cy_);
-    gp_arena_free(&tmp2);
+    if (!caret_far_right(ti, ts, sx + 2 * vw, &cx_, &cy_)) {
+        gp_arena tmp2 = { .chunk_size = 16384 };
+        caret_xy(ti, ts, &tmp2, &cx_, &cy_);
+        gp_arena_free(&tmp2);
+    }
     if (focused && ti->caret_on && !has_sel(ti)) {
         KID(overlay(cx_, cy_, CARET_W, lh, o->caret_color));
         float ax, ay;
@@ -2027,7 +2532,7 @@ static gp_node *render(void *self, gp_ctx *cx) {
         gp_div(gp_track_scroll(ti->scroll), gp_w_full(), gp_h(view_h), gp_flex_none(),
                o->soft_wrap ? NULL : gp_overflow_x_scroll(), o->multiline ? gp_overflow_y_scroll() : NULL,
                o->multiline ? NULL : gp_hide_scrollbar(), gp_pr(CARET_W + 2),
-               gp_on_layout(on_scroller_layout), o->multiline ? gp_on_scroll(on_scroll) : NULL,
+               gp_on_layout(on_scroller_layout), gp_on_scroll(on_scroll),
                gp_children(kids, nk)));
 }
 
@@ -2041,10 +2546,13 @@ static void ti_drop(void *p) {
     free(ti->preedit);
     free(ti->rows);
     if (ti->lr_valid)
-        for (size_t h = 0; h < ti->nl; h++) free(ti->lr[h].brk);
+        for (size_t h = 0; h < ti->nu; h++) free(ti->lr[h].brk);
     free(ti->lr);
+    free(ti->us);
+    free(ti->uh);
     free(ti->fw);
     free(ti->crow);
+    for (int i = 0; i < NSEGS; i++) { free(ti->segs[i].off); free(ti->segs[i].w); free(ti->segs[i].x); }
     free(ti->ls);
     free(ti->lrtl);
     free((char *)ti->o.placeholder);
@@ -2204,8 +2712,9 @@ size_t gp_text_input_selection_rects(gp_app *app, gp_entity input, float (*rects
         Row rowv = row_at(ti, ts, ri);
         const Row *row = &rowv;
         Line L;
-        build_line(ti, app->text, row->start, row->end, false, row->rtl, &tmp, &L);
-        bool covers_break = ti->o.multiline && !row->soft_end && sel_hi(ti) > row->end && sel_lo(ti) <= row->end;
+        size_t b0 = sel_lo(ti) > row->start ? sel_lo(ti) : row->start, b1 = sel_hi(ti) < row->end ? sel_hi(ti) : row->end;
+        build_row_part(ti, app->text, row, false, b0, b1, NO_X, &tmp, &L);
+        bool covers_break = ti->o.multiline && !row->soft_end && sel_hi(ti) > row->end && sel_lo(ti) <= row->end && L.end == row->end;
         Span *spans = gp_arena_alloc(&tmp, (L.n + 2) * sizeof *spans, 4);
         size_t ns = selection_spans(&L, sel_lo(ti), sel_hi(ti), covers_break ? ti->o.font_size * 0.35f : 0, spans);
         for (size_t k = 0; k < ns && out < max; k++)
@@ -2260,7 +2769,7 @@ const char *gp_text_input_debug_rows(gp_app *app, gp_entity input, unsigned long
     if (!wrapping(ti) || !ti->lr_valid) return NULL;
     size_t sum = 0, unmeasured = 0;
     gp_arena tmp = { .chunk_size = 32768 };
-    for (size_t h = 0; h < ti->nl; h++) {
+    for (size_t h = 0; h < ti->nu; h++) {
         const LineRows *e = &ti->lr[h];
         if (fw_prefix(ti, h) != sum) { snprintf(why, cap, "line %zu: the tree says it starts at row %zu, the counts %zu", h, fw_prefix(ti, h), sum); gp_arena_free(&tmp); return why; }
         sum += e->n;
@@ -2268,7 +2777,7 @@ const char *gp_text_input_debug_rows(gp_app *app, gp_entity input, unsigned long
         if (e->state == 0) { unmeasured++; continue; }
         if (line_stale(ti, h)) continue;   /* (wrapped before a change of composition: it is wrapped again before it is used) */
         float width;
-        rows_for_line(ti, ts, (uint32_t)h, ti->ls[h], line_end(ti, h), ti->rows_w, &tmp, &width);
+        rows_for_line(ti, ts, h, ti->rows_w, &tmp, &width);
         gp_arena_reset(&tmp);
         if (ti->nrows != e->n) { snprintf(why, cap, "line %zu: %u rows kept, %zu made again", h, e->n, ti->nrows); gp_arena_free(&tmp); return why; }
         for (size_t i = 0; i < ti->nrows; i++) {
@@ -2281,6 +2790,18 @@ const char *gp_text_input_debug_rows(gp_app *app, gp_entity input, unsigned long
         }
     }
     gp_arena_free(&tmp);
+    /* the units: they tile the text, each line starts one, a line has pieces exactly when it is long, pieces start at cluster boundaries */
+    if (ti->nu == 0 || ti->us[0] != 0) { snprintf(why, cap, "no units, or the first does not start the text"); return why; }
+    for (size_t u = 0; u < ti->nu; u++) {
+        bool first = u == 0 || ti->uh[u] != ti->uh[u - 1];
+        if (u > 0 && (ti->us[u] <= ti->us[u - 1] || ti->uh[u] != ti->uh[u - 1] + (first ? 1 : 0))) { snprintf(why, cap, "unit %zu (line %u at %zu) does not follow unit %zu (line %u at %zu)", u, ti->uh[u], ti->us[u], u - 1, ti->uh[u - 1], ti->us[u - 1]); return why; }
+        size_t h = ti->uh[u], ll = line_end(ti, h) - ti->ls[h];
+        if (first && ti->us[u] != ti->ls[h]) { snprintf(why, cap, "unit %zu starts line %zu at %zu, the line starts at %zu", u, h, ti->us[u], ti->ls[h]); return why; }
+        if (!first && (ti->us[u] >= line_end(ti, h) || snap_cluster(ti, ti->us[u]) != ti->us[u])) { snprintf(why, cap, "piece %zu of line %zu starts at %zu: not inside the line at a cluster boundary", u, h, ti->us[u]); return why; }
+        if (first && (ll > LONG_WRAP_BYTES) == unit_last(ti, u)) { snprintf(why, cap, "line %zu (%zu bytes) is %s", h, ll, ll > LONG_WRAP_BYTES ? "long but one unit" : "short but in pieces"); return why; }
+        if (unit_end(ti, u) - ti->us[u] > 2 * PIECE_BYTES && !unit_last(ti, u)) { snprintf(why, cap, "piece %zu is %zu bytes", u, unit_end(ti, u) - ti->us[u]); return why; }
+    }
+    if (ti->uh[ti->nu - 1] + 1 != ti->nl) { snprintf(why, cap, "the units end at line %u, there are %zu lines", ti->uh[ti->nu - 1], ti->nl); return why; }
     if (sum != ti->total_rows) { snprintf(why, cap, "%zu rows in total, the lines add up to %zu", ti->total_rows, sum); return why; }
     if (unmeasured != ti->unmeasured) { snprintf(why, cap, "%zu lines not wrapped, counted %zu", unmeasured, ti->unmeasured); return why; }
     return NULL;
@@ -2291,7 +2812,75 @@ void gp_text_input_debug_wrap_all(gp_app *app, gp_entity input) {
     TextInput *ti = ti_get(app, input);
     if (!ti || !wrapping(ti) || !ti->nl) return;
     rows_sync(ti, app->text);
-    for (size_t h = 0; h < ti->nl; h++) line_ready(ti, app->text, h);
+    for (size_t h = 0; h < ti->nu; h++) line_ready(ti, app->text, h);
+}
+
+/* Tests: the selection set directly (the caret downstream), revealed or not. */
+void gp_text_input_debug_select(gp_app *app, gp_entity input, size_t anchor, size_t head, bool reveal) {
+    TextInput *ti = ti_get(app, input);
+    if (!ti) return;
+    gp_ctx cx = gp_ctx_for(app, input);
+    ti->anchor = anchor > ti->len ? ti->len : anchor;
+    ti->head = head > ti->len ? ti->len : head;
+    ti->upstream = false;
+    ti->has_goal = false;
+    if (reveal) moved(ti, &cx);
+    else gp_notify(&cx);
+}
+
+/* Tests: the segments of the long rows kept (all of them, measured or not), and how many are measured. */
+size_t gp_text_input_debug_segments(gp_app *app, gp_entity input, size_t *measured) {
+    TextInput *ti = ti_get(app, input);
+    size_t n = 0, m = 0;
+    for (int i = 0; ti && i < NSEGS; i++)
+        if (ti->segs[i].live) {
+            n += ti->segs[i].n;
+            for (size_t k = 0; k < ti->segs[i].n; k++) m += ti->segs[i].w[k] >= 0;
+        }
+    if (measured) *measured = m;
+    return n;
+}
+
+/* Tests: every long row's segments kept: a whole row of the text, cut at cluster boundaries, the widths measured those of the segments
+ * measured again, the left edges their sums. NULL if so. *bounds gets (up to cap) the boundaries of the row holding `off`, if one is kept. */
+const char *gp_text_input_debug_segs_check(gp_app *app, gp_entity input, size_t off, size_t *bounds, size_t cap, size_t *nb, char *why, size_t wcap) {
+    TextInput *ti = ti_get(app, input);
+    if (nb) *nb = 0;
+    if (!ti) { snprintf(why, wcap, "no such input"); return why; }
+    for (int i = 0; i < NSEGS; i++) {
+        Segs *S = &ti->segs[i];
+        if (!S->live) continue;
+        bool row = S->le <= ti->len && S->ls <= S->le && (S->ls == 0 || ti->text[S->ls - 1] == '\n') && (S->le == ti->len || ti->text[S->le] == '\n');
+        if (!row || memchr(ti->text + S->ls, '\n', S->le - S->ls)) { snprintf(why, wcap, "segments kept for [%zu, %zu), not a line of the text", S->ls, S->le); return why; }
+        if (S->off[0] != 0 || S->off[S->n] != S->le - S->ls) { snprintf(why, wcap, "segments of [%zu, %zu) cover [%zu, %zu)", S->ls, S->le, S->ls + S->off[0], S->ls + S->off[S->n]); return why; }
+        double x = 0;
+        for (size_t k = 0; k < S->n; k++) {
+            size_t b = S->ls + S->off[k];
+            if (S->off[k + 1] <= S->off[k] || snap_cluster(ti, b) != b) { snprintf(why, wcap, "segment %zu of [%zu, %zu) starts at %zu: not a cluster boundary after the one before", k, S->ls, S->le, b); return why; }
+            if (k <= S->nx && fabs(S->x[k] - x) > 1e-6 * (1 + fabs(x))) { snprintf(why, wcap, "segment %zu's left edge %.3f, the widths before it add up to %.3f", k, S->x[k], x); return why; }
+            if (S->w[k] >= 0) {
+                float kept = S->w[k];
+                seg_measure(ti, app->text, S, k);
+                if (S->w[k] != kept) { snprintf(why, wcap, "segment %zu of [%zu, %zu): width %.3f kept, %.3f measured", k, S->ls, S->le, kept, S->w[k]); return why; }
+                x += S->w[k];
+            } else if (k < S->nx) {
+                snprintf(why, wcap, "segment %zu is not measured, but %zu are", k, S->nx);
+                return why;
+            }
+        }
+        if (bounds && off >= S->ls && off <= S->le)
+            for (size_t k = 0; k <= S->n; k++) { if (k < cap) bounds[k] = S->ls + S->off[k]; if (nb) *nb = k + 1; }
+    }
+    return NULL;
+}
+
+/* Tests: where the units of a wrapped field start (up to cap of them); returns how many there are. */
+size_t gp_text_input_debug_units(gp_app *app, gp_entity input, size_t *starts, size_t cap) {
+    TextInput *ti = ti_get(app, input);
+    if (!ti || !wrapping(ti)) return 0;
+    rows_sync(ti, app->text);
+    for (size_t u = 0; u < ti->nu && u < cap; u++) starts[u] = ti->us[u];
+    return ti->nu;
 }
 
 /* Tests: the row a caret at `off` is on (as far as the rows are known), and scrolling the field from outside. */

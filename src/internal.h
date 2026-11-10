@@ -641,6 +641,10 @@ const char *gp_text_input_debug_rows(gp_app *app, gp_entity input, unsigned long
 void gp_text_input_debug_wrap_all(gp_app *app, gp_entity input);   /* tests: wraps every line of a soft-wrapped field */
 size_t gp_text_input_debug_row_of(gp_app *app, gp_entity input, size_t off, bool upstream);   /* tests */
 void gp_text_input_debug_scroll_to(gp_app *app, gp_entity input, float y);   /* tests: as the wheel or a scrollbar would */
+void gp_text_input_debug_select(gp_app *app, gp_entity input, size_t anchor, size_t head, bool reveal);   /* tests */
+size_t gp_text_input_debug_segments(gp_app *app, gp_entity input, size_t *measured);   /* tests: segments of the long rows kept, and measured */
+const char *gp_text_input_debug_segs_check(gp_app *app, gp_entity input, size_t off, size_t *bounds, size_t cap, size_t *nb, char *why, size_t wcap);   /* tests: the long rows' segments */
+size_t gp_text_input_debug_units(gp_app *app, gp_entity input, size_t *starts, size_t cap);   /* tests: where the units of a wrapped field start */
 size_t gp_text_input_debug_unwrapped(gp_app *app, gp_entity input, size_t *lines);   /* tests: lines whose row counts are estimates */
 void gp_scroll_notify(gp_window *w, gp_el *n);   /* calls the element's gp_on_scroll handler with its offset (base included), if it has one */
 void gp_scroll_track_repeat(gp_window *w);    /* before painting: pages again if the button is still held on a track and it is time */

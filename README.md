@@ -106,7 +106,7 @@ animations can be sampled. The screenshot otherwise waits for the script to drai
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
 and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
 awaits: pipes, sockets, a TCP echo through coroutines, closing and cancelling at awkward moments),
-`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
+`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
 widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-height list, checked
 against a model), `tests/text_test.c` (fonts and shaping, against the fonts actually installed) and
 `tests/vlist_test.c` (the row-height index against a brute-force model). The first three need a
@@ -1206,9 +1206,25 @@ a typed character at the end reaches the screen in ~25 ms, and selecting all, de
   line is not known cannot have its horizontal bar's size right without reading every line.
 * **Soft wrap is lazy too** (see "Soft wrap"): only the lines around the view are wrapped, the rest are estimated, and the view is anchored to
   text so that correcting an estimate never moves what is on screen.
+* **Very long lines** (a minified file, a log line). Without wrap, a left-to-right row longer than 8 KB is never shaped whole: it is cut into
+  *segments* of about 2 KB at cluster boundaries (just after a space when there is one within 96 bytes), each shaped on its own, and their
+  widths, measured once and from the left only as far as something needs, say where each starts. Drawing builds only the segments within a
+  view's width of what is shown (each drawn as its own text element at its exact x, so what is drawn is what was measured), and the caret, a
+  click, Up/Down, visual movement and the selection's rectangles build only the segments around the place they concern; scrolling sideways
+  past half a view rebuilds (through `gp_on_scroll`, now on single-line fields too). An edit cuts again only the segments it touched and keeps
+  the widths of the others; a composition in the row pushes the segments after it by its width. The content's width is the measured part plus
+  the rest estimated from it. A row whose caret is far right of anything measured (a document opened with the caret at its end) is not measured
+  to draw a caret that is out of view. With soft wrap, a line longer than 64 KB is wrapped in *pieces* of about 32 KB, each wrapped as if it were a
+  line (lazily, like lines, and an edit in it wraps again only the piece it is in, ~10 ms); the cost is that a row ends where a piece does, a
+  slightly short row once every ~32 KB, which is a soft break like any other (End at it stays on its row). Measured on a 10 MB line: without
+  wrap it opens in ~20 ms (was ~1.2 s) and a frame, a key or a caret move takes 3-7 ms (was ~0.7 s a frame: the whole line was shaped and laid
+  out for every caret blink); with soft wrap it opens in ~22 ms and a typed character costs ~9 ms (both were ~1.9 s). What is left: the first
+  time something needs the far end of an unwrapped long row (End, a click there, the caret's position), every segment before it is shaped,
+  ~65 ms a MB, once; segments are not kerned or ligated across their boundary; right-to-left long rows are built whole (bidi reorders across the
+  paragraph). The text system now adds glyph advances in double: in float, a run of tens of thousands of glyphs drifted by pixels.
 * **What is still whole-document:** `gp_text_input_selection_rects` is bounded by the rows the selection reaches, but of course for a
   whole-document selection that is all of them (pass a `max`); undo keeps copies of what was replaced, so deleting 14 MB keeps 14 MB
-  (the stack is 500 edits deep at most); and a **single very long line** (a minified file) is shaped whole every time it is drawn.
+  (the stack is 500 edits deep at most).
   Positions are floats: past ~16 million pixels of height (about 850,000 lines at the default size) rows are placed to the nearest 2 px.
 * **Tests:** `tests/bigdoc_test.c`. The line index is checked against a rescan of the text after thousands of random edits (inserts of
   line breaks, right-to-left text and multi-byte characters, deletions that join several lines) in a field without wrap and in one with
@@ -1226,7 +1242,7 @@ a typed character at the end reaches the screen in ~25 ms, and selecting all, de
   the caret stops of a laid-out row); `tools/gen_grapheme.py` makes the Unicode tables (`src/grapheme_data.h`) and the strings. The shaping of
   such text into the right glyphs is HarfBuzz's, and needs a font with the script.
 
-Limits of the widget as a whole, stated plainly: very long single lines are not virtualized (see above); no
+Limits of the widget as a whole, stated plainly: a long right-to-left line is shaped whole (see "Very long lines"); no
 text drag-and-drop.
 The IME path is verified up to the widget with simulated composition events; there was no real
 input method available to try it against.
@@ -1543,13 +1559,12 @@ mouse move/hover ─────────────────────
 
 Roughly in the order I'd tackle them:
 
-1. Very long single lines in the editor (a minified file): such a line is shaped whole whenever it is drawn or wrapped, with or without soft wrap (large documents of ordinary lines are done, wrapped or not).
-2. SVG / COLRv1 emoji fonts (FreeType gives the paint graph, it would need an interpreter with gradients, transforms and blend modes of its own).
-3. SVG patterns, markers and `textPath`; the rest of the filter primitives (turbulence, lighting, morphology, convolution, displacement, component transfer) and the filter region.
-4. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux).
-5. A view with a scroller under the mouse is painted in full every frame (hover and scrollbars are evaluated, not cached), and a cached view that holds a scroller, a list or an overflow clip is
+1. SVG / COLRv1 emoji fonts (FreeType gives the paint graph, it would need an interpreter with gradients, transforms and blend modes of its own).
+2. SVG patterns, markers and `textPath`; the rest of the filter primitives (turbulence, lighting, morphology, convolution, displacement, component transfer) and the filter region.
+3. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux).
+4. A view with a scroller under the mouse is painted in full every frame (hover and scrollbars are evaluated, not cached), and a cached view that holds a scroller, a list or an overflow clip is
    painted in full when it or its scroller moves (their clip moves with them: only views without one are moved, see "Transforms" and `tests/paintshift_test.c`). The scene is still
    re-uploaded and drawn as a whole every frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
-6. Native Wayland/X11 and Vulkan backends; multi-window polish.
-7. Stroked curves have no dashes, gradients along the stroke, arrowheads, fills or text on a path, and a translucent stroke blends twice where it crosses itself (see "Stroked curves").
-8. State styles cannot change text color or anything that lays out; transforms have no skew or 3D, and a scroller inside a transformed element does not follow the matrix for the wheel and its thumb.
+5. Native Wayland/X11 and Vulkan backends; multi-window polish.
+6. Stroked curves have no dashes, gradients along the stroke, arrowheads, fills or text on a path, and a translucent stroke blends twice where it crosses itself (see "Stroked curves").
+7. State styles cannot change text color or anything that lays out; transforms have no skew or 3D, and a scroller inside a transformed element does not follow the matrix for the wheel and its thumb.
