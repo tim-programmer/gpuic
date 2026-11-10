@@ -535,7 +535,11 @@ void gp_image_premultiply(uint8_t *rgba, size_t pixels);
 /* ---------------------------------------------------------------- scene / renderer */
 
 enum { GP_PRIM_QUAD = 0, GP_PRIM_SHADOW = 1, GP_PRIM_GLYPH = 2, GP_PRIM_COLOR_GLYPH = 3, GP_PRIM_LCD_GLYPH = 4,
-       GP_PRIM_LINEAR_GRADIENT = 5, GP_PRIM_RADIAL_GRADIENT = 6, GP_PRIM_IMAGE = 7, GP_PRIM_CONIC_GRADIENT = 8, GP_PRIM_SEGMENT = 9, GP_PRIM_TRIANGLE = 10 };
+       GP_PRIM_LINEAR_GRADIENT = 5, GP_PRIM_RADIAL_GRADIENT = 6, GP_PRIM_IMAGE = 7, GP_PRIM_CONIC_GRADIENT = 8, GP_PRIM_SEGMENT = 9, GP_PRIM_TRIANGLE = 10,
+       /* offscreen layers: BEGIN starts drawing into a texture of its own (bounds: the region of it that is cleared), END puts that region of it on what
+        * is under it at color.a (and is the quad that does it); they nest, at most GP_MAX_LAYERS deep */
+       GP_PRIM_LAYER_BEGIN = 11, GP_PRIM_LAYER_END = 12 };
+#define GP_MAX_LAYERS 8
 
 typedef struct {
     float bounds[4];       /* x y w h, logical px */

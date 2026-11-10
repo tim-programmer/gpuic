@@ -446,7 +446,7 @@ static void test_frame_caches(void) {
     win()->dirty_render = true;
     settle();
 
-    /* a parent that starts to fade the view: the layout is the same, the painting is not */
+    /* a parent that starts to fade the view: the layout is the same, and so is what the view paints (into the parent's layer) */
     V(0)->child_opacity = 0.9f;                     /* the kids now sit in a wrapper: that is a change of layout once */
     notify_view(0);
     settle();
@@ -456,7 +456,9 @@ static void test_frame_caches(void) {
     let_frame_pass();
     c1 = counters();
     CHECK(c1.skips - c0.skips >= 1, "a parent's opacity change re-laid-out cached views that did not change size");
-    CHECK(c1.hits == c0.hits, "a parent's opacity change reused %lu painted subtrees that were drawn at full opacity", c1.hits - c0.hits);
+    /* (the parent fades as a group: the kids are drawn into its layer as they were, at full opacity, so what they painted is used again) */
+    CHECK(c1.hits > c0.hits && c1.misses == c0.misses, "a parent's opacity change reused %lu painted subtrees and made %lu: the kids are the same in its layer",
+          c1.hits - c0.hits, c1.misses - c0.misses);
     verify_frame();
     V(0)->child_opacity = 0;
     notify_view(0);

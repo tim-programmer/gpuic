@@ -54,6 +54,13 @@
     X(glUniform1i)                                                    \
     X(glUniform2f)                                                    \
     X(glGenerateMipmap)                                                 \
+    X(glGenFramebuffers)                                                \
+    X(glDeleteFramebuffers)                                             \
+    X(glBindFramebuffer)                                                \
+    X(glFramebufferTexture2D)                                           \
+    X(glCheckFramebufferStatus)                                         \
+    X(glScissor)                                                        \
+    X(glDisable)                                                        \
     X(glDrawArraysInstanced)
 
 /* The headers declare these as prototypes; calls go through `gl.name` instead. */
@@ -119,6 +126,7 @@ static const char *fs_src =
     "uniform sampler2D u_lcd_atlas;\n"
     "uniform sampler2D u_ramps;\n"
     "uniform sampler2D u_image;\n"
+    "uniform sampler2D u_layer;\n"
     "layout(location = 0, index = 0) out vec4 frag;\n"
     "layout(location = 0, index = 1) out vec4 frag_cov;\n" /* what each channel of the destination keeps: 1 - this */
     "float sd_rounded(vec2 p, vec2 half_size, vec4 r4) {\n"
@@ -230,6 +238,8 @@ static const char *fs_src =
     "      else if (d > 0.0 || abs(dot(p - (a + b) * 0.5, e / le)) <= le * 0.5) cov = min(cov, clamp(0.5 - d * us, 0.0, 1.0));\n" /* (inside, the edge's line past its ends is not the outline: another piece's edge is) */
     "    }\n"
     "    frag = premul(v_color) * cov;\n"
+    "  } else if (kind == 12.0) {\n" /* the end of a layer: its texture, which is the window's size, at this very pixel, at the layer's opacity */
+    "    frag = texelFetch(u_layer, ivec2(gl_FragCoord.xy), 0) * v_color.a;\n"
     "  } else if (kind == 1.0) {\n"
     "    float sigma = max(v_params.z * 0.5, 0.001);\n"
     "    float d = sd_rounded(v_local, half_size, v_radii);\n"
@@ -296,8 +306,11 @@ static const char *fs_src =
 
 struct gp_renderer {
     GLuint prog, vao, vbo, atlas, color_atlas, lcd_atlas, ramps;
-    GLint u_viewport, u_scale, u_gamma, u_atlas, u_color_atlas, u_lcd_atlas, u_ramps, u_image;
+    GLint u_viewport, u_scale, u_gamma, u_atlas, u_color_atlas, u_lcd_atlas, u_ramps, u_image, u_layer;
     size_t vbo_cap;
+    /* offscreen layers, one per depth, each the window's size (made when first needed, again when the window's size changes) */
+    struct { GLuint fbo, tex; } layers[GP_MAX_LAYERS];
+    int layer_w, layer_h;
 };
 
 static GLuint compile(GLenum type, const char *src) {
@@ -348,6 +361,7 @@ gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
     r->u_lcd_atlas = gl.glGetUniformLocation(r->prog, "u_lcd_atlas");
     r->u_ramps = gl.glGetUniformLocation(r->prog, "u_ramps");
     r->u_image = gl.glGetUniformLocation(r->prog, "u_image");
+    r->u_layer = gl.glGetUniformLocation(r->prog, "u_layer");
 
     gl.glGenVertexArrays(1, &r->vao);
     gl.glBindVertexArray(r->vao);
@@ -411,6 +425,10 @@ void gp_renderer_free(gp_renderer *r, gp_gfx *gfx) {
         uint32_t dead[64];
         while (gfx && (n = gp_gfx_take_dead_textures(gfx, dead, 64)) > 0) gl.glDeleteTextures((GLsizei)n, dead);
     }
+    for (int i = 0; i < GP_MAX_LAYERS; i++) {
+        if (r->layers[i].fbo) gl.glDeleteFramebuffers(1, &r->layers[i].fbo);
+        if (r->layers[i].tex) gl.glDeleteTextures(1, &r->layers[i].tex);
+    }
     gl.glDeleteProgram(r->prog);
     gl.glDeleteBuffers(1, &r->vbo);
     gl.glDeleteVertexArrays(1, &r->vao);
@@ -429,6 +447,45 @@ static void draw_run(gp_renderer *r, const gp_scene *scene, size_t first, size_t
                                  (const void *)(uintptr_t)(first * sizeof(gp_instance) + a * 4 * sizeof(float)));
     gl.glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, (GLsizei)count);
     (void)r;
+}
+
+/* The layer for depth d, the size of the window: made when first needed; all of them made again when the window's size changed. */
+static bool layer_target(gp_renderer *r, int d, int px_w, int px_h) {
+    if (r->layer_w != px_w || r->layer_h != px_h) {
+        for (int i = 0; i < GP_MAX_LAYERS; i++) {
+            if (r->layers[i].fbo) gl.glDeleteFramebuffers(1, &r->layers[i].fbo);
+            if (r->layers[i].tex) gl.glDeleteTextures(1, &r->layers[i].tex);
+            r->layers[i].fbo = r->layers[i].tex = 0;
+        }
+        r->layer_w = px_w;
+        r->layer_h = px_h;
+    }
+    if (r->layers[d].fbo) return true;
+    GLuint tex, fbo;
+    gl.glGenTextures(1, &tex);
+    gl.glActiveTexture(GL_TEXTURE5);
+    gl.glBindTexture(GL_TEXTURE_2D, tex);
+    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, px_w, px_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl.glBindTexture(GL_TEXTURE_2D, 0);
+    gl.glActiveTexture(GL_TEXTURE0);
+    gl.glGenFramebuffers(1, &fbo);
+    gl.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    bool ok = gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (!ok) {
+        static bool warned;
+        if (!warned) { warned = true; fprintf(stderr, "gpuic: an offscreen layer could not be made: layers are drawn straight onto the window\n"); }
+        gl.glDeleteFramebuffers(1, &fbo);
+        gl.glDeleteTextures(1, &tex);
+        return false;
+    }
+    r->layers[d].fbo = fbo;
+    r->layers[d].tex = tex;
+    return true;
 }
 
 /* The texture of an image, made when it is first drawn: its pixels, with mipmaps for when it is shown smaller. */
@@ -518,19 +575,61 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
     gl.glUniform1i(r->u_lcd_atlas, 2);
     gl.glUniform1i(r->u_ramps, 3);
     gl.glUniform1i(r->u_image, 4);
+    gl.glUniform1i(r->u_layer, 5);
 
     gl.glBindVertexArray(r->vao);
     gl.glBindBuffer(GL_ARRAY_BUFFER, r->vbo);
     size_t bytes = scene->len * sizeof(gp_instance);
     gl.glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)bytes, NULL, GL_STREAM_DRAW); /* orphan */
     gl.glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)bytes, scene->items, GL_STREAM_DRAW);
-    /* Everything but images is one instanced draw. An image has a texture of its own, so it splits the scene: the run
-     * before it, then the image alone, then on. Order is kept, which is what painting needs. */
+    /* Everything but images and layers is one instanced draw. An image has a texture of its own, so it splits the scene: the run
+     * before it, then the image alone, then on. A layer's BEGIN sends what follows into the layer's texture (only its region cleared), and its END
+     * goes back to where it was and composites the region (the END is that quad). Order is kept, which is what painting needs. */
     gp_gfx *gfx = gp_text_gfx(ts);
     size_t run = 0;
+    int depth = 0;       /* layers open */
+    int skipped = 0;     /* ... of which these could not be made, inside the open ones: drawn straight on what is under them */
     for (size_t i = 0; i < scene->len; i++) {
         const gp_instance *in = &scene->items[i];
-        if ((int)in->kind != GP_PRIM_IMAGE) continue;
+        int kind = (int)in->kind;
+        if (kind == GP_PRIM_LAYER_BEGIN) {
+            if (i > run) draw_run(r, scene, run, i - run);
+            run = i + 1;
+            if (skipped || depth >= GP_MAX_LAYERS || !layer_target(r, depth, px_w, px_h)) { skipped++; continue; }
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, r->layers[depth].fbo);
+            int x0 = (int)floorf(in->bounds[0] * scale + 0.5f), x1 = (int)floorf((in->bounds[0] + in->bounds[2]) * scale + 0.5f);
+            int y0 = (int)floorf(in->bounds[1] * scale + 0.5f), y1 = (int)floorf((in->bounds[1] + in->bounds[3]) * scale + 0.5f);
+            if (x0 < 0) x0 = 0;
+            if (y0 < 0) y0 = 0;
+            if (x1 > px_w) x1 = px_w;
+            if (y1 > px_h) y1 = px_h;
+            if (x1 > x0 && y1 > y0) {
+                gl.glEnable(GL_SCISSOR_TEST);
+                gl.glScissor(x0, px_h - y1, x1 - x0, y1 - y0);   /* (GL counts rows from the bottom) */
+                gl.glClearColor(0, 0, 0, 0);
+                gl.glClear(GL_COLOR_BUFFER_BIT);
+                gl.glDisable(GL_SCISSOR_TEST);
+            }
+            depth++;
+            continue;
+        }
+        if (kind == GP_PRIM_LAYER_END) {
+            if (i > run) draw_run(r, scene, run, i - run);
+            run = i + 1;
+            if (skipped) { skipped--; continue; }
+            if (!depth) continue;
+            depth--;
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, depth ? r->layers[depth - 1].fbo : 0);
+            gl.glActiveTexture(GL_TEXTURE5);
+            gl.glBindTexture(GL_TEXTURE_2D, r->layers[depth].tex);
+            gl.glActiveTexture(GL_TEXTURE0);
+            draw_run(r, scene, i, 1);
+            gl.glActiveTexture(GL_TEXTURE5);
+            gl.glBindTexture(GL_TEXTURE_2D, 0);   /* (not bound while it is drawn into again) */
+            gl.glActiveTexture(GL_TEXTURE0);
+            continue;
+        }
+        if (kind != GP_PRIM_IMAGE) continue;
         gp_gfx_image *im = gp_gfx_image_get(gfx, (uint32_t)in->_pad, (uint32_t)in->border_color[0]);
         if (!im) continue;   /* released since it was painted: nothing to draw (the next frame has no instance) */
         if (i > run) draw_run(r, scene, run, i - run);
@@ -543,6 +642,7 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
         run = i + 1;
     }
     if (scene->len > run) draw_run(r, scene, run, scene->len - run);
+    if (depth) gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);   /* (a scene whose layers do not close: what was in them is lost, the window is what is shown) */
 }
 
 uint8_t *gp_renderer_read_pixels(int px_w, int px_h) {

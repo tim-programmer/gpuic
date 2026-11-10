@@ -1066,6 +1066,9 @@ gp_node *gp_border_x(float px);      /* left and right */
 gp_node *gp_border_y(float px);      /* top and bottom */
 gp_node *gp_rounded_full(void);
 gp_node *gp_shadow(float dx, float dy, float blur, gp_color c);
+/* Fades the element and everything in it as one thing, as CSS's opacity does: what it paints is drawn into an offscreen layer that is put down at `o`, so a
+ * child over its parent's background shows the child faded, not the two mixed. An element with only one thing to paint (a box, a line of text) needs no layer and takes
+ * none. Text inside a layer is antialiased in gray (LCD stripes need what is under them). Layers nest 8 deep; deeper ones are faded piece by piece. */
 gp_node *gp_opacity(float o);
 
 gp_node *gp_hover_bg(gp_color c);

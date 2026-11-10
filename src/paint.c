@@ -20,6 +20,10 @@ typedef struct {
     uint32_t vis_gen;     /* the window's scroll_vis_gen: auto-hiding scrollbars changed */
     gp_color tc;          /* with has_tc: the text color a state style above set, for everything below that does not set its own */
     bool has_tc;
+    /* offscreen layers open now (gp_paint_layer_begin): where each one's BEGIN is in the scene, and the box on screen of what was painted into it so far */
+    int depth;
+    size_t lbegin[GP_MAX_LAYERS];
+    float lbox[GP_MAX_LAYERS][4];
 } paint_ctx;
 
 void gp_scene_push(gp_scene *s, const gp_instance *i) {
@@ -83,6 +87,76 @@ static bool aff_rect(gp_affine m, rect r, rect *out) {
     return true;
 }
 
+/* ---------------------------------------------------------------- layers */
+
+/* Where an instance can draw on screen (logical px), conservatively: its quad grown by what the shader adds around it (a shadow's blur, a pixel of
+ * antialiasing), through its transform, cut to its clip. An open layer's box is the union of these, and only that much of it is cleared and composited. */
+static void inst_screen_box(const gp_instance *in, float out[4]) {
+    if ((int)in->kind == GP_PRIM_LAYER_END) {   /* (a layer inside: its region, which already is on screen) */
+        set4(out, in->bounds[0], in->bounds[1], in->bounds[0] + in->bounds[2], in->bounds[1] + in->bounds[3]);
+        return;
+    }
+    float m = (int)in->kind == GP_PRIM_SHADOW ? in->blur * 1.5f + 2.f : 2.f;
+    float x0 = in->bounds[0] - m, y0 = in->bounds[1] - m, x1 = in->bounds[0] + in->bounds[2] + m, y1 = in->bounds[1] + in->bounds[3] + m;
+    float a = 1.f + in->xf0[0], b = in->xf0[1], c = in->xf0[2], d = 1.f + in->xf0[3], tx = in->xf1[0], ty = in->xf1[1];
+    float xs[4] = { x0, x1, x0, x1 }, ys[4] = { y0, y0, y1, y1 };
+    float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
+    for (int i = 0; i < 4; i++) {
+        float X = a * xs[i] + c * ys[i] + tx, Y = b * xs[i] + d * ys[i] + ty;
+        bx0 = fminf(bx0, X); by0 = fminf(by0, Y); bx1 = fmaxf(bx1, X); by1 = fmaxf(by1, Y);
+    }
+    set4(out, fmaxf(bx0, in->clip[0]), fmaxf(by0, in->clip[1]), fminf(bx1, in->clip[0] + in->clip[2]), fminf(by1, in->clip[1] + in->clip[3]));
+}
+
+/* an instance put in the scene: what it covers goes into the box of the innermost open layer */
+static void scene_add(paint_ctx *pc, const gp_instance *in) {
+    gp_scene_push(pc->scene, in);
+    if (!pc->depth || (int)in->kind == GP_PRIM_LAYER_BEGIN) return;
+    float b[4];
+    inst_screen_box(in, b);
+    if (!(b[2] > b[0] && b[3] > b[1])) return;
+    float *L = pc->lbox[pc->depth - 1];
+    L[0] = fminf(L[0], b[0]); L[1] = fminf(L[1], b[1]); L[2] = fmaxf(L[2], b[2]); L[3] = fmaxf(L[3], b[3]);
+}
+
+/* Opens a layer: what is painted until the matching end goes into a texture of its own, which is then put on what is under it at once (with an
+ * opacity: a group fades as one thing, and a translucent stroke that crosses itself is not darker where it does). False when too many are open:
+ * the caller paints as it would without one. */
+static bool layer_begin(paint_ctx *pc) {
+    if (pc->depth >= GP_MAX_LAYERS) return false;
+    gp_instance in = { 0 };
+    in.kind = GP_PRIM_LAYER_BEGIN;
+    pc->lbegin[pc->depth] = pc->scene->len;
+    gp_scene_push(pc->scene, &in);   /* (its region is known at the end) */
+    set4(pc->lbox[pc->depth], 1e30f, 1e30f, -1e30f, -1e30f);
+    pc->depth++;
+    return true;
+}
+
+/* Closes it: the region (the box of what was painted, out to whole device pixels) goes on both markers, and the end is the quad that composites
+ * the texture at `alpha`. A layer nothing was painted into is taken out. */
+static void layer_end(paint_ctx *pc, float alpha) {
+    pc->depth--;
+    size_t at = pc->lbegin[pc->depth];
+    const float *L = pc->lbox[pc->depth];
+    if (pc->scene->len == at + 1 || !(L[2] > L[0] && L[3] > L[1]) || alpha <= 0.f) {
+        pc->scene->len = at;
+        return;
+    }
+    float s = pc->scale, lim = 1e6f;
+    float x0 = floorf(fmaxf(L[0], -lim) * s) / s, y0 = floorf(fmaxf(L[1], -lim) * s) / s;
+    float x1 = ceilf(fminf(L[2], lim) * s) / s, y1 = ceilf(fminf(L[3], lim) * s) / s;
+    gp_instance *b = &pc->scene->items[at];
+    set4(b->bounds, x0, y0, x1 - x0, y1 - y0);
+    memcpy(b->clip, b->bounds, sizeof b->clip);
+    gp_instance e = { 0 };
+    e.kind = GP_PRIM_LAYER_END;
+    memcpy(e.bounds, b->bounds, sizeof e.bounds);
+    memcpy(e.clip, b->bounds, sizeof e.clip);
+    set4(e.color, 1.f, 1.f, 1.f, fminf(alpha, 1.f));
+    scene_add(pc, &e);
+}
+
 /* every instance carries the transform it was painted under (all zeros: none) */
 static void push(paint_ctx *pc, gp_instance *inst) {
     if (pc->has_xf) {
@@ -91,7 +165,7 @@ static void push(paint_ctx *pc, gp_instance *inst) {
         inst->xf0[0] = m->a - 1.f; inst->xf0[1] = m->b; inst->xf0[2] = m->c; inst->xf0[3] = m->d - 1.f;
         inst->xf1[0] = m->tx; inst->xf1[1] = m->ty; inst->xf1[2] = mag - 1.f; inst->xf1[3] = 0.f;
     }
-    gp_scene_push(pc->scene, inst);
+    scene_add(pc, inst);
 }
 
 /* ---------------------------------------------------------------- stroked curves */
@@ -285,6 +359,14 @@ static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, fl
             if (row >= 0) { sp.row = row; sp.grad = grad; }
             else sp.color = grad->stops[0].color;   /* the ramp table is full: repainted after it is cleared */
         }
+        /* A translucent stroke is drawn opaque into a layer that is put down at its alpha: where it crosses itself (or a dash meets the next, or the
+         * head its stroke) it is no darker. A gradient's own alpha stays in its colors (the layer takes only the opacity). */
+        float layer_alpha = 1.f;
+        if ((sp.grad ? opacity : color.a * opacity) < 1.f && layer_begin(pc)) {
+            layer_alpha = sp.grad ? opacity : color.a * opacity;
+            sp.color.a = sp.grad ? sp.color.a : 1.f;
+            sp.opacity = 1.f;
+        }
         const bool miter = s->stroke_join == 1 && n->curve_kind == 1;
         gp_point tri[2][3], cutn[2];
         float cut[2] = { 0.f, arc[m - 1] };
@@ -330,8 +412,9 @@ static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, fl
         for (int e = 0; e < 2; e++)
             if (head[e]) {
                 const int8_t ed[3] = { 0, (int8_t)(e ? -2 : 2), 0 };   /* tip to corner, the base (shared with the stroke: at the start a pixel on the line is the head's, at the end the stroke's), corner to tip */
-                push_triangle(pc, tri[e], ed, hw, x, y, clip, sp.grad ? ramp_at(sp.grad, (float)e) : sp.color, opacity);
+                push_triangle(pc, tri[e], ed, hw, x, y, clip, sp.grad ? ramp_at(sp.grad, (float)e) : sp.color, sp.opacity);
             }
+        if (layer_alpha < 1.f) layer_end(pc, layer_alpha);
     }
     if (s->path_text && n->ts.color.a > 0.f) paint_path_text(pc, n, p, arc, m, x, y, clip, opacity);
 }
@@ -353,7 +436,8 @@ static void paint_text(paint_ctx *pc, gp_el *n, float x, float y, rect clip, flo
     float scale = pc->scale;
     float px_size = n->ts.size * scale;
     const float inv_alpha = 1.f / (float)GP_ATLAS_SIZE, inv_color = 1.f / (float)GP_COLOR_ATLAS_SIZE, inv_lcd = 1.f / (float)GP_LCD_ATLAS_SIZE;
-    int lcd = pc->has_xf ? 0 : gp_text_lcd_order(pc->ts, scale);   /* (the stripes of a rotated or scaled glyph are not the screen's) */
+    int lcd = pc->has_xf || pc->depth > 0 ? 0 : gp_text_lcd_order(pc->ts, scale);   /* (the stripes of a rotated or scaled glyph are not the screen's; in a layer
+                                                                                      * there is nothing under the text to blend each channel with) */
 
     for (int li = 0; li < nlines; li++) {
         const gp_text_line *ln = &lines[li];
@@ -575,7 +659,8 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
         sig[12] = (uint32_t)pc->drag_key;
         sig[13] = (uint32_t)(pc->drag_key >> 32);
     }
-    if (n->sub_flags & GP_SUB_AUTOHIDE) sig[14] = pc->vis_gen;   /* a scrollbar below faded in or out */
+    if (n->sub_flags & GP_SUB_AUTOHIDE) sig[14] = pc->vis_gen;
+    sig[15] = pc->depth > 0;   /* painted into a layer: text there is not LCD-antialiased */   /* a scrollbar below faded in or out */
     if (!by_hover && vv->chunk_valid && vv->chunk_gen == n->layout_gen && memcmp(sig, vv->chunk_sig, sizeof sig) == 0) {
         /* Where it is: the same, or moved by whole device pixels with nothing below that is clipped to a box of its own (an overflow, a scroller, a list:
          * their clip moves with the subtree and is not the clip it inherits), which is the same instances moved. A row of a list that scrolls is painted
@@ -595,7 +680,7 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
                 vv->chunk_y = y;
                 if (pc->app) pc->app->stat_paint_shifts++;
             }
-            for (size_t i = 0; i < vv->nchunk; i++) gp_scene_push(pc->scene, &vv->chunk[i]);
+            for (size_t i = 0; i < vv->nchunk; i++) scene_add(pc, &vv->chunk[i]);
             if (pc->app) pc->app->stat_paint_hits++;
             return;
         }
@@ -640,6 +725,17 @@ static void overlay_style(gp_style *dst, const gp_style *src) {
         if (src->corner_set & (1 << i)) { dst->corner[i] = src->corner[i]; dst->corner_set |= (uint8_t)(1 << i); }
 }
 
+/* Whether an element's opacity needs a layer: what it paints could overlap (children, a box under text, a shadow under a box, a fill under a stroke) */
+static bool wants_group(const gp_el *n, const gp_style *s) {
+    if (n->nchildren || n->sticky) return true;
+    if (n->kind == GP_EL_CURVE) return (s->has_fill && s->fill_color.a > 0.f) || s->path_text;   /* (a stroke alone takes its own layer) */
+    bool box = (s->has_bg && s->bg.a > 0.f) || s->bg_gradient || s->border_w > 0.f || s->has_border_sides || s->has_hover_bg || s->has_active_bg || s->has_focus_bg;
+    bool shadow = s->has_shadow && s->shadow.color.a > 0.f;
+    bool content = n->kind == GP_EL_TEXT || n->kind == GP_EL_IMAGE || n->kind == GP_EL_SVG;
+    bool scrolls = s->overflow_x_scroll || s->overflow_y_scroll;
+    return (shadow && (box || content)) || (box && (content || scrolls));
+}
+
 static gp_lstate_set *g_collect;
 void gp_paint_collect_states(gp_lstate_set *out) {
     g_collect = out;
@@ -682,15 +778,19 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
     if (n->style.has_text_color) pc->has_tc = false;
     if (s == &stated && s->has_text_color) { pc->tc = s->text_color; pc->has_tc = true; }
     if (pc->has_tc) n->ts.color = pc->tc;
-    opacity *= s->opacity;
-    if (opacity <= 0) return;
+    /* An opacity fades the element and what is in it as one thing (CSS's group opacity): painted into a layer that is put down at it, when
+     * there is more than one thing to paint that could overlap; else it is put on the one instance, which is the same and costs nothing. */
+    float group = 1.f;
+    if (s->opacity <= 0.f || opacity <= 0.f) return;
+    if (s->opacity < 1.f && wants_group(n, s) && layer_begin(pc)) group = s->opacity;
+    else opacity *= s->opacity;
     if (n->kind == GP_EL_CURVE) {
         gp_color c = s->has_stroke_color ? s->stroke_color : n->ts.color;
         if (hovered && pc->pressed && s->has_active_bg) c = s->active_bg;
         else if (hovered && s->has_hover_bg) c = s->hover_bg;
         if (focused && s->has_focus_bg && !(hovered && s->has_hover_bg)) c = s->focus_bg;
         paint_curve(pc, n, x, y, clip, opacity, c, (hovered && pc->pressed && s->has_active_bg) || (hovered && s->has_hover_bg) || (focused && s->has_focus_bg));
-        return;
+        goto done;
     }
     float r4[4];
     corner_radii(s, w, h, r4);
@@ -815,11 +915,11 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
 
     if (n->kind == GP_EL_TEXT) {
         paint_text(pc, n, x, y, clip, opacity);
-        return;
+        goto done;
     }
     if (n->kind == GP_EL_IMAGE || n->kind == GP_EL_SVG) {
         paint_image(pc, n, x, y, clip, opacity);
-        return;
+        goto done;
     }
 
     bool scrolls = s->overflow_x_scroll || s->overflow_y_scroll;
@@ -835,6 +935,8 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
         paint_node(pc, n->children[i], x - n->scroll.x, y - n->scroll.y, child_clip, opacity);
     if (n->sticky) paint_node(pc, n->sticky, x, y, child_clip, opacity);   /* (a list's pinned header: not scrolled, above the rows) */
     if (scrolls) paint_scrollbars(pc, n, x, y, child_clip, opacity);
+done:
+    if (group < 1.f) layer_end(pc, group);
 }
 
 /* An element with a transform paints itself and everything in it under it: the pointer is taken back through it for what hover looks at. */
