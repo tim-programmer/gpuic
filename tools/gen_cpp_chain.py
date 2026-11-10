@@ -132,6 +132,8 @@ def sample(ptype, i):
         return str(2 + i)
     if t == "gp_color":
         return "gp_rgb(0x%06x)" % (0x102030 + 0x0b0c0d * i)
+    if t == "uint64_t":
+        return "%dull" % (1000003 * (i + 1))
     if t in ("gp_scroll", "gp_focus"):
         return "%s{ %du }" % (ptype, 7 + i)
     if t.endswith("char*"):

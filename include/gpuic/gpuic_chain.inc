@@ -370,6 +370,24 @@
     Element&& skew(float ax_deg, float ay_deg) && { return std::move(add(gp_skew(ax_deg, ay_deg))); }
     Element& transform_origin(float fx, float fy) & { return add(gp_transform_origin(fx, fy)); }
     Element&& transform_origin(float fx, float fy) && { return std::move(add(gp_transform_origin(fx, fy))); }
+    Element& rotate_x(float degrees) & { return add(gp_rotate_x(degrees)); }
+    Element&& rotate_x(float degrees) && { return std::move(add(gp_rotate_x(degrees))); }
+    Element& rotate_y(float degrees) & { return add(gp_rotate_y(degrees)); }
+    Element&& rotate_y(float degrees) && { return std::move(add(gp_rotate_y(degrees))); }
+    Element& translate_z(float px) & { return add(gp_translate_z(px)); }
+    Element&& translate_z(float px) && { return std::move(add(gp_translate_z(px))); }
+    Element& transform_perspective(float px) & { return add(gp_transform_perspective(px)); }
+    Element&& transform_perspective(float px) && { return std::move(add(gp_transform_perspective(px))); }
+    Element& perspective(float px) & { return add(gp_perspective(px)); }
+    Element&& perspective(float px) && { return std::move(add(gp_perspective(px))); }
+    Element& perspective_origin(float fx, float fy) & { return add(gp_perspective_origin(fx, fy)); }
+    Element&& perspective_origin(float fx, float fy) && { return std::move(add(gp_perspective_origin(fx, fy))); }
+    Element& backface_hidden() & { return add(gp_backface_hidden()); }
+    Element&& backface_hidden() && { return std::move(add(gp_backface_hidden())); }
+    Element& key(Str key) & { return add(gp_key(key.c_str())); }
+    Element&& key(Str key) && { return std::move(add(gp_key(key.c_str()))); }
+    Element& key_id(uint64_t key) & { return add(gp_key_id(key)); }
+    Element&& key_id(uint64_t key) && { return std::move(add(gp_key_id(key))); }
     Element& key_context(Str name) & { return add(gp_key_context(name.c_str())); }
     Element&& key_context(Str name) && { return std::move(add(gp_key_context(name.c_str()))); }
     Element& whitespace_pre() & { return add(gp_whitespace_pre()); }

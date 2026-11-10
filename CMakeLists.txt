@@ -109,7 +109,7 @@ if(GPUIC_BUILD_TESTS)
   add_executable(cables_bench tests/cables_bench.c)   # not a test: a measurement (needs a display)
   target_link_libraries(cables_bench PRIVATE gpuic gpuic_deps)
   target_include_directories(cables_bench PRIVATE src)
-  foreach(test exec_test fd_test anim_test window_test autohide_test fonts_test lcd_test gfx_test gradient_test image_test svg_test svgx_test box_test flex_test minwidth_test reveal_test track_test smooth_test bigdoc_test grapheme_test variations_test gamma_test touch_test sticky_test hlist_test hvlist_test border_style_test state_style_test paintshift_test transform_test curve_test stroke_test xform2_test lstate_test layer_test effects_test shapes_test wheel_test shutdown_test keys_test input_test ime_wrap_test dualcaret_test wrapedit_test lazywrap_test longline_test text_test list_test vlist_test observe_test views_test)
+  foreach(test exec_test fd_test anim_test window_test autohide_test fonts_test lcd_test gfx_test gradient_test image_test svg_test svgx_test box_test flex_test minwidth_test reveal_test track_test smooth_test bigdoc_test grapheme_test variations_test gamma_test touch_test sticky_test hlist_test hvlist_test border_style_test state_style_test paintshift_test transform_test curve_test stroke_test xform2_test lstate_test layer_test effects_test shapes_test xform3d_test wheel_test shutdown_test keys_test input_test ime_wrap_test dualcaret_test wrapedit_test lazywrap_test longline_test text_test list_test vlist_test observe_test views_test)
     add_executable(${test} tests/${test}.c)
     target_link_libraries(${test} PRIVATE gpuic gpuic_deps)   # tests reach into internals and the dependency headers
     target_include_directories(${test} PRIVATE src)

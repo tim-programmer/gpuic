@@ -85,11 +85,12 @@ static const char *vs_src =
     "layout(location=9) in vec4 a_s2;\n"
     "layout(location=10) in vec4 a_bsty;\n"
     "layout(location=11) in vec4 a_xf0;\n"   /* the transform: (a - 1, b, c, d - 1) */
-    "layout(location=12) in vec4 a_xf1;\n"   /* (tx, ty, scale - 1, -) */
+    "layout(location=12) in vec4 a_xf1;\n"   /* (tx, ty, g, h) */
+    "layout(location=13) in vec4 a_xf2;\n"   /* (w1, -, -, -): w = g x + h y + 1 + w1 (all 0: no perspective) */
     "uniform vec2 u_viewport;\n"
     "flat out vec4 v_bounds, v_clip, v_color, v_border, v_radii, v_params, v_uvr, v_s0, v_s1, v_s2, v_bsty;\n"
     "flat out float v_mag;\n"
-    "flat out vec4 v_xf0, v_xf1;\n"
+    "flat out vec4 v_xf0, v_xf1, v_xf2;\n"
     "out vec2 v_local;\n"
     "out vec2 v_pos;\n"
     "out vec2 v_uv;\n"
@@ -100,22 +101,23 @@ static const char *vs_src =
     "  vec2 size = a_bounds.zw + 2.0 * pad;\n"
     "  vec2 pos0 = a_bounds.xy - pad + corner * size;\n"   /* where it is in the layout, before the transform */
     "  vec2 pos = pos0 + vec2(a_xf0.x * pos0.x + a_xf0.z * pos0.y + a_xf1.x, a_xf0.y * pos0.x + a_xf0.w * pos0.y + a_xf1.y);\n"
-    "  v_pos = pos;\n"                                      /* the clip is in screen space */
-    "  v_mag = 1.0 + a_xf1.z;\n"
-    "  v_xf0 = a_xf0; v_xf1 = a_xf1;\n"
+    "  float w = a_xf1.z * pos0.x + a_xf1.w * pos0.y + 1.0 + a_xf2.x;\n"   /* in perspective: the position is homogeneous, and what is interpolated across is too */
+    "  v_pos = pos / w;\n"
+    "  v_mag = sqrt(abs((1.0 + a_xf0.x) * (1.0 + a_xf0.w) - a_xf0.y * a_xf0.z));\n"   /* how much it magnifies (affine) */
+    "  v_xf0 = a_xf0; v_xf1 = a_xf1; v_xf2 = a_xf2;\n"
     "  v_local = pos0 - (a_bounds.xy + a_bounds.zw * 0.5);\n"
     "  v_uv = a_uv.xy + corner * a_uv.zw;\n"
     "  v_bounds = a_bounds; v_clip = a_clip; v_color = a_color; v_border = a_border;\n"
     "  v_radii = a_radii; v_params = a_params; v_uvr = a_uv;\n"
     "  v_s0 = a_s0; v_s1 = a_s1; v_s2 = a_s2; v_bsty = a_bsty;\n"
-    "  gl_Position = vec4(pos.x / u_viewport.x * 2.0 - 1.0, 1.0 - pos.y / u_viewport.y * 2.0, 0.0, 1.0);\n"
+    "  gl_Position = vec4(pos.x / u_viewport.x * 2.0 - w, w - pos.y / u_viewport.y * 2.0, 0.0, w);\n"
     "}\n";
 
 static const char *fs_src =
     "#version 330 core\n"
     "flat in vec4 v_bounds, v_clip, v_color, v_border, v_radii, v_params, v_uvr, v_s0, v_s1, v_s2, v_bsty;\n"
     "flat in float v_mag;\n"
-    "flat in vec4 v_xf0, v_xf1;\n"
+    "flat in vec4 v_xf0, v_xf1, v_xf2;\n"
     "uniform vec2 u_viewport;\n"
     "in vec2 v_local;\n"
     "in vec2 v_pos;\n"
@@ -212,8 +214,13 @@ static const char *fs_src =
     "}\n"
     "void main() {\n"
     "  float us = u_scale * v_mag;\n"
-    "  if (v_pos.x < v_clip.x || v_pos.y < v_clip.y ||\n"
-    "      v_pos.x > v_clip.x + v_clip.z || v_pos.y > v_clip.y + v_clip.w) discard;\n"
+    "  if (v_xf1.z != 0.0 || v_xf1.w != 0.0 || v_xf2.x != 0.0) {\n"   /* in perspective the magnification is not one number: what one pixel spans of the element, here */
+    "    float lpp = 0.5 * (length(dFdx(v_local)) + length(dFdy(v_local)));\n"
+    "    us = lpp > 1e-6 ? 1.0 / lpp : 1e6;\n"
+    "  }\n"
+    "  vec2 sp = vec2(gl_FragCoord.x, u_viewport.y * u_scale - gl_FragCoord.y) / u_scale;\n"   /* the pixel's center in the window: the clip is there */
+    "  if (sp.x < v_clip.x || sp.y < v_clip.y ||\n"
+    "      sp.x > v_clip.x + v_clip.z || sp.y > v_clip.y + v_clip.w) discard;\n"
     "  float kind = v_params.y;\n"
     "  vec2 half_size = v_bounds.zw * 0.5;\n"
     "  vec4 lcd_cov = vec4(0.0);\n"
@@ -277,8 +284,9 @@ static const char *fs_src =
     "    frag = sc * cov;\n"
     "  } else if (kind == 10.0) {\n" /* a triangle (corners v_uvr.xy, v_uvr.zw, v_s0.xy); each edge (v_radii.xyz) soft (0), hard on a line shared with a neighbour (1: a pixel on
                                       the line is this one's, -1: the neighbour's), or an arrowhead's base (2 / -2: hard where the stroke meets it, within v_radii.w of its middle) */
-    "    vec2 sp = vec2(gl_FragCoord.x, u_viewport.y * u_scale - gl_FragCoord.y) / u_scale;\n" /* the pixel's center in the window, then in the layout: the same numbers for */
-    "    vec2 p = inverse(mat2(1.0 + v_xf0.x, v_xf0.y, v_xf0.z, 1.0 + v_xf0.w)) * (sp - v_xf1.xy);\n"   /* every instance, so two triangles sharing an edge see one line */
+    /* the pixel's center in the window, then in the layout: the same numbers for every instance, so two triangles sharing an edge see one line */
+    "    vec3 ph = inverse(mat3(1.0 + v_xf0.x, v_xf0.y, v_xf1.z, v_xf0.z, 1.0 + v_xf0.w, v_xf1.w, v_xf1.x, v_xf1.y, 1.0 + v_xf2.x)) * vec3(sp, 1.0);\n"
+    "    vec2 p = ph.xy / ph.z;\n"
     "    vec2 tv[3] = vec2[3](v_uvr.xy, v_uvr.zw, v_s0.xy);\n"
     "    float cov = 1.0;\n"
     "    for (int i = 0; i < 3; i++) {\n"
@@ -464,8 +472,8 @@ gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
     gl.glBindVertexArray(r->vao);
     gl.glGenBuffers(1, &r->vbo);
     gl.glBindBuffer(GL_ARRAY_BUFFER, r->vbo);
-    for (GLuint i = 0; i < 13; i++) {
-        /* gp_instance is thirteen consecutive vec4s */
+    for (GLuint i = 0; i < 14; i++) {
+        /* gp_instance is fourteen consecutive vec4s */
         gl.glEnableVertexAttribArray(i);
         gl.glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, sizeof(gp_instance),
                               (const void *)(uintptr_t)(i * 4 * sizeof(float)));
@@ -539,7 +547,7 @@ void gp_renderer_free(gp_renderer *r, gp_gfx *gfx) {
 /* instances [first, first + count) in one instanced draw */
 static void draw_run(gp_renderer *r, const gp_scene *scene, size_t first, size_t count) {
     (void)scene;
-    for (GLuint a = 0; a < 13; a++)
+    for (GLuint a = 0; a < 14; a++)
         gl.glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, sizeof(gp_instance),
                                  (const void *)(uintptr_t)(first * sizeof(gp_instance) + a * 4 * sizeof(float)));
     gl.glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, (GLsizei)count);

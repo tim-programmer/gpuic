@@ -195,7 +195,7 @@ const char *cpp_probe_el_same(gp_app *app, int ia, int ib, char *why, size_t cap
     }
     if (a->kind != b->kind || a->focus_id != b->focus_id || a->tab_stop != b->tab_stop || a->tab_index != b->tab_index || a->scroll_id != b->scroll_id ||
         a->list_stick != b->list_stick || a->has_ime_rect != b->has_ime_rect || memcmp(a->ime_rect, b->ime_rect, sizeof a->ime_rect) != 0 ||
-        a->hide_below != b->hide_below || a->anim_below != b->anim_below) {
+        a->hide_below != b->hide_below || a->anim_below != b->anim_below || a->key != b->key) {
         snprintf(why, cap, "element fields (focus %llu/%llu, scroll id %llu/%llu, tab %d/%d)", (unsigned long long)a->focus_id, (unsigned long long)b->focus_id,
                  (unsigned long long)a->scroll_id, (unsigned long long)b->scroll_id, a->tab_index, b->tab_index);
         return why;

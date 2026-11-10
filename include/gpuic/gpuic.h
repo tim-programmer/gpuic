@@ -1218,6 +1218,26 @@ gp_node *gp_translate(float dx, float dy);
  * element is not cut (as at an angle that is not a quarter turn). */
 gp_node *gp_skew(float ax_deg, float ay_deg);
 gp_node *gp_transform_origin(float fx, float fy);
+/* 3D, as CSS's flat transform style: the element (a plane) is turned about x or y (degrees: with y down, a positive gp_rotate_y takes its right side away from the
+ * viewer, a positive gp_rotate_x its bottom), moved toward the viewer (gp_translate_z), and seen in perspective, either its own (gp_transform_perspective(d): as CSS's
+ * perspective() at the end of the transform list) or its parent's: gp_perspective(d) on a parent (CSS's perspective property) puts every child's transform in perspective
+ * from the point gp_perspective_origin(fx, fy) of the parent's box (default its middle) at the distance d. The order, about the transform origin: skew, scale, rotate_x,
+ * rotate_y, rotate (about z), translate (x, y and z), then the perspective. Nested 3D transforms are flattened at each element, as in CSS's default (no preserve-3d: no
+ * depth sorting between siblings); what is in the element is drawn on its plane, text and images included. Without a perspective a turn about x or y only foreshortens.
+ * The pointer follows: it lands where the turned element is seen. A part that would be at or behind the viewer is not drawn. An overflow clip inside an element in
+ * perspective does not clip (as at an angle). gp_backface_hidden(): seen from behind (turned past 90 degrees), the element and what is in it are not drawn or hit
+ * (a card's two faces, one turned 180 degrees). */
+gp_node *gp_rotate_x(float degrees);
+gp_node *gp_rotate_y(float degrees);
+gp_node *gp_translate_z(float px);
+gp_node *gp_transform_perspective(float px);
+gp_node *gp_perspective(float px);
+gp_node *gp_perspective_origin(float fx, float fy);
+gp_node *gp_backface_hidden(void);
+/* What the element is known by among its siblings, instead of its place among them (React's key): its hover, pressed and focus layout states, a scroller's offset and
+ * the like follow it when siblings before it come and go. An element that tracks focus (gp_track_focus) is known by its focus already. Unique among siblings. */
+gp_node *gp_key(const char *key);
+gp_node *gp_key_id(uint64_t key);
 gp_node *gp_hover_style(gp_node *group);
 gp_node *gp_active_style(gp_node *group);
 gp_node *gp_focus_style(gp_node *group);

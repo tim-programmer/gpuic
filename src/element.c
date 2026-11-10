@@ -34,6 +34,7 @@ void gp_style_init(gp_style *s) {
     s->opacity = 1.f;
     s->xf_sx = s->xf_sy = 1.f;
     s->xf_ox = s->xf_oy = 0.5f;
+    s->persp_ox = s->persp_oy = 0.5f;
     s->stroke_w = 2.f;
     s->miter_limit = 4.f;
 }
@@ -67,6 +68,7 @@ enum {
     M_STROKE_W, M_STROKE_COLOR, M_STROKE_CAP, M_STROKE_JOIN, M_MITER_LIMIT, M_HIT_TOL,
     M_DASH, M_DASH_OFF, M_STROKE_GRADIENT, M_ARROW, M_FILL, M_CLOSED, M_PATH_TEXT, M_PATH_TEXT_DY,
     M_FILTER, M_BLEND, M_MASK, M_MASK_LUM, M_FILL_RULE, M_MARKER, M_BACKDROP,
+    M_ROTATE_X, M_ROTATE_Y, M_TRANSLATE_Z, M_XF_PERSP, M_PERSP, M_PERSP_ORIGIN, M_BACKFACE, M_KEY,
 };
 
 enum { SIDE_L = 1, SIDE_T = 2, SIDE_R = 4, SIDE_B = 8, SIDE_ALL = 15 };
@@ -548,6 +550,28 @@ gp_node *gp_scale_xy(float sx, float sy) { return mod_f2(M_SCALE, sx, sy); }
 gp_node *gp_translate(float dx, float dy) { return mod_f2(M_TRANSLATE, dx, dy); }
 gp_node *gp_skew(float ax_deg, float ay_deg) { return mod_f2(M_SKEW, ax_deg, ay_deg); }
 gp_node *gp_transform_origin(float fx, float fy) { return mod_f2(M_XF_ORIGIN, fx, fy); }
+gp_node *gp_rotate_x(float degrees) { return mod_f(M_ROTATE_X, isfinite(degrees) ? degrees : 0.f); }
+gp_node *gp_rotate_y(float degrees) { return mod_f(M_ROTATE_Y, isfinite(degrees) ? degrees : 0.f); }
+gp_node *gp_translate_z(float px) { return mod_f(M_TRANSLATE_Z, isfinite(px) ? px : 0.f); }
+gp_node *gp_transform_perspective(float px) { return mod_f(M_XF_PERSP, isfinite(px) && px > 0.f ? px : 0.f); }
+gp_node *gp_perspective(float px) { return mod_f(M_PERSP, isfinite(px) && px > 0.f ? px : 0.f); }
+gp_node *gp_perspective_origin(float fx, float fy) { return mod_f2(M_PERSP_ORIGIN, isfinite(fx) ? fx : 0.5f, isfinite(fy) ? fy : 0.5f); }
+gp_node *gp_backface_hidden(void) { return mod_f(M_BACKFACE, 1); }
+static uint64_t key_hash(const char *k) {
+    uint64_t h = 1469598103934665603ull;
+    for (; k && *k; k++) h = (h ^ (unsigned char)*k) * 1099511628211ull;
+    return h | 1;
+}
+gp_node *gp_key(const char *key) {
+    gp_mod *m = mod_new(M_KEY);
+    m->id = key_hash(key);
+    return &m->base;
+}
+gp_node *gp_key_id(uint64_t key) {
+    gp_mod *m = mod_new(M_KEY);
+    m->id = (key * 0x9E3779B97F4A7C15ull) | 1;
+    return &m->base;
+}
 gp_node *gp_hover_style(gp_node *group) { return mod_style(M_HOVER_STYLE, group); }
 gp_node *gp_active_style(gp_node *group) { return mod_style(M_ACTIVE_STYLE, group); }
 gp_node *gp_focus_style(gp_node *group) { return mod_style(M_FOCUS_STYLE, group); }
@@ -860,6 +884,14 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_SCALE: s->xf_sx = m->f[0]; s->xf_sy = m->f[1]; s->has_xf = true; break;
     case M_TRANSLATE: s->xf_tx = m->f[0]; s->xf_ty = m->f[1]; s->has_xf = true; break;
     case M_XF_ORIGIN: s->xf_ox = m->f[0]; s->xf_oy = m->f[1]; break;
+    case M_ROTATE_X: s->xf_rx = m->f[0]; s->has_xf = true; break;
+    case M_ROTATE_Y: s->xf_ry = m->f[0]; s->has_xf = true; break;
+    case M_TRANSLATE_Z: s->xf_tz = m->f[0]; s->has_xf = true; break;
+    case M_XF_PERSP: s->xf_persp = m->f[0]; s->has_xf = true; break;
+    case M_PERSP: s->persp = m->f[0]; break;
+    case M_PERSP_ORIGIN: s->persp_ox = m->f[0]; s->persp_oy = m->f[1]; break;
+    case M_BACKFACE: s->backface_hidden = true; break;
+    case M_KEY: el->key = m->id; break;
     case M_SKEW: s->xf_kx = isfinite(m->f[0]) ? m->f[0] : 0.f; s->xf_ky = isfinite(m->f[1]) ? m->f[1] : 0.f; s->has_xf = true; break;
     case M_HOVER_STYLE: case M_ACTIVE_STYLE: case M_FOCUS_STYLE: {
         /* the group is applied to an element of its own, whose style is what the state paints over this one's, and what it lays out
@@ -1232,6 +1264,7 @@ typedef struct { float x0, y0, x1, y1; } rect;
 static bool rect_has(rect r, gp_point p) { return p.x >= r.x0 && p.x < r.x1 && p.y >= r.y0 && p.y < r.y1; }
 
 static bool aff_box(gp_affine m, rect r, rect *out) {   /* a rectangle through a transform that keeps the axes: the box it becomes */
+    if (gp_aff_projective(m)) return false;   /* (in perspective a box is not a box) */
     bool straight = (fabsf(m.b) < 1e-5f && fabsf(m.c) < 1e-5f) || (fabsf(m.a) < 1e-5f && fabsf(m.d) < 1e-5f);
     if (!straight) return false;
     gp_point p0 = gp_aff_apply(m, (gp_point){ r.x0, r.y0 }), p1 = gp_aff_apply(m, (gp_point){ r.x1, r.y1 });
@@ -1255,9 +1288,11 @@ static bool hit_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_hit_
                     uint64_t path, gp_hit *out, gp_affine fwd, bool moved) {
     float x = ox + n->pos.x, y = oy + n->pos.y;
     rect b = { x, y, x + n->size.w, y + n->size.h };
+    if (n->path) path = n->path;   /* (what layout knows it by: its place, or its key) */
     if (n->style.has_xf) {
-        fwd = gp_aff_mul(moved ? fwd : gp_aff_identity(), gp_style_affine(&n->style, x, y, n->size.w, n->size.h));
+        fwd = gp_aff_mul(moved ? fwd : gp_aff_identity(), gp_el_affine(n, x, y));
         moved = true;
+        if (gp_el_behind(n, fwd, x, y) || (n->style.backface_hidden && gp_el_backfacing(n, fwd, x, y))) return false;   /* behind the viewer, or turned away: not there for the pointer either */
     }
     gp_point q = moved ? gp_aff_apply(gp_aff_inverse(fwd), p) : p;
     rect child_clip = clip;

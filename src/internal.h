@@ -103,6 +103,9 @@ typedef struct gp_style {
     bool has_xf;
     float xf_rot, xf_sx, xf_sy, xf_tx, xf_ty, xf_ox, xf_oy;   /* degrees; scale; px; fractions of the box (0.5: the middle) */
     float xf_kx, xf_ky;    /* skew: degrees along x and along y (CSS skew(ax, ay)) */
+    float xf_rx, xf_ry, xf_tz, xf_persp;   /* 3D: turns about x and y (degrees), a move toward the viewer (px), a perspective of the element's own transform (px; 0 none) */
+    float persp, persp_ox, persp_oy;       /* gp_perspective: the distance to the viewer of the children's 3D transforms (0 none), and where it looks from (fractions of the box) */
+    bool backface_hidden;
     const struct gp_style *hover_style, *active_style, *focus_style;   /* gp_hover_style...: what the state paints over this style (arena of the element) */
     /* What modifiers set the layout properties (GP_LSET_*) and which sides of the padding, margin and inset; read only on the style of a state
      * (gp_hover_style...), where it says which properties the state lays out (the others keep the element's own) */
@@ -252,6 +255,8 @@ struct gp_el {
     bool list_horiz;       /* gp_list_horizontal: a uniform list laid out along x (list_ih is the items' width) */
     gp_list_group_fn sticky_fn;   /* gp_list_sticky: which header stays at the top, asked at layout and on every scroll */
     void *sticky_data;
+    gp_el *parent;         /* set by prepare (for a parent's perspective); NULL for a root, a list's pinned header */
+    uint64_t key;          /* gp_key, or a focus id: what the element is known by among its siblings, instead of its place (0: its place) */
     gp_el *mask;           /* gp_mask: laid out over the element's box, painted into a layer of its own whose alpha (or luminance) cuts the element's; not hit, not in children */
     gp_el *sticky;         /* the header pinned now (made by the layout of the list, in its header arena), or NULL; drawn unscrolled, above the rows */
     bool list_stick;       /* gp_list_stick_to_end */
@@ -573,8 +578,9 @@ typedef struct {
     float side[3][4];
     float bsty[4];
     /* the transform in force when it was painted, as an affine map of the layout coordinates above to the screen: x' = a x + c y + tx, y' = b x + d y + ty, stored as
-     * (a - 1, b, c, d - 1), (tx, ty, scale - 1, 0) so that all zeros is the identity (scale: how much it magnifies, for the width of edges) */
+     * (a - 1, b, c, d - 1), (tx, ty, g, h) and xf2 below, so that all zeros is the identity */
     float xf0[4], xf1[4];
+    float xf2[4];          /* (w1, -, -, -): the rest of a perspective (see gp_affine) */
 } gp_instance;
 
 typedef struct {
@@ -582,8 +588,10 @@ typedef struct {
     size_t len, cap;
 } gp_scene;
 
-/* A 2 x 3 affine map: x' = a x + c y + tx, y' = b x + d y + ty. */
-typedef struct { float a, b, c, d, tx, ty; } gp_affine;
+/* A projective map of the plane (a 3 x 3 matrix): x' = (a x + c y + tx) / w, y' = (b x + d y + ty) / w, w = g x + h y + 1 + w1. With g = h = w1 = 0 it is the affine map of a
+ * 2D transform; a 3D transform flattened onto the element's plane (CSS's flat transform style) is one in general. Its scale is free but its sign is not: where w is not
+ * positive is at or behind the viewer (w1 holds the last entry less 1, so that all zeros is the identity). */
+typedef struct { float a, b, c, d, tx, ty, g, h, w1; } gp_affine;
 size_t gp_curve_flatten(const gp_el *n, float tol, gp_arena *a, gp_point **out);   /* curve.c: the centerline as straight pieces (arena) */
 float gp_curve_distance(const gp_el *n, float x, float y);   /* to the centerline; x, y in the element's own coordinates */
 bool gp_curve_hit(const gp_el *n, float x, float y);          /* on the stroke: within half the width plus the hit tolerance; or in its fill or an arrowhead */
@@ -597,19 +605,60 @@ typedef struct { gp_point c; float ux, uy, size, t; uint8_t shape; } gp_marker_a
 size_t gp_curve_markers(const gp_el *n, const gp_point *p, size_t m, gp_arena *a, gp_marker_at **out);
 int gp_marker_tris(const gp_marker_at *mk, float stroke_w, gp_point tri[6], int8_t ed[6]);   /* a square, diamond or bar as two triangles (gp_curve_triangulate's edges); 0 for a circle */
 gp_affine gp_style_affine(const struct gp_style *s, float x, float y, float w, float h);   /* what a transformed element does to what is in it (paint.c) */
-static inline gp_affine gp_aff_identity(void) { return (gp_affine){ 1, 0, 0, 1, 0, 0 }; }
+gp_affine gp_el_affine(const struct gp_el *n, float x, float y);
+   /* the same, with its parent's perspective (gp_perspective) and the element at (x, y) on the layout */
+bool gp_el_backfacing(const struct gp_el *n, gp_affine m, float x, float y);   /* gp_backface_hidden: seen from behind through m (it is then not drawn or hit) */
+bool gp_el_behind(const struct gp_el *n, gp_affine m, float x, float y);       /* all of it at or behind the viewer through m */
+static inline gp_affine gp_aff_identity(void) { return (gp_affine){ 1, 0, 0, 1, 0, 0, 0, 0, 0 }; }
+static inline bool gp_aff_projective(gp_affine m) { return m.g != 0.f || m.h != 0.f || m.w1 != 0.f; }
+/* the 3 x 3 matrix, rows x y w, columns x y 1, and back (scaled by a positive number to keep it of a size: the sign of w is kept) */
+static inline void gp_aff_mat(gp_affine m, double M[3][3]) {
+    M[0][0] = m.a; M[0][1] = m.c; M[0][2] = m.tx;
+    M[1][0] = m.b; M[1][1] = m.d; M[1][2] = m.ty;
+    M[2][0] = m.g; M[2][1] = m.h; M[2][2] = 1.0 + m.w1;
+}
+static inline gp_affine gp_aff_from(const double M[3][3]) {
+    double n = fabs(M[2][2]) > 1e-9 ? fabs(M[2][2]) : fabs(M[2][0]) + fabs(M[2][1]) + fabs(M[2][2]);
+    double k = n > 1e-30 ? 1.0 / n : 1.0;
+    return (gp_affine){ (float)(M[0][0] * k), (float)(M[1][0] * k), (float)(M[0][1] * k), (float)(M[1][1] * k), (float)(M[0][2] * k), (float)(M[1][2] * k),
+                        (float)(M[2][0] * k), (float)(M[2][1] * k), (float)(M[2][2] * k - 1.0) };
+}
 /* p after n: the map that does n first */
 static inline gp_affine gp_aff_mul(gp_affine p, gp_affine n) {
-    return (gp_affine){ p.a * n.a + p.c * n.b, p.b * n.a + p.d * n.b, p.a * n.c + p.c * n.d, p.b * n.c + p.d * n.d,
-                        p.a * n.tx + p.c * n.ty + p.tx, p.b * n.tx + p.d * n.ty + p.ty };
+    if (!gp_aff_projective(p) && !gp_aff_projective(n))
+        return (gp_affine){ p.a * n.a + p.c * n.b, p.b * n.a + p.d * n.b, p.a * n.c + p.c * n.d, p.b * n.c + p.d * n.d,
+                            p.a * n.tx + p.c * n.ty + p.tx, p.b * n.tx + p.d * n.ty + p.ty, 0, 0, 0 };
+    double P[3][3], N[3][3], R[3][3];
+    gp_aff_mat(p, P);
+    gp_aff_mat(n, N);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) R[i][j] = P[i][0] * N[0][j] + P[i][1] * N[1][j] + P[i][2] * N[2][j];
+    return gp_aff_from(R);
 }
 static inline gp_affine gp_aff_inverse(gp_affine m) {
-    float det = m.a * m.d - m.b * m.c;
-    if (fabsf(det) < 1e-12f) return gp_aff_identity();   /* collapsed (scale 0): nothing can be pointed at */
-    float a = m.d / det, b = -m.b / det, c = -m.c / det, d = m.a / det;
-    return (gp_affine){ a, b, c, d, -(a * m.tx + c * m.ty), -(b * m.tx + d * m.ty) };
+    if (!gp_aff_projective(m)) {
+        float det = m.a * m.d - m.b * m.c;
+        if (fabsf(det) < 1e-12f) return gp_aff_identity();   /* collapsed (scale 0): nothing can be pointed at */
+        float a = m.d / det, b = -m.b / det, c = -m.c / det, d = m.a / det;
+        return (gp_affine){ a, b, c, d, -(a * m.tx + c * m.ty), -(b * m.tx + d * m.ty), 0, 0, 0 };
+    }
+    double M[3][3], I[3][3];
+    gp_aff_mat(m, M);
+    double det = M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+    if (fabs(det) < 1e-18) return gp_aff_identity();
+    I[0][0] = (M[1][1] * M[2][2] - M[1][2] * M[2][1]) / det; I[0][1] = (M[0][2] * M[2][1] - M[0][1] * M[2][2]) / det; I[0][2] = (M[0][1] * M[1][2] - M[0][2] * M[1][1]) / det;
+    I[1][0] = (M[1][2] * M[2][0] - M[1][0] * M[2][2]) / det; I[1][1] = (M[0][0] * M[2][2] - M[0][2] * M[2][0]) / det; I[1][2] = (M[0][2] * M[1][0] - M[0][0] * M[1][2]) / det;
+    I[2][0] = (M[1][0] * M[2][1] - M[1][1] * M[2][0]) / det; I[2][1] = (M[0][1] * M[2][0] - M[0][0] * M[2][1]) / det; I[2][2] = (M[0][0] * M[1][1] - M[0][1] * M[1][0]) / det;
+    /* (exact, not up to sign: a point seen, at w > 0, comes back at w = 1 / w > 0) */
+    return gp_aff_from(I);
 }
-static inline gp_point gp_aff_apply(gp_affine m, gp_point p) { return (gp_point){ m.a * p.x + m.c * p.y + m.tx, m.b * p.x + m.d * p.y + m.ty }; }
+static inline float gp_aff_w(gp_affine m, gp_point p) { return m.g * p.x + m.h * p.y + 1.f + m.w1; }
+/* a point through it; one that goes to or behind the eye (w at or below 0) goes far away, where nothing is */
+static inline gp_point gp_aff_apply(gp_affine m, gp_point p) {
+    float w = gp_aff_w(m, p);
+    if (!(w > 1e-6f)) return (gp_point){ 1e9f, 1e9f };
+    return (gp_point){ (m.a * p.x + m.c * p.y + m.tx) / w, (m.b * p.x + m.d * p.y + m.ty) / w };
+}
 
 
 
@@ -857,7 +906,7 @@ typedef struct {
     size_t nchunk, cap_chunk;
     bool chunk_valid;
     uint32_t chunk_gen;      /* layout_gen of the root when painted */
-    uint32_t chunk_sig[24];  /* bits of: (origin, which is kept apart), clip, opacity, scale, atlas generation, focus id, dyn_gen, drag key, scrollbar visibility */
+    uint32_t chunk_sig[32];  /* bits of: (origin, which is kept apart), clip, opacity, scale, atlas generation, focus id, dyn_gen, drag key, scrollbar visibility */
     float chunk_x, chunk_y;  /* where the root was when it was painted: a subtree with no clip of its own that has only moved by whole device pixels is the same instances moved */
 } gp_vview;
 

@@ -141,9 +141,16 @@ static unsigned prepare(gp_el *n, gp_text_style parent, uint64_t path) {
     if (n->style.has_hover_bg || n->style.has_active_bg || n->style.hover_style || n->style.active_style) flags |= GP_SUB_HOVER;
     if (n->focus_id) flags |= GP_SUB_FOCUS;
     if (n->style.autohide_scrollbar) flags |= GP_SUB_AUTOHIDE;
-    for (uint32_t i = 0; i < n->nchildren; i++)
-        flags |= prepare(n->children[i], ts, (path ^ (i + 1)) * 1099511628211ull);
-    if (n->mask) flags |= prepare(n->mask, ts, (path ^ 0x6d61736bull) * 1099511628211ull);   /* (a mask inherits as a child would) */
+    for (uint32_t i = 0; i < n->nchildren; i++) {
+        gp_el *c = n->children[i];
+        c->parent = n;
+        uint64_t k = c->key ? c->key : c->focus_id ? (c->focus_id * 0x9E3779B97F4A7C15ull) | 1 : 0;   /* its key, its focus, or its place */
+        flags |= prepare(c, ts, k ? (path ^ k ^ 0x6b6579ull) * 1099511628211ull : (path ^ (i + 1)) * 1099511628211ull);
+    }
+    if (n->mask) {
+        n->mask->parent = n;
+        flags |= prepare(n->mask, ts, (path ^ 0x6d61736bull) * 1099511628211ull);   /* (a mask inherits as a child would) */
+    }
     if (style_changed || (flags & (GP_SUB_LIST | PREP_STATE_CHANGED))) n->ncache = 0;   /* (a state put on or taken off below: the sizes measured differ) */
     n->sub_flags = (uint8_t)flags;
     n->prep_valid = cached_root;
@@ -684,6 +691,7 @@ static gp_size list_probe(gp_el *n, float cross) {
     gp_arena *a = list_arena(n);
     gp_arena_reset(a);
     gp_el **rows = gp_list_build(n, 0, 1, a);
+    rows[0]->parent = n;
     prepare(rows[0], n->ts, row_path(n, 0));
     if (n->list_horiz) return layout_node(rows[0], NAN, cross, NAN, cross, false);
     return layout_node(rows[0], cross, NAN, cross, NAN, false);
@@ -742,6 +750,7 @@ static void list_realize(gp_el *n, bool force) {
         gp_el *c = n->children[i];
         size_t idx = first + i;
         if (g_anims && c->anim_below) gp_anim_eval(c, g_anims);
+        c->parent = n;
         prepare(c, n->ts, row_path(n, idx));
         if (hz) {
             c->pos = (gp_point){ bw + s->pad[0] + (float)idx * ih, bw + s->pad[1] };
@@ -944,6 +953,7 @@ static gp_el *vrow(vfill *f, size_t idx) {
     gp_el **r = gp_list_build(f->n, idx, 1, f->arena);
     gp_el *c = r[0];
     if (g_anims && c->anim_below) gp_anim_eval(c, g_anims);
+    c->parent = f->n;
     prepare(c, f->n->ts, row_path(f->n, idx));
     if (!f->hz) {
         float h = layout_node(c, f->inner_w, NAN, f->inner_w, NAN, false).h;

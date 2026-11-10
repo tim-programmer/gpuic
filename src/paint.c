@@ -57,6 +57,38 @@ static void set_clip(gp_instance *i, rect clip) {
 
 /* ---------------------------------------------------------------- transforms */
 
+/* 4 x 4 and 3 x 3 helpers (column vectors: R = A B applies B first); out may be one of the inputs */
+static void gp_m4_mul(const double A[4][4], const double B[4][4], double out[4][4]) {
+    double R[4][4];
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) R[i][j] = A[i][0] * B[0][j] + A[i][1] * B[1][j] + A[i][2] * B[2][j] + A[i][3] * B[3][j];
+    memcpy(out, R, sizeof R);
+}
+static void gp_m3_mul(const double A[3][3], const double B[3][3], double out[3][3]) {
+    double R[3][3];
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) R[i][j] = A[i][0] * B[0][j] + A[i][1] * B[1][j] + A[i][2] * B[2][j];
+    memcpy(out, R, sizeof R);
+}
+/* M after turning about x by rx then about y by ry (degrees; CSS's rotateX / rotateY: with y down, a positive rotateY takes the right side away) */
+static void gp_affine_3d_turns(double M[4][4], float rx, float ry) {
+    double a = rx * M_PI / 180.0, c = cos(a), n = sin(a);
+    double X[4][4] = { { 1, 0, 0, 0 }, { 0, c, -n, 0 }, { 0, n, c, 0 }, { 0, 0, 0, 1 } };
+    a = ry * M_PI / 180.0; c = cos(a); n = sin(a);
+    double Y[4][4] = { { c, 0, n, 0 }, { 0, 1, 0, 0 }, { -n, 0, c, 0 }, { 0, 0, 0, 1 } };
+    gp_m4_mul(X, M, M);
+    gp_m4_mul(Y, M, M);
+}
+/* M, which maps points relative to the origin (cx, cy) to points relative to it, as a map of the plane on the layout */
+static gp_affine gp_m4_flatten_about(const double M[4][4], double cx, double cy) {
+    double F[3][3] = { { M[0][0], M[0][1], M[0][3] }, { M[1][0], M[1][1], M[1][3] }, { M[3][0], M[3][1], M[3][3] } };
+    double Tin[3][3] = { { 1, 0, -cx }, { 0, 1, -cy }, { 0, 0, 1 } }, Tout[3][3] = { { 1, 0, cx }, { 0, 1, cy }, { 0, 0, 1 } }, R[3][3], R2[3][3];
+    gp_m3_mul(F, Tin, R);
+    gp_m3_mul(Tout, R, R2);
+    return gp_aff_from(R2);
+}
+static void gp_style_m4(const gp_style *s, double M[4][4]);
+
 /* What a transformed element does to everything in it, about the point (ox, oy) of its box at layout position (x, y): scale, rotate, move. */
 gp_affine gp_style_affine(const gp_style *s, float x, float y, float w, float h) {
     float cx = x + w * s->xf_ox, cy = y + h * s->xf_oy;
@@ -66,19 +98,95 @@ gp_affine gp_style_affine(const gp_style *s, float x, float y, float w, float h)
         cs = q == 0 ? 1.f : q == 2 ? -1.f : 0.f;
         sn = q == 1 ? 1.f : q == 3 ? -1.f : 0.f;
     }
-    gp_affine m = { cs * s->xf_sx, sn * s->xf_sx, -sn * s->xf_sy, cs * s->xf_sy, 0, 0 };
+    gp_affine m = { cs * s->xf_sx, sn * s->xf_sx, -sn * s->xf_sy, cs * s->xf_sy, 0, 0, 0, 0, 0 };
     if (s->xf_kx != 0.f || s->xf_ky != 0.f) {   /* a skew first: x += tan(ax) y, y += tan(ay) x (beyond 89 degrees it is held there: a tangent that large is a line) */
         float kx = tanf(fminf(fmaxf(s->xf_kx, -89.f), 89.f) * (float)M_PI / 180.f), ky = tanf(fminf(fmaxf(s->xf_ky, -89.f), 89.f) * (float)M_PI / 180.f);
-        gp_affine k = { 1, ky, kx, 1, 0, 0 };
+        gp_affine k = { 1, ky, kx, 1, 0, 0, 0, 0, 0 };
         m = gp_aff_mul(m, k);
     }
-    m.tx = cx + s->xf_tx - (m.a * cx + m.c * cy);
-    m.ty = cy + s->xf_ty - (m.b * cx + m.d * cy);
-    return m;
+    if (s->xf_rx == 0.f && s->xf_ry == 0.f && s->xf_tz == 0.f && s->xf_persp == 0.f) {   /* flat: the 2D map as it always was */
+        m.tx = cx + s->xf_tx - (m.a * cx + m.c * cy);
+        m.ty = cy + s->xf_ty - (m.b * cx + m.d * cy);
+        return m;
+    }
+    /* 3D, as CSS composes it, about the origin: the 2D part (skew, scale, the turn about z) after turns about x, then y; then the move (z too) and the element's own
+     * perspective; flattened onto the plane (the rows and columns of x, y and w of the 4 x 4 matrix) */
+    double M[4][4];
+    gp_style_m4(s, M);
+    return gp_m4_flatten_about(M, cx, cy);
+}
+
+/* the element's own transform as a 4 x 4 matrix about its origin (points relative to it, to points relative to it) */
+static void gp_style_m4(const gp_style *s, double M[4][4]) {
+    float r = s->xf_rot * (float)M_PI / 180.f, cs = cosf(r), sn = sinf(r);
+    if (fmodf(s->xf_rot, 90.f) == 0.f) {
+        int q = ((int)lroundf(s->xf_rot / 90.f) % 4 + 4) % 4;
+        cs = q == 0 ? 1.f : q == 2 ? -1.f : 0.f;
+        sn = q == 1 ? 1.f : q == 3 ? -1.f : 0.f;
+    }
+    gp_affine m = { cs * s->xf_sx, sn * s->xf_sx, -sn * s->xf_sy, cs * s->xf_sy, 0, 0, 0, 0, 0 };
+    if (s->xf_kx != 0.f || s->xf_ky != 0.f) {
+        float kx = tanf(fminf(fmaxf(s->xf_kx, -89.f), 89.f) * (float)M_PI / 180.f), ky = tanf(fminf(fmaxf(s->xf_ky, -89.f), 89.f) * (float)M_PI / 180.f);
+        gp_affine k = { 1, ky, kx, 1, 0, 0, 0, 0, 0 };
+        m = gp_aff_mul(m, k);
+    }
+    double B[4][4] = { { m.a, m.c, 0, 0 }, { m.b, m.d, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };
+    memcpy(M, B, sizeof B);
+    gp_affine_3d_turns(M, s->xf_rx, s->xf_ry);
+    double T[4][4] = { { 1, 0, 0, s->xf_tx }, { 0, 1, 0, s->xf_ty }, { 0, 0, 1, s->xf_tz }, { 0, 0, 0, 1 } };
+    gp_m4_mul(T, M, M);
+    if (s->xf_persp > 0.f) {
+        double P[4][4] = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, -1.0 / s->xf_persp, 1 } };
+        gp_m4_mul(P, M, M);
+    }
+}
+
+/* Is all of the element's box, through `m`, at or behind the viewer (a part in front is drawn: the GPU cuts away the rest)? */
+bool gp_el_behind(const gp_el *n, gp_affine m, float x, float y) {
+    if (!gp_aff_projective(m)) return false;
+    gp_point c[4] = { { x, y }, { x + n->size.w, y }, { x + n->size.w, y + n->size.h }, { x, y + n->size.h } };
+    for (int i = 0; i < 4; i++)
+        if (gp_aff_w(m, c[i]) > 1e-6f) return false;
+    return true;
+}
+
+/* Is the element, through `m`, seen from behind: its box's corners in the other order around (or not in front of the eye)? */
+bool gp_el_backfacing(const gp_el *n, gp_affine m, float x, float y) {
+    gp_point c[4] = { { x, y }, { x + n->size.w, y }, { x + n->size.w, y + n->size.h }, { x, y + n->size.h } };
+    double area = 0;
+    for (int i = 0; i < 4; i++) {
+        if (!(gp_aff_w(m, c[i]) > 1e-6f)) return true;
+        c[i] = gp_aff_apply(m, c[i]);
+    }
+    for (int i = 0; i < 4; i++) area += (double)c[i].x * c[(i + 1) % 4].y - (double)c[(i + 1) % 4].x * c[i].y;
+    return area < 0;
+}
+
+/* ... and with the perspective its parent gives its children (gp_perspective), seen from the parent's perspective origin */
+gp_affine gp_el_affine(const gp_el *n, float x, float y) {
+    const gp_style *s = &n->style;
+    const gp_el *p = n->parent;
+    if (!p || !(p->style.persp > 0.f)) return gp_style_affine(s, x, y, n->size.w, n->size.h);
+    /* the element's own 3D matrix about its origin, then the parent's perspective about the parent's perspective origin (both on the layout) */
+    float cx = x + n->size.w * s->xf_ox, cy = y + n->size.h * s->xf_oy;
+    float px = x - n->pos.x + p->scroll.x + p->size.w * p->style.persp_ox, py = y - n->pos.y + p->scroll.y + p->size.h * p->style.persp_oy;
+    double M[4][4];
+    gp_style_m4(s, M);
+    double A[4][4] = { { 1, 0, 0, cx - px }, { 0, 1, 0, cy - py }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };   /* the element's origin as seen from the parent's */
+    gp_m4_mul(A, M, M);
+    double P[4][4] = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, -1.0 / p->style.persp, 1 } };
+    gp_m4_mul(P, M, M);
+    /* M maps points relative to the element's origin to points relative to the parent's perspective origin: flatten with the two offsets */
+    double F[3][3] = { { M[0][0], M[0][1], M[0][3] }, { M[1][0], M[1][1], M[1][3] }, { M[3][0], M[3][1], M[3][3] } };
+    double Tin[3][3] = { { 1, 0, -cx }, { 0, 1, -cy }, { 0, 0, 1 } }, Tout[3][3] = { { 1, 0, px }, { 0, 1, py }, { 0, 0, 1 } }, R[3][3], R2[3][3];
+    gp_m3_mul(F, Tin, R);
+    gp_m3_mul(Tout, R, R2);
+    return gp_aff_from(R2);
 }
 
 /* a rectangle through a transform that keeps the axes (a scale, a move, a quarter turn): the box it becomes; false for any other */
 static bool aff_rect(gp_affine m, rect r, rect *out) {
+    if (gp_aff_projective(m)) return false;
     bool straight = (fabsf(m.b) < 1e-5f && fabsf(m.c) < 1e-5f) || (fabsf(m.a) < 1e-5f && fabsf(m.d) < 1e-5f);
     if (!straight) return false;
     gp_point p0 = gp_aff_apply(m, (gp_point){ r.x0, r.y0 }), p1 = gp_aff_apply(m, (gp_point){ r.x1, r.y1 });
@@ -156,11 +264,13 @@ static void inst_screen_box(const gp_instance *in, float out[4]) {
     }
     float m = (int)in->kind == GP_PRIM_SHADOW ? in->blur * 1.5f + 2.f : 2.f;
     float x0 = in->bounds[0] - m, y0 = in->bounds[1] - m, x1 = in->bounds[0] + in->bounds[2] + m, y1 = in->bounds[1] + in->bounds[3] + m;
-    float a = 1.f + in->xf0[0], b = in->xf0[1], c = in->xf0[2], d = 1.f + in->xf0[3], tx = in->xf1[0], ty = in->xf1[1];
+    float a = 1.f + in->xf0[0], b = in->xf0[1], c = in->xf0[2], d = 1.f + in->xf0[3], tx = in->xf1[0], ty = in->xf1[1], g = in->xf1[2], h = in->xf1[3];
     float xs[4] = { x0, x1, x0, x1 }, ys[4] = { y0, y0, y1, y1 };
     float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
     for (int i = 0; i < 4; i++) {
-        float X = a * xs[i] + c * ys[i] + tx, Y = b * xs[i] + d * ys[i] + ty;
+        float w = g * xs[i] + h * ys[i] + 1.f + in->xf2[0];
+        if (!(w > 1e-6f)) { bx0 = by0 = -1e30f; bx1 = by1 = 1e30f; break; }   /* (a corner at or behind the eye: anywhere, as far as the clip lets it) */
+        float X = (a * xs[i] + c * ys[i] + tx) / w, Y = (b * xs[i] + d * ys[i] + ty) / w;
         bx0 = fminf(bx0, X); by0 = fminf(by0, Y); bx1 = fmaxf(bx1, X); by1 = fmaxf(by1, Y);
     }
     set4(out, fmaxf(bx0, in->clip[0]), fmaxf(by0, in->clip[1]), fminf(bx1, in->clip[0] + in->clip[2]), fminf(by1, in->clip[1] + in->clip[3]));
@@ -310,7 +420,9 @@ static void push(paint_ctx *pc, gp_instance *inst) {
         const gp_affine *m = &pc->xf;
         float mag = sqrtf(fabsf(m->a * m->d - m->b * m->c));
         inst->xf0[0] = m->a - 1.f; inst->xf0[1] = m->b; inst->xf0[2] = m->c; inst->xf0[3] = m->d - 1.f;
-        inst->xf1[0] = m->tx; inst->xf1[1] = m->ty; inst->xf1[2] = mag - 1.f; inst->xf1[3] = 0.f;
+        inst->xf1[0] = m->tx; inst->xf1[1] = m->ty; inst->xf1[2] = m->g; inst->xf1[3] = m->h;
+        inst->xf2[0] = m->w1;
+        (void)mag;
     }
     scene_add(pc, inst);
 }
@@ -462,7 +574,7 @@ static void paint_path_text(paint_ctx *pc, gp_el *n, const gp_point *p, const fl
         gp_point o = { x + c.x - dx * g[i].advance * 0.5f - dy * dyb, y + c.y - dy * g[i].advance * 0.5f + dx * dyb };   /* the glyph's origin on the baseline */
         gp_glyph_entry e = gp_text_glyph_lcd(pc->ts, g[i].font, g[i].glyph, px_size, 0, 0);
         if (e.w == 0) continue;
-        gp_affine turn = { dx, dy, -dy, dx, 0, 0 };   /* about the origin */
+        gp_affine turn = { dx, dy, -dy, dx, 0, 0, 0, 0, 0 };   /* about the origin */
         turn.tx = o.x - (dx * o.x - dy * o.y);
         turn.ty = o.y - (dy * o.x + dx * o.y);
         pc->xf = gp_aff_mul(outer, turn);
@@ -808,14 +920,17 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
         by_hover = over && ((n->sub_flags & GP_SUB_SCROLL) || pc->mouse_in);
     }
     float vals[8] = { 0, 0, clip.x0, clip.y0, clip.x1, clip.y1, opacity, pc->scale };   /* (where it is is kept apart: see below) */
-    uint32_t sig[24] = { 0 };
+    uint32_t sig[32] = { 0 };
     memcpy(sig, vals, sizeof vals);
-    if (pc->has_xf) memcpy(sig + 16, &pc->xf, sizeof pc->xf);   /* what it is painted under */
+    if (pc->has_xf) {   /* what it is painted under: the eight numbers (not the struct: its padding is not set) */
+        const float xv[9] = { pc->xf.a, pc->xf.b, pc->xf.c, pc->xf.d, pc->xf.tx, pc->xf.ty, pc->xf.g, pc->xf.h, pc->xf.w1 };
+        memcpy(sig + 16, xv, sizeof xv);
+    }
     sig[8] = pc->atlas_gen;
     if (pc->has_tc) {   /* a text color from a state style above (to the 8 bits a channel it is drawn with) */
         const float *c = &pc->tc.r;
-        for (int i = 0; i < 4; i++) sig[22] = sig[22] << 8 | (uint32_t)lroundf(fminf(fmaxf(c[i], 0.f), 1.f) * 255.f);
-        sig[23] = 1;
+        for (int i = 0; i < 4; i++) sig[26] = sig[26] << 8 | (uint32_t)lroundf(fminf(fmaxf(c[i], 0.f), 1.f) * 255.f);
+        sig[27] = 1;
     }
     if (n->sub_flags & GP_SUB_FOCUS) {   /* only subtrees that can show focus depend on it */
         sig[9] = (uint32_t)pc->focused;
@@ -964,7 +1079,8 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
         if (pc->has_xf) {   /* (as push() would: for where it is on screen) */
             const gp_affine *mx = &pc->xf;
             box.xf0[0] = mx->a - 1.f; box.xf0[1] = mx->b; box.xf0[2] = mx->c; box.xf0[3] = mx->d - 1.f;
-            box.xf1[0] = mx->tx; box.xf1[1] = mx->ty; box.xf1[2] = sqrtf(fabsf(mx->a * mx->d - mx->b * mx->c)) - 1.f;
+            box.xf1[0] = mx->tx; box.xf1[1] = mx->ty; box.xf1[2] = mx->g; box.xf1[3] = mx->h;
+            box.xf2[0] = mx->w1;
         }
         float L[4];
         inst_screen_box(&box, L);
@@ -1164,8 +1280,11 @@ static void paint_node_inner(paint_ctx *pc, gp_el *n, float ox, float oy, rect c
         return;
     }
     paint_ctx saved = *pc;
-    gp_affine mine = gp_style_affine(&n->style, ox + n->pos.x, oy + n->pos.y, n->size.w, n->size.h);
-    pc->xf = gp_aff_mul(pc->has_xf ? pc->xf : gp_aff_identity(), mine);
+    gp_affine mine = gp_el_affine(n, ox + n->pos.x, oy + n->pos.y);
+    gp_affine total = gp_aff_mul(pc->has_xf ? pc->xf : gp_aff_identity(), mine);
+    if (gp_el_behind(n, total, ox + n->pos.x, oy + n->pos.y)) return;   /* at or behind the viewer: nothing of it is seen */
+    if (n->style.backface_hidden && gp_el_backfacing(n, total, ox + n->pos.x, oy + n->pos.y)) return;   /* turned away: not drawn (gp_backface_hidden) */
+    pc->xf = total;
     pc->has_xf = true;
     pc->inv = gp_aff_inverse(pc->xf);
     pc->mouse_local = gp_aff_apply(pc->inv, pc->mouse);

@@ -89,6 +89,7 @@ bool gp_scroll_thumb(const gp_el *n, int axis, float ox, float oy, gp_thumb *t) 
 /* A transformed ancestor: `fwd` maps layout coordinates to the window (when `moved`); the element's box is tested with the point taken back through it, and the clip, which is in
  * the window, with the point itself. A clip box through a transform that keeps the axes is the box it becomes; at any other angle it does not clip (as painting does). */
 static bool aff_box(gp_affine m, rect r, rect *out) {
+    if (gp_aff_projective(m)) return false;   /* (in perspective a box is not a box) */
     bool straight = (fabsf(m.b) < 1e-5f && fabsf(m.c) < 1e-5f) || (fabsf(m.a) < 1e-5f && fabsf(m.d) < 1e-5f);
     if (!straight) return false;
     gp_point p0 = gp_aff_apply(m, (gp_point){ r.x0, r.y0 }), p1 = gp_aff_apply(m, (gp_point){ r.x1, r.y1 });
@@ -97,7 +98,7 @@ static bool aff_box(gp_affine m, rect r, rect *out) {
 }
 static gp_point enter(const gp_el *n, float x, float y, gp_point p, gp_affine *fwd, bool *moved) {
     if (n->style.has_xf) {
-        *fwd = gp_aff_mul(*moved ? *fwd : gp_aff_identity(), gp_style_affine(&n->style, x, y, n->size.w, n->size.h));
+        *fwd = gp_aff_mul(*moved ? *fwd : gp_aff_identity(), gp_el_affine(n, x, y));
         *moved = true;
     }
     return *moved ? gp_aff_apply(gp_aff_inverse(*fwd), p) : p;
@@ -548,7 +549,7 @@ bool gp_scroll_begin_drag(gp_window *w, gp_point p) {
 static gp_el *find_rec(gp_el *n, uint64_t key, float ox, float oy, float *fx, float *fy, gp_affine fwd, bool moved, gp_affine *inv) {
     float x = ox + n->pos.x, y = oy + n->pos.y;
     if (n->style.has_xf) {
-        fwd = gp_aff_mul(moved ? fwd : gp_aff_identity(), gp_style_affine(&n->style, x, y, n->size.w, n->size.h));
+        fwd = gp_aff_mul(moved ? fwd : gp_aff_identity(), gp_el_affine(n, x, y));
         moved = true;
     }
     if (is_scroller(n) && n->scroll_key == key) {

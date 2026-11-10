@@ -106,7 +106,7 @@ animations can be sampled. The screenshot otherwise waits for the script to drai
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
 and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
 awaits: pipes, sockets, a TCP echo through coroutines, closing and cancelling at awkward moments),
-`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/lstate_test.c` (state styles that lay out), `tests/layer_test.c` (offscreen layers: group opacity, translucent strokes), `tests/effects_test.c` (filters, blend modes, masks), `tests/shapes_test.c` (fill rules, markers, backdrop filters), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/xform2_test.c` (skew, scrollers in transformed parents, a hover style's text color), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/stroke_test.c` (dashes, gradients along a stroke, arrowheads, fills, text on a path), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
+`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/lstate_test.c` (state styles that lay out), `tests/layer_test.c` (offscreen layers: group opacity, translucent strokes), `tests/effects_test.c` (filters, blend modes, masks), `tests/shapes_test.c` (fill rules, markers, backdrop filters), `tests/xform3d_test.c` (3D transforms, keys), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/xform2_test.c` (skew, scrollers in transformed parents, a hover style's text color), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/stroke_test.c` (dashes, gradients along a stroke, arrowheads, fills, text on a path), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
 widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-height list, checked
 against a model), `tests/text_test.c` (fonts and shaping, against the fonts actually installed) and
 `tests/vlist_test.c` (the row-height index against a brute-force model). The first three need a
@@ -798,7 +798,7 @@ gp_polyline(loop, n, gp_stroke_width(6), gp_stroke_color(gp_rgba(0xffffff80)))  
 * **Cost:** a scissored clear and one quad per layer, and a framebuffer switch either side; nothing for elements at opacity 1 or with one thing to paint. Layers nest up to 8
   deep (`GP_MAX_LAYERS`); deeper groups multiply their opacity into what is in them, as before. A cached view under a parent whose opacity changes is now reused (it is drawn
   at full opacity into the parent's layer).
-* **Not done:** anything 3D.
+* **Not done:** a 3D context shared between siblings (`preserve-3d`): see "3D transforms".
 * `tests/layer_test.c` reads frames back: a child over its parent's background at .5, nested groups, a turned group (its corners beyond the box it had), a clip around a
   group, ten groups in one another (more than the layers kept), a shadow under its box, a translucent stroke and an opaque one at .5 crossing themselves, gray text in a layer and
   LCD outside, a cached view alone in a group, a cached view's text moved into a group, a group whose child moves (the old place is cleared), no layer for one thing or nothing;
@@ -857,7 +857,7 @@ gp_div(gp_w(120), gp_h(40), gp_scale(1.1f), gp_translate(0, -2), gp_hover_bg(c))
 layout moves or resizes; they apply to the element and everything in it, about the middle of its box (the origin is a fraction of the box: `0, 0` is its top left), in the order skew, scale, rotate,
 translate; nested ones compose. They are made for `gp_with_animation` (which could not reach more than size, color and opacity before) and cost nothing but an animation's layout.
 
-* **How:** every instance carries the matrix it was painted under (2 x 3, as two more `vec4`s: the instance is 208 bytes now; all zeros is the identity), and the vertex shader maps the
+* **How:** every instance carries the matrix it was painted under (3 x 3 since 3D, as three more `vec4`s: the instance is 224 bytes now; all zeros is the identity), and the vertex shader maps the
   quad's corners through it while the fragment shader keeps working in the element's own coordinates, so rounded corners, borders, gradients, shadows, images and glyphs are all drawn the same way,
   turned. The edge softness follows the magnification (uniform scales and turns are exact; a stretch along one axis only leaves edges across it a little softer than a pixel). Text under a transform
   is not LCD antialiased (its stripes are not the screen's).
@@ -872,8 +872,46 @@ translate; nested ones compose. They are made for `gp_with_animation` (which cou
 * **Scrollers inside a transformed element** follow the matrix: the wheel (and a touch drag) finds the scroller where it is seen, and a scrollbar thumb or track is pressed where it is
   seen and dragged by the distance as the scroller sees it (a drag across a parent scaled 2x moves the thumb half as far in its own track; under a quarter turn the drag turns with it).
   `tests/xform2_test.c` checks a skewed box's pixels and clicks, the wheel over a scroller in a turned parent (and not where its box would be), a thumb dragged in a doubled one, and a hover text color (11 mutants, all caught).
-* **Not done:** 3D (a perspective is not an affine map: the instances carry a 2 x 3 matrix, and the shaders' edge distances assume one), `transform` on a scroller's scrolling content,
-  a drag handler's offsets under a rotation, and wheel deltas turned by the matrix (a wheel over a turned scroller still scrolls its content along its own axes).
+* **Not done:** `transform` on a scroll container's content, a drag handler's offsets under a rotation, and wheel deltas turned by the matrix (a wheel over a turned
+  scroller still scrolls its content along its own axes).
+
+### 3D transforms
+
+```c
+gp_div(gp_perspective(800),                                            /* the parent: its children's transforms in perspective, seen from its middle */
+       gp_div(card, gp_rotate_y(flip * 180), gp_backface_hidden()),     /* a card: front ... */
+       gp_div(back, gp_rotate_y(flip * 180 - 180), gp_backface_hidden()))   /* ... and back */
+gp_div(gp_transform_perspective(400), gp_rotate_x(25), gp_translate_z(-20))   /* its own perspective */
+```
+
+* **What:** `gp_rotate_x(deg)`, `gp_rotate_y(deg)`, `gp_translate_z(px)`, `gp_transform_perspective(px)` (CSS's `perspective()` function, the last of the element's own
+  transform), `gp_perspective(px)` with `gp_perspective_origin(fx, fy)` on a parent (CSS's `perspective` property: every child's transform is seen from there) and
+  `gp_backface_hidden()`. They compose with the 2D ones in the order skew, scale, rotate_x, rotate_y, rotate, translate, perspective, about the transform origin, as CSS's
+  default flat transform style does: each element is a plane, and what is in it is drawn on that plane (text, images, gradients, strokes, layers...).
+* **How:** the element's 3D transform is a 4 x 4 matrix (with the parent's perspective, if any, after it, about the parent's perspective origin), and the plane it maps, z = 0, is
+  flattened onto the screen by its x, y and w rows and columns: a projective map of the plane (a 3 x 3 matrix), which is what the instances now carry (`gp_affine` gained the
+  last row: `x' = (a x + c y + tx) / w`, `w = g x + h y + 1 + w1`). Nested ones multiply. The vertex shader puts out the corner's homogeneous position with that w, so the GPU
+  interpolates everything across the quad perspective-correctly and the fragment shader goes on working in the element's own coordinates; the antialiasing width, one number
+  for an affine map, comes from the screen-space derivatives of those coordinates in perspective; clips are tested against `gl_FragCoord`; the triangles of a fill find the pixel
+  on their plane through the inverse of the full matrix, so their shared edges stay exact. A matrix is scaled by positive numbers only: w's sign says what is in front of the viewer,
+  the GPU cuts away what is behind it, and an element entirely behind is not drawn or hit. The pointer goes back through the inverse (a click lands on what is seen), the box an
+  element covers on screen (a layer's region, a backdrop's) is its corners through the map, and an overflow clip in perspective is not cut (as at an angle). A turn past 90
+  degrees shows the back; with `gp_backface_hidden` an element whose corners come out the other way round is not drawn or hit, nor anything in it.
+* **Not done:** a 3D context shared between siblings (`transform-style: preserve-3d`: depth sorting and intersection between planes; each element is flattened into its
+  parent, as by default in CSS), and a perspective that reaches grandchildren (only children, as CSS's does without preserve-3d).
+* `tests/xform3d_test.c` works CSS's matrices out again in the test and checks, for each case, 3 px inside and outside every projected edge: a turn without perspective
+  (foreshortened), the element's own perspective, a parent's from its corner, a move toward the viewer (1.5x), a group (a layer) in perspective, a gradient at a quarter and three
+  quarters of the way (perspective-correct interpolation), a fill's inside with no seam; a card's hidden face (not drawn, not hit), text, a box behind the viewer, and clicks in
+  the seen quad and not in the box it left; 20 mutants, all caught but one that cannot show (the hit test's path for an element, used only to compare with itself).
+
+### Element keys
+
+* **`gp_key("name")` / `gp_key_id(n)`** (React's key): an element is known among its siblings by its key instead of its place, for everything that is keyed by the path:
+  a scroller's offset (without `gp_track_scroll`), the hover, pressed and focus layout states of "State styles that lay out", list and cached-view bookkeeping. An element that
+  tracks focus is known by its focus id already. `prepare` hashes the key (or the focus id) into the path in place of the index; hit testing takes the path layout gave. A
+  keyed scroller keeps its offset when a sibling is added before it, where one known by its place takes on the offset of whatever is now in its place
+  (`tests/xform3d_test.c`).
+
 
 ### Coroutines: async/await for C
 
@@ -1505,7 +1543,7 @@ that falls back to a round one; polylines only: a Bezier has no corners), `gp_hi
   the two directions) that divides them: a piece draws only its side of the plane, so the pieces tile the stroke without overlap or gaps, and **a translucent stroke is blended exactly once
   everywhere, joints included**. A miter beyond the limit, and every Bezier join, is the round one. (A dedicated vertex mesh was the alternative; instances won because they reuse all of the
   above, need no second pipeline or buffer, give analytic round caps and joins, and each piece's bounds are tight around its own segment, so a long diagonal cable does not fill its bounding
-  box. The price is 208 bytes per piece rather than a few vertices: a few tens of pieces for a long cable, 4,200 instances for a hundred of them.) Flat ends are square to the first and last piece, and a flat-capped Bezier gets two extra
+  box. The price is 224 bytes per piece rather than a few vertices: a few tens of pieces for a long cable, 4,200 instances for a hundred of them.) Flat ends are square to the first and last piece, and a flat-capped Bezier gets two extra
   points a small step in from its ends so that those pieces point along the curve and the cap is not slanted.
   Where a stroke *crosses itself* (a loop, a polyline over itself) the pieces overlap. A translucent stroke is drawn opaque into an offscreen layer that is put down at its alpha
   (see "Offscreen layers"), so it is one blend there too; an opaque one's crossing is opaque either way. A stroke that doubles straight back on itself is cut square at the turn.
@@ -1634,7 +1672,8 @@ that falls back to a round one; polylines only: a Bezier has no corners), `gp_hi
     views around it; a cached view's root is walked whenever something below it has such a style. As in a browser, a style that moves its element off the pointer would
     go back and forth, so while the pointer, the button, the focus and the scroll offsets stay where they are only four layouts follow such a change; the last one stays
     until one of them changes (an animation running resets the count every frame).
-  * *Not done*: an element is known by its place in the tree, so one that changes place (a sibling before it added or removed) is laid out out of its state for a frame.
+  * *Places and keys*: an element is known by its place in the tree, or by its key (`gp_key`, a focus id; see "Element keys"); when it changes place without one, the
+    frame that sees it there finds it in no state, and lays out again at once (the loop above), so nothing is shown out of its state.
     Pressed is "hovered while the button is down", as it is for painting, not CSS's `:active` that holds while the pointer leaves the element.
   * `tests/lstate_test.c`: a box that grows and its neighbour that moves, padding, a font size inherited by text, pressed, focus, a cached view twice, an animation on the
     same element, the first frame that shows the hover already grown, a click on the grown part, a box that shrinks away from the pointer (the window stops drawing),
@@ -1703,4 +1742,4 @@ Roughly in the order I'd tackle them:
    painted in full when it or its scroller moves (their clip moves with them: only views without one are moved, see "Transforms" and `tests/paintshift_test.c`). The scene is still
    re-uploaded and drawn as a whole every frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
 5. Native Wayland/X11 and Vulkan backends; multi-window polish.
-6. Transforms have no 3D. A state style that lays out knows an element by its place in the tree (see "State styles that lay out").
+6. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
