@@ -30,9 +30,9 @@
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 #pragma GCC diagnostic ignored "-Wmisleading-indentation"
 #pragma GCC diagnostic ignored "-Wcomment"
-#pragma GCC diagnostic ignored "-Wstringop-truncation"
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
-#if !defined(__clang__)
+#if !defined(__clang__)   /* (warnings clang does not have: naming them would be a warning of its own) */
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"   /* (nsvg__parseTransform's t[6], which every path that reads it has set first) */
 #endif
 #endif

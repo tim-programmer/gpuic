@@ -288,7 +288,7 @@ void gp_scroll_touch(gp_window *w, int phase, float x, float y, int64_t t_ns) {
     /* up */
     w->touch.down = false;
     if (!w->touch.scrolling) {   /* a tap is a click */
-        gp_window_on_mouse_move(w, x, y);
+        gp_window_on_mouse_move(w, x, y, 0);
         gp_window_on_mouse_button(w, x, y, GP_MOUSE_LEFT, true, 1, 0);
         gp_window_on_mouse_button(w, x, y, GP_MOUSE_LEFT, false, 1, 0);
         gp_window_on_mouse_leave(w);   /* (a finger leaves no pointer behind to hover) */

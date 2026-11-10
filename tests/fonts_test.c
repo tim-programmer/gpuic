@@ -129,7 +129,7 @@ static bool abs_pos(const gp_el *n, const gp_el *target, float x, float y, float
 /* Lines painted inside the box of text element i, when every line of it starts with the same glyph: the glyphs
  * at the leftmost x. */
 static int painted_lines(int i) {
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     if (!abs_pos(win()->tree, texts[i], -win()->tree->pos.x, -win()->tree->pos.y, &ax, &ay)) return -1;
     const gp_scene *sc = &win()->scene;
     float minx = 1e9f;
@@ -148,7 +148,7 @@ static int painted_lines(int i) {
 /* Every glyph of text element i is in the scene with the atlas cell and position its own family and weight give. */
 static int check_glyphs(int i, const char *text, int *found_out) {
     const gp_el *n = texts[i];
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     if (!abs_pos(win()->tree, n, -win()->tree->pos.x, -win()->tree->pos.y, &ax, &ay)) return -1;
     gp_text_system *ts = app->text;
     int64_t sel = GP_TEXT_SEL(n->ts);

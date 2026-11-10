@@ -251,13 +251,14 @@ static void dispatch(gp_app *app, const SDL_Event *e) {
         if ((w = gp_app_window_by_id(app, e->window.windowID))) gp_window_on_expose(w);
         break;
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-        if (g_ignore_real_mouse) break;
+        if (g_ignore_real_mouse && (Uint32)e->window.data1 != SYNTH_MOUSE_ID) break;   /* (gp_simulate_mouse's GP_SIM_LEAVE is marked so) */
         if ((w = gp_app_window_by_id(app, e->window.windowID))) gp_window_on_mouse_leave(w);
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (real_mouse(e->motion.which)) break;
         if ((w = gp_app_window_by_id(app, e->motion.windowID)))
-            gp_window_on_mouse_move(w, e->motion.x, e->motion.y);
+            gp_window_on_mouse_move(w, e->motion.x, e->motion.y,
+                                    (e->motion.which & 0xffff0000u) == SYNTH_MOUSE_ID ? (e->motion.which & 0xffu) : map_mods(SDL_GetModState()));
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -391,10 +392,14 @@ void gp_platform_inject_text(gp_window *w, const char *utf8) {
 void gp_platform_inject_mouse(gp_window *w, int kind, float x, float y, int button, int clicks, uint32_t mods) {
     SDL_Event e;
     memset(&e, 0, sizeof e); /* `= { 0 }` would only initialize the union's first member */
-    if (kind == GP_SIM_MOVE) {
+    if (kind == GP_SIM_LEAVE) {
+        e.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+        e.window.windowID = w->id;
+        e.window.data1 = (Sint32)SYNTH_MOUSE_ID;
+    } else if (kind == GP_SIM_MOVE) {
         e.type = SDL_EVENT_MOUSE_MOTION;
         e.motion.windowID = w->id;
-        e.motion.which = SYNTH_MOUSE_ID;
+        e.motion.which = SYNTH_MOUSE_ID | (mods & 0xffu); /* (motion carries no modifiers either: smuggled) */
         e.motion.x = x;
         e.motion.y = y;
     } else {
@@ -403,7 +408,7 @@ void gp_platform_inject_mouse(gp_window *w, int kind, float x, float y, int butt
         e.button.button = button == 2 ? SDL_BUTTON_MIDDLE : button == 3 ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
         e.button.down = kind == GP_SIM_DOWN;
         e.button.clicks = (Uint8)clicks;
-        e.button.which = SYNTH_MOUSE_ID | mods; /* button events carry no modifiers: smuggle them */
+        e.button.which = SYNTH_MOUSE_ID | (mods & 0xffu); /* button events carry no modifiers: smuggle them */
         e.button.x = x;
         e.button.y = y;
     }

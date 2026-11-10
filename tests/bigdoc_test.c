@@ -183,7 +183,7 @@ static void test_big(Fix *f) {
     wait_draws(2);
     {
         const gp_el *s = scroller(0);
-        float ax, ay;
+        float ax = 0.f, ay = 0.f;
         abs_of(win()->tree, s, 0, 0, &ax, &ay);
         gp_scroll_wheel(win(), (gp_point){ ax + 50, ay + 20 }, 0, -1e9f);   /* all the way up first */
         wait_draws(2);
@@ -303,7 +303,7 @@ static void test_wide_line(Fix *f) {
     float before = sc->scroll_max.x;
     gp_point p;
     {
-        float ax, ay;
+        float ax = 0.f, ay = 0.f;
         abs_of(win()->tree, sc, 0, 0, &ax, &ay);
         gp_scroll_wheel(win(), (gp_point){ ax + 50, ay + 20 }, 0, 1e9f);
         gp_scroll_wheel(win(), (gp_point){ ax + 50, ay + 20 }, 0, -(float)(NLINES - 200000 - 4) * LH);

@@ -154,7 +154,7 @@ static gp_el *find_scroller(gp_el *n, uint64_t key, float ox, float oy, float *a
 }
 
 static void wheel_over(gp_scroll h, float dy) {
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     gp_el *sc = find_scroller(win()->tree, h.id, 0, 0, &ax, &ay);
     CHECK(sc != NULL, "scroller not found");
     if (sc) gp_scroll_wheel(win(), (gp_point){ ax + 20, ay + 20 }, 0, dy);
@@ -242,7 +242,7 @@ static void test_expires_by_itself(void) {
 
 static void test_hover(void) {
     where = "test_hover";
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     gp_el *sc = find_scroller(win()->tree, fix()->s_auto.id, 0, 0, &ax, &ay);
     CHECK(sc != NULL, "scroller not found");
     if (!sc) return;
@@ -276,7 +276,7 @@ static void test_hover(void) {
 
 static void test_hover_rules(void) {
     where = "test_hover_rules";
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     gp_el *sc = find_scroller(win()->tree, fix()->s_clipped.id, 0, 0, &ax, &ay);
     CHECK(sc != NULL, "the clipped scroller was not found: its parents did not pass on that something below them hides scrollbars");
     if (sc) {
@@ -317,7 +317,7 @@ static void test_hidden_thumb_cannot_be_grabbed(void) {
     }
     step(3.0);
     CHECK(t_magenta() < 0, "precondition: hidden (%.2f)", t_magenta());
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     gp_el *sc = find_scroller(win()->tree, fix()->s_auto.id, 0, 0, &ax, &ay);
     if (!sc) { CHECK(false, "scroller not found"); return; }
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);

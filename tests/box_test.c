@@ -91,7 +91,7 @@ static bool abs_pos(const gp_el *n, const gp_el *target, float x, float y, float
 }
 typedef struct { int x0, y0, w, h; } Box;
 static Box box_of(int i) {
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     abs_pos(win()->tree, els[i], -win()->tree->pos.x, -win()->tree->pos.y, &ax, &ay);
     return (Box){ (int)lroundf(ax), (int)lroundf(ay), (int)lroundf(els[i]->size.w), (int)lroundf(els[i]->size.h) };
 }

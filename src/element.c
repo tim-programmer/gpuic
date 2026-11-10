@@ -68,7 +68,7 @@ enum {
     M_STROKE_W, M_STROKE_COLOR, M_STROKE_CAP, M_STROKE_JOIN, M_MITER_LIMIT, M_HIT_TOL,
     M_DASH, M_DASH_OFF, M_STROKE_GRADIENT, M_ARROW, M_FILL, M_CLOSED, M_PATH_TEXT, M_PATH_TEXT_DY,
     M_FILTER, M_BLEND, M_MASK, M_MASK_LUM, M_FILL_RULE, M_MARKER, M_BACKDROP,
-    M_ROTATE_X, M_ROTATE_Y, M_TRANSLATE_Z, M_XF_PERSP, M_PERSP, M_PERSP_ORIGIN, M_BACKFACE, M_KEY,
+    M_ROTATE_X, M_ROTATE_Y, M_TRANSLATE_Z, M_XF_PERSP, M_PERSP, M_PERSP_ORIGIN, M_BACKFACE, M_KEY, M_ON_HOVER,
 };
 
 enum { SIDE_L = 1, SIDE_T = 2, SIDE_R = 4, SIDE_B = 8, SIDE_ALL = 15 };
@@ -436,6 +436,8 @@ gp_node *gp_on_drag(gp_mouse_fn fn) { return mod_fn(M_ON_DRAG, (gp_any_fn)fn, NU
 gp_node *gp_on_drag_data(gp_mouse_fn fn, void *data) { return mod_fn(M_ON_DRAG, (gp_any_fn)fn, data); }
 gp_node *gp_on_mouse_up(gp_mouse_fn fn) { return mod_fn(M_ON_MOUSE_UP, (gp_any_fn)fn, NULL); }
 gp_node *gp_on_mouse_up_data(gp_mouse_fn fn, void *data) { return mod_fn(M_ON_MOUSE_UP, (gp_any_fn)fn, data); }
+gp_node *gp_on_hover(gp_hover_fn fn) { return mod_fn(M_ON_HOVER, (gp_any_fn)fn, NULL); }
+gp_node *gp_on_hover_data(gp_hover_fn fn, void *data) { return mod_fn(M_ON_HOVER, (gp_any_fn)fn, data); }
 gp_node *gp_on_ime(gp_ime_fn fn) { return mod_fn(M_ON_IME, (gp_any_fn)fn, NULL); }
 gp_node *gp_on_layout(gp_layout_fn fn) { return mod_fn(M_ON_LAYOUT, (gp_any_fn)fn, NULL); }
 gp_node *gp_on_scroll(gp_scroll_fn fn) { return mod_fn(M_ON_SCROLL, (gp_any_fn)fn, NULL); }
@@ -821,6 +823,10 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
         el->on_mouse_down = (gp_handler){ m->fn, m->data, g_bc->view };
         break;
     case M_ON_DRAG: el->on_drag = (gp_handler){ m->fn, m->data, g_bc->view }; break;
+    case M_ON_HOVER:
+        el->on_hover = (gp_handler){ m->fn, m->data, g_bc->view };
+        g_bc->app->on_hover_seen = true;
+        break;
     case M_ON_MOUSE_UP: el->on_mouse_up = (gp_handler){ m->fn, m->data, g_bc->view }; break;
     case M_ON_IME: el->on_ime = (gp_handler){ m->fn, m->data, g_bc->view }; break;
     case M_ON_LAYOUT: el->on_layout = (gp_handler){ m->fn, m->data, g_bc->view }; break;
@@ -1288,41 +1294,90 @@ static bool skipped(uint64_t path) {
     return false;
 }
 
-static bool hit_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_hit_kind kind,
-                    uint64_t path, gp_hit *out, gp_affine fwd, bool moved) {
+/* Where an element is for the pointer: its box, the pointer in its own coordinates (`q`), the clip of its children and where they are laid out from.
+ * False if it is not there for the pointer at all (behind the viewer, or turned away with gp_backface_hidden). */
+typedef struct { float x, y, cx, cy; rect b, child_clip; gp_point q; } hit_geo;
+
+static bool hit_geometry(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_affine *fwd, bool *moved, hit_geo *g) {
     float x = ox + n->pos.x, y = oy + n->pos.y;
-    rect b = { x, y, x + n->size.w, y + n->size.h };
-    if (n->path) path = n->path;   /* (what layout knows it by: its place, or its key) */
+    g->x = x;
+    g->y = y;
+    g->b = (rect){ x, y, x + n->size.w, y + n->size.h };
     if (n->style.has_xf) {
-        fwd = gp_aff_mul(moved ? fwd : gp_aff_identity(), gp_el_affine(n, x, y));
-        moved = true;
-        if (gp_el_behind(n, fwd, x, y) || (n->style.backface_hidden && gp_el_backfacing(n, fwd, x, y))) return false;   /* behind the viewer, or turned away: not there for the pointer either */
+        *fwd = gp_aff_mul(*moved ? *fwd : gp_aff_identity(), gp_el_affine(n, x, y));
+        *moved = true;
+        if (gp_el_behind(n, *fwd, x, y) || (n->style.backface_hidden && gp_el_backfacing(n, *fwd, x, y))) return false;   /* behind the viewer, or turned away: not there for the pointer either */
     }
-    gp_point q = moved ? gp_aff_apply(gp_aff_inverse(fwd), p) : p;
-    rect child_clip = clip;
-    float cx = x - n->scroll.x, cy = y - n->scroll.y; /* children live in scrolled space */
+    g->q = *moved ? gp_aff_apply(gp_aff_inverse(*fwd), p) : p;
+    g->child_clip = clip;
+    g->cx = x - n->scroll.x;   /* children live in scrolled space */
+    g->cy = y - n->scroll.y;
     if (n->style.overflow_hidden || n->style.overflow_x_scroll || n->style.overflow_y_scroll) {
-        rect box = b;
-        if (!moved || aff_box(fwd, b, &box)) {
-            child_clip.x0 = fmaxf(clip.x0, box.x0); child_clip.y0 = fmaxf(clip.y0, box.y0);
-            child_clip.x1 = fminf(clip.x1, box.x1); child_clip.y1 = fminf(clip.y1, box.y1);
+        rect box = g->b;
+        if (!*moved || aff_box(*fwd, g->b, &box)) {
+            g->child_clip.x0 = fmaxf(clip.x0, box.x0); g->child_clip.y0 = fmaxf(clip.y0, box.y0);
+            g->child_clip.x1 = fminf(clip.x1, box.x1); g->child_clip.y1 = fminf(clip.y1, box.y1);
         }
     }
-    if (n->sticky && hit_rec(n->sticky, x, y, child_clip, p, kind, (path ^ 0x57ac4ull) * 1099511628211ull, out, fwd, moved)) return true;   /* a pinned header is above the rows */
+    return true;
+}
+
+/* the pointer is on the element itself (not something in it): in its clip, and in its box (on the stroke, for a curve) */
+static bool hit_own(const gp_el *n, const hit_geo *g, rect clip, gp_point p) {
+    return rect_has(clip, p) && rect_has(g->b, g->q) && (n->kind != GP_EL_CURVE || gp_curve_hit(n, g->q.x - g->x, g->q.y - g->y));
+}
+
+static bool hit_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, gp_hit_kind kind,
+                    uint64_t path, gp_hit *out, gp_affine fwd, bool moved) {
+    hit_geo g;
+    if (n->path) path = n->path;   /* (what layout knows it by: its place, or its key) */
+    if (!hit_geometry(n, ox, oy, clip, p, &fwd, &moved, &g)) return false;
+    if (n->sticky && hit_rec(n->sticky, g.x, g.y, g.child_clip, p, kind, (path ^ 0x57ac4ull) * 1099511628211ull, out, fwd, moved)) return true;   /* a pinned header is above the rows */
     for (uint32_t i = n->nchildren; i-- > 0;) {
         uint64_t cp = (path ^ (i + 1)) * 1099511628211ull;
-        if (hit_rec(n->children[i], cx, cy, child_clip, p, kind, cp, out, fwd, moved)) return true;
+        if (hit_rec(n->children[i], g.cx, g.cy, g.child_clip, p, kind, cp, out, fwd, moved)) return true;
     }
-    if (has_handler(n, kind) && !(g_hit_nskip && skipped(path)) && rect_has(clip, p) && (n->kind == GP_EL_CURVE ? rect_has(b, q) && gp_curve_hit(n, q.x - x, q.y - y) : rect_has(b, q))) {
+    if (has_handler(n, kind) && !(g_hit_nskip && skipped(path)) && hit_own(n, &g, clip, p)) {
         out->el = n;
         out->path = path;
-        out->ox = x;
-        out->oy = y;
-        out->qx = q.x;
-        out->qy = q.y;
+        out->ox = g.x;
+        out->oy = g.y;
+        out->qx = g.q.x;
+        out->qy = g.q.y;
         return true;
     }
     return false;
+}
+
+/* gp_on_hover: whether the pointer is in `n` or in anything in it; the elements with a handler that it is in go to `out`, innermost first. A subtree
+ * with no handler is looked into only when an element above has one (`all`: what it is in counts for that one). */
+static bool hover_rec(gp_el *n, float ox, float oy, rect clip, gp_point p, uint64_t path, gp_affine fwd, bool moved, bool all, gp_hover_set *out) {
+    if (!all && !(n->sub_flags & GP_SUB_ON_HOVER) && !n->sticky && n->kind != GP_EL_LIST) return false;   /* (a list's rows are not in its flags) */
+    hit_geo g;
+    if (n->path) path = n->path;
+    if (!hit_geometry(n, ox, oy, clip, p, &fwd, &moved, &g)) return false;
+    bool mine = n->on_hover.fn != NULL, in = false;
+    all |= mine;
+    if (n->sticky) in |= hover_rec(n->sticky, g.x, g.y, g.child_clip, p, (path ^ 0x57ac4ull) * 1099511628211ull, fwd, moved, all, out);
+    for (uint32_t i = n->nchildren; i-- > 0;)
+        in |= hover_rec(n->children[i], g.cx, g.cy, g.child_clip, p, (path ^ (i + 1)) * 1099511628211ull, fwd, moved, all, out);
+    if (!in && all) in = hit_own(n, &g, clip, p);
+    if (in && mine) {
+        if (out->len == out->cap) {
+            out->cap = out->cap ? out->cap * 2 : 16;
+            out->items = realloc(out->items, out->cap * sizeof *out->items);
+            if (!out->items) abort();
+        }
+        out->items[out->len++] = (gp_hover_at){ path, n->on_hover };
+    }
+    return in;
+}
+
+void gp_hover_collect(gp_el *root, gp_point p, gp_hover_set *out) {
+    out->len = 0;
+    if (!root) return;
+    rect everything = { -1e9f, -1e9f, 1e9f, 1e9f };
+    hover_rec(root, 0, 0, everything, p, 14695981039346656037ull, gp_aff_identity(), false, false, out);
 }
 
 bool gp_hit_test_skipping(gp_el *root, gp_point p, gp_hit_kind kind, gp_hit *out, const uint64_t *skip, int nskip) {

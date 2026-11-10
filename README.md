@@ -90,6 +90,9 @@ cmake -S . -B build -G Ninja && cmake --build build
 ./build/counter
 ```
 
+It builds without warnings with GCC (Debug and Release, whose optimizer finds more) and with clang (`CC=clang CXX=clang++`); the pragmas around the
+bundled nanosvg name only the warnings the compiler at hand knows.
+
 Headless checks: `GPUIC_SCREENSHOT=out.ppm` renders a few frames, writes a PPM and exits.
 Inject input after the second frame with `GPUIC_HOVER=x,y`, `GPUIC_CLICK=x,y` and
 `GPUIC_KEYS="tab h i shift-tab enter"` and `GPUIC_WHEEL="x,y,dx,dy;..."` (real SDL key / wheel
@@ -109,7 +112,7 @@ out: take two and subtract to measure one stretch (`tests/cables_bench.c` uses o
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
 and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
 awaits: pipes, sockets, a TCP echo through coroutines, closing and cancelling at awkward moments),
-`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/lstate_test.c` (state styles that lay out), `tests/layer_test.c` (offscreen layers: group opacity, translucent strokes), `tests/effects_test.c` (filters, blend modes, masks), `tests/shapes_test.c` (fill rules, markers, backdrop filters), `tests/xform3d_test.c` (3D transforms, keys), `tests/svgrelease_test.c` (releasing a drawing renders only its views), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/xform2_test.c` (skew, scrollers in transformed parents, a hover style's text color), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/stroke_test.c` (dashes, gradients along a stroke, arrowheads, fills, text on a path), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
+`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/lstate_test.c` (state styles that lay out), `tests/layer_test.c` (offscreen layers: group opacity, translucent strokes), `tests/effects_test.c` (filters, blend modes, masks), `tests/shapes_test.c` (fill rules, markers, backdrop filters), `tests/xform3d_test.c` (3D transforms, keys), `tests/svgrelease_test.c` (releasing a drawing renders only its views), `tests/pointer_test.c` (a drag's modifiers, a drag whose element moves or goes, `gp_on_hover`), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/xform2_test.c` (skew, scrollers in transformed parents, a hover style's text color), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/stroke_test.c` (dashes, gradients along a stroke, arrowheads, fills, text on a path), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
 widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-height list, checked
 against a model), `tests/text_test.c` (fonts and shaping, against the fonts actually installed) and
 `tests/vlist_test.c` (the row-height index against a brute-force model). The first three need a
@@ -185,14 +188,14 @@ Link `gpuic::cpp` (CMake: `target_link_libraries(app PRIVATE gpuic::cpp)`; it is
 * **Children.** `.child(x)` takes an `Element`, a `gp_node *`, a string (a text element), an `Entity<T>` (a nested view) or `nullptr`
   (skipped); `.children(range)` and `.children({a, b})` take several. `.when(cond, f)`, `.when_some(optional, f)` and `.map(f)` are GPUI's:
   `f` gets the element and returns it changed.
-* **Handlers take lambdas** (`.on_click .on_mouse_down .on_mouse_up .on_drag .on_key_down .on_key_up .on_text_input .on_action .on_layout
+* **Handlers take lambdas** (`.on_click .on_mouse_down .on_mouse_up .on_drag .on_hover .on_key_down .on_key_up .on_text_input .on_action .on_layout
   .on_ime .with_animation`, and the rows of the lists). A lambda names what it wants by its parameter types, in any order and any subset: the
   state of the view that built the element by reference (`Counter&`, as GPUI's `this`), `Ctx` or `gp_ctx *`, and the event of that
   handler (`const gp_mouse_event&` or by pointer or by value, `const gp_key_event&`, `std::string_view` or `const char *` for text,
   `gp_size` for layout, an `int` for the IME cursor, a `float` for an animation's progress, a `size_t` for a row). Captures are copied into
   the frame's arena, so they must be trivially destructible (numbers, pointers, entity handles: a `static_assert` says so); a lambda that
-  captures nothing costs nothing. A C function pointer and its data work as in C. `on_drag` and `on_mouse_up` capture as the others do (`gp_on_drag_data`,
-  `gp_on_mouse_up_data`; a drag in progress takes its handlers from the element again after every rebuild, so their captures are always the current frame's); `on_layout`,
+  captures nothing costs nothing. A C function pointer and its data work as in C. `on_drag`, `on_mouse_up` and `on_hover` capture as the others do (`gp_on_drag_data`,
+  `gp_on_mouse_up_data`, `gp_on_hover_data`; a drag keeps the pressed element's handlers, with the captures they had at the press, until the release); `on_layout`,
   `on_scroll` and `on_ime` have no data pointer in the C library, so their lambdas cannot capture. Moving an element into itself (`e = std::move(e).w(10)`) keeps it.
 * **State.** `app.new_entity<T>(args...)` and `app.new_view<T>(args...)` construct `T` inside the app (so it may hold `std::string`, `std::vector`...)
   and run its destructor when the entity is released; a view's `T` has `Element render(Ctx)`. `Entity<T>` is the typed handle: `.get(app)`,
@@ -505,6 +508,18 @@ gp_scroll_to_end(cx, list);                   /* follow a log tail */
   with a handler gets it, before any scroller, and it is **used up** (nothing scrolls) unless the handler calls `gp_propagate(cx)`, which passes it to the next handler under the pointer and after the last to
   scrolling as if there had been none. Hit testing is the element's own (the stroke of a curve, the transformed shape of a turned box). Touch drags and flings do not come through it.
   `gp_simulate_wheel(app, x, y, dx, dy, mods)` (in SDL's notches) is the test hook; C++ `.on_wheel([](Self&, const gp_wheel_event&) { ... })`. `tests/wheel_test.c`.
+
+* **`gp_on_hover(fn)` / `gp_on_hover_data(fn, data)`**: `fn(self, cx, inside, data)` when the pointer enters (`inside` true) or leaves the element, for a hint line
+  or a tooltip that follows the pointer. The hit rules are the hover style's (through transforms and clips; on the stroke for a curve); an element counts as entered
+  while the pointer is in it or in anything inside it, so entering a child does not leave the parent, even where the child hangs out of the parent's box
+  (the DOM's `mouseenter` / `mouseleave`, not `mouseover` / `mouseout`). Leaving the window leaves everything. The tree changing under a pointer that did not
+  move counts too: an element that appears under it is entered, one that goes away (or moves away) is left, and is told so with the handler and data it
+  had when it was entered (the same hold as a drag's keeps that frame). Leaves are told first, innermost first, then entries, outermost first, before the frame
+  they change is painted; what a handler notifies is built into that frame. An element is known by its place among its siblings, or its `gp_key`: give
+  one to an element whose earlier siblings come and go. Without one, another element that takes its place is taken for it when it has the same handler function
+  (and is left and entered when it has another). The tree is looked through after each change once a `gp_on_hover` has been built, only where there is one (the
+  subtree flags say where). `gp_simulate_mouse(app, GP_SIM_LEAVE, 0, 0, 0, 0)` takes the pointer out of the window. C++ `.on_hover([tag](Self&, Ctx, bool inside) { ... })`,
+  which may capture. `tests/pointer_test.c` (nested, overhanging, turned, clipped, a curve, an element that comes and goes, the window left) and `tests/cpp_input_test.cpp`.
 
 See `examples/scroll.c`: a 200-row list with keyboard paging, a log nested inside a scrolling
 page (wheel chaining), and a horizontal strip.
@@ -914,7 +929,7 @@ gp_div(gp_transform_perspective(400), gp_rotate_x(25), gp_translate_z(-20))   /*
 ### Element keys
 
 * **`gp_key("name")` / `gp_key_id(n)`** (React's key): an element is known among its siblings by its key instead of its place, for everything that is keyed by the path:
-  a scroller's offset (without `gp_track_scroll`), the hover, pressed and focus layout states of "State styles that lay out", list and cached-view bookkeeping. An element that
+  a scroller's offset (without `gp_track_scroll`), the hover, pressed and focus layout states of "State styles that lay out", which element `gp_on_hover` has told it is entered, list and cached-view bookkeeping. An element that
   tracks focus is known by its focus id already. `prepare` hashes the key (or the focus id) into the path in place of the index; hit testing takes the path layout gave. A
   keyed scroller keeps its offset when a sibling is added before it, where one known by its place takes on the offset of whatever is now in its place
   (`tests/xform3d_test.c`).
@@ -1372,13 +1387,18 @@ input method available to try it against.
 These are general, and available to your own elements:
 
 * `gp_on_mouse_down` + `gp_on_drag` / `gp_on_mouse_up`: **mouse capture**. Mouse events now carry
-  `local` (relative to the element) and `mods`, and `click_count` for multi-clicks.
+  `local` (relative to the element) and `mods`, and `click_count` for multi-clicks. A drag's `mods` are those held at each move and at the release
+  (Shift for a fine adjustment can be pressed or let go during the drag), not those of the press. The capture keeps the handlers of the element
+  pressed, and their data, until the release, however the tree changes meanwhile: the element rebuilt, moved among its siblings (a rack raising the
+  panel being dragged), or gone. Their data may live in the arena of the frame that built them (a C++ lambda's captures do, and so does whatever
+  `gp_frame_alloc` gave): a *hold* on the arenas (`gp_arena_hold` in `src/arena.c`) keeps what they held at the press until the release; an arena
+  reset meanwhile sets its chunks aside and starts on others, which go back to a small pool once the hold is let go. `tests/pointer_test.c`.
 * `gp_clipboard_get / _set`, `gp_cursor_text()` (I-beam), `gp_mods(array, n)` (a runtime-sized list of
   modifiers), `gp_scroll_viewport`, `gp_on_ime` + `gp_ime_rect`, `gp_on_layout` (see Soft wrap), and **`gp_on_scroll(fn)`**: called with a
   scroller's offset whenever it moves (wheel, thumb, track click, scroll-into-view, smooth steps) and after every layout (where
   `gp_scroll_to` and content changes take effect), so an element that draws only what is in view can notice the view left it; `gp_notify` from the
   handler rebuilds and relays out before painting. It runs once per layout pass: do nothing unless something changed.
-* **`gp_simulate_keystrokes / _text / _mouse / _ime`**: synthetic input for tests and demos. Keys,
+* **`gp_simulate_keystrokes / _text / _mouse / _ime`**: synthetic input for tests and demos (`GP_SIM_LEAVE` takes the pointer out of the window). Keys,
   text and mouse are queued as real platform events, so bindings, focus and capture are exercised;
   composition is delivered synchronously, because compositors send their own composition updates
   (empty ones, for an idle IME) which would otherwise erase a queued fake preedit.

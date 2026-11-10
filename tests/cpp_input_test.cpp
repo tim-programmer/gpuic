@@ -36,6 +36,7 @@ struct Page {
     Focus f1, f2, f3, fscroll;
     int saves = 0, selects = 0, last_select = 0, chords = 0, editor_only = 0, plain = 0;
     int list_rows = 1000;
+    std::string hover_log;
     Scroll vs;
     std::vector<int> ids;   // the variable-height list's rows (an id each); the first ten are short
     int tall_id = -1;
@@ -61,7 +62,10 @@ struct Page {
                                   .on_action("page::editor", [](Page& p) { p.editor_only++; }))
                        .child(div().w(60).h(30).flex_none().bg(rgb(0x553377)).track_focus(f2).tab_stop().child("two"))
                        .child(div().w(60).h(30).flex_none().bg(rgb(0x775533)).track_focus(f3).tab_stop().child("three")
-                                  .on_action("page::plain", [](Page& p) { p.plain++; })));
+                                  .on_action("page::plain", [](Page& p) { p.plain++; })))
+            // on_hover with a capture
+            .child(div().absolute().left(300).top(10).w(80).h(40).bg(rgb(0x446644))
+                       .on_hover([tag = 7](Page& p, bool inside) { p.hover_log += (inside ? "+" : "-") + std::to_string(tag); }));
     }
 };
 
@@ -289,6 +293,16 @@ static void test_smooth(Co& co, Ctx cx) {
     CHECK(cpp_probe_smooth_ms(app) == 0, "...and off: %d ms", cpp_probe_smooth_ms(app));
 }
 
+static void test_hover(Co& co, Ctx cx) {
+    App app = cx.app();
+    Page& p = *g_page.get(app);
+    gp_simulate_mouse(app, GP_SIM_MOVE, 340, 30, 0, 0);
+    settle(co, 0.1);
+    gp_simulate_mouse(app, GP_SIM_MOVE, 410, 510, 0, 0);
+    settle(co, 0.1);
+    CHECK(p.hover_log == "+7-7", "on_hover with a captured tag: '%s'", p.hover_log.c_str());
+}
+
 static void driver(Co& co, Ctx cx) {
     co.sleep(0.2);
     test_scroll(co, cx);
@@ -297,6 +311,7 @@ static void driver(Co& co, Ctx cx) {
     test_keys(co, cx);
     test_clipboard(co, cx);
     test_smooth(co, cx);
+    test_hover(co, cx);
     cx.app().quit();
 }
 

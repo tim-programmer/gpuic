@@ -14,11 +14,18 @@ typedef struct gp_arena_chunk gp_arena_chunk;
 typedef struct {
     gp_arena_chunk *head, *cur;
     size_t chunk_size;   /* 0 = default */
+    uint32_t epoch;      /* (holds: when what it holds began to be allocated) */
 } gp_arena;
 
 void *gp_arena_alloc(gp_arena *a, size_t size, size_t align); /* zeroed */
 void gp_arena_reset(gp_arena *a);                             /* keeps memory */
 void gp_arena_free(gp_arena *a);
+/* Holds (this thread's arenas): while a hold is on, an arena reset or freed keeps what it held before the hold began, until the hold is released (its
+ * chunks are set aside, and it starts on new ones). What lets a handler taken from one frame be called after the next frames were built: a drag's
+ * handlers until the release, an on_hover's until it is told it was left. Returns the hold, never 0. */
+uint32_t gp_arena_hold(void);
+void gp_arena_release(uint32_t hold);   /* 0: none */
+void gp_arena_holds_free(void);          /* (at exit: the chunks kept for reuse) */
 char *gp_arena_strdup(gp_arena *a, const char *s);
 
 /* ---------------------------------------------------------------- style / elements */
@@ -192,6 +199,7 @@ enum {
     GP_SUB_CLIP = 32,   /* overflow hidden: the instances below are clipped to a box that moves with the subtree */
     GP_SUB_XF = 64,     /* a transform: the instances below carry its matrix */
     GP_SUB_LSTATE = 128,   /* a state style that lays out (sizes, padding, fonts...): layout depends on the mouse and the focus */
+    GP_SUB_ON_HOVER = 256, /* gp_on_hover: the window looks for where the pointer is in it after every change */
     GP_SUB_DYN_LAYOUT = GP_SUB_LIST | GP_SUB_SCROLL
 };
 
@@ -224,7 +232,7 @@ struct gp_el {
     gp_el **children;
     uint32_t nchildren;
     gp_handler on_click, on_mouse_down, on_key_down, on_key_up, on_text;
-    gp_handler on_drag, on_mouse_up, on_ime, on_layout, on_scroll, on_wheel;
+    gp_handler on_drag, on_mouse_up, on_ime, on_layout, on_scroll, on_wheel, on_hover;
     float ime_rect[4];     /* element-relative caret rect for the IME candidate window */
     bool has_ime_rect;
     gp_action_handler *actions;
@@ -271,7 +279,7 @@ struct gp_el {
     /* Root of a cached view's elements (gp_child_view_cached): the entity, and what layout and paint
      * remember about the subtree so that, while nothing it depends on changed, neither redoes it. */
     gp_entity cached_view;     /* generation 0 = not such a root */
-    uint8_t sub_flags;         /* GP_SUB_*: what the subtree below contains (set by prepare) */
+    uint16_t sub_flags;        /* GP_SUB_*: what the subtree below contains (set by prepare) */
     bool prep_valid;           /* prepare's results (path, text style, flags) hold for the whole subtree */
     bool lk_valid;             /* the subtree is laid out for the inputs in lk[] */
     float lk[4];
@@ -315,6 +323,10 @@ gp_el *gp_build_view(gp_build_ctx *bc, gp_entity view, bool cached);
 gp_entity gp_building_view(void);   /* the view whose render function is running, or null */
 
 typedef enum { GP_HIT_CLICK, GP_HIT_MOUSE_DOWN, GP_HIT_CURSOR, GP_HIT_FOCUS, GP_HIT_WHEEL } gp_hit_kind;
+/* gp_on_hover: the elements with a handler whose hit area (or a descendant's) has `p`, innermost first, by path */
+typedef struct { uint64_t path; gp_handler h; } gp_hover_at;
+typedef struct { gp_hover_at *items; size_t len, cap; } gp_hover_set;
+void gp_hover_collect(gp_el *root, gp_point p, gp_hover_set *out);
 typedef struct { gp_el *el; uint64_t path; float ox, oy; /* element's absolute origin */ float qx, qy; /* where the point is, in the element's own coordinates (as ox, oy: layout coordinates) */ } gp_hit;
 bool gp_hit_test(gp_el *root, gp_point p, gp_hit_kind kind, gp_hit *out);
 bool gp_hit_test_skipping(gp_el *root, gp_point p, gp_hit_kind kind, gp_hit *out, const uint64_t *skip, int nskip);   /* not the elements whose path is in `skip` */
@@ -985,7 +997,9 @@ struct gp_window {
     gp_vviews views;
     gp_scroll_table scrolls;
     gp_anim_table anims;
-    struct { bool active; gp_handler move, up; gp_point origin; uint64_t path; } capture; /* gp_on_drag: the handlers of the element at `path` (taken again from each new tree) */
+    gp_hover_set hovers, hovers_new;   /* gp_on_hover: the elements the pointer is in, as last told; and a buffer */
+    uint32_t hover_hold;   /* keeps the data of the handlers in `hovers` (gp_arena_hold) */
+    struct { bool active; gp_handler move, up; gp_point origin; uint32_t hold; } capture; /* gp_on_drag: the pressed element's handlers, their frame held until the release */
     uint64_t drag_key;     /* scroll key whose thumb is being dragged, 0 = none */
     uint64_t page_key;     /* scroll key whose track the button is held on (it pages again and again), 0 = none */
     int page_axis;
@@ -1083,6 +1097,7 @@ struct gp_app {
     bool capture_next;
     uint8_t *capture_px;   /* RGB, top row first; replaced by each capture */
     int capture_w, capture_h;
+    bool on_hover_seen;   /* a gp_on_hover was built (in a list's rows, which the root's flags do not show): look for the pointer in the tree after each change */
     bool has_click, has_hover;
     gp_point click_at, hover_at;
     int64_t start_ns;
@@ -1108,7 +1123,7 @@ struct gp_app {
 };
 
 /* Window event entry points, called by the platform backend. */
-void gp_window_on_mouse_move(gp_window *w, float x, float y);
+void gp_window_on_mouse_move(gp_window *w, float x, float y, uint32_t mods);
 void gp_window_on_mouse_button(gp_window *w, float x, float y, int button, bool down, int clicks,
                                uint32_t mods);
 void gp_window_on_mouse_leave(gp_window *w);

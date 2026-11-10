@@ -187,6 +187,10 @@ static void renderer_release(gp_app *app, gp_window *current) {
 
 static void window_destroy(gp_app *app, gp_window *w) {
     gp_platform_close_window(app, w);
+    gp_arena_release(w->capture.hold);
+    gp_arena_release(w->hover_hold);
+    free(w->hovers.items);
+    free(w->hovers_new.items);
     gp_arena_free(&w->arena);
     gp_arena_free(&w->scratch);
     gp_views_free(w);
@@ -223,6 +227,12 @@ void gp_window_on_mouse_leave(gp_window *w) {
 
 /* ---------------------------------------------------------------- input */
 
+static void capture_end(gp_window *w) {
+    w->capture.active = false;
+    gp_arena_release(w->capture.hold);
+    w->capture.hold = 0;
+}
+
 /* `origin` is the absolute position of the element the handler belongs to, for `local`. */
 static void fire(gp_window *w, const gp_handler *h, gp_point p, gp_point origin, int button,
                  int clicks, uint32_t mods) {
@@ -231,6 +241,45 @@ static void fire(gp_window *w, const gp_handler *h, gp_point p, gp_point origin,
     gp_ctx cx = { w->app, w, h->owner, false };
     gp_mouse_event ev = { p, { p.x - origin.x, p.y - origin.y }, button, clicks, mods };
     ((gp_mouse_fn)h->fn)(state, &cx, &ev, h->data);
+}
+
+/* ---- gp_on_hover */
+
+static bool hover_has(const gp_hover_set *s, const gp_hover_at *a) {   /* the same element, as far as the pointer is concerned: its path, and the same handler */
+    for (size_t i = 0; i < s->len; i++)
+        if (s->items[i].path == a->path && s->items[i].h.fn == a->h.fn && s->items[i].h.owner.index == a->h.owner.index &&
+            s->items[i].h.owner.generation == a->h.owner.generation)
+            return true;
+    return false;
+}
+
+static void fire_hover(gp_window *w, const gp_handler *h, bool inside) {
+    void *state = gp_entity_get(w->app, h->owner);
+    if (!state || !h->fn) return;
+    gp_ctx cx = { w->app, w, h->owner, false };
+    ((gp_hover_fn)h->fn)(state, &cx, inside, h->data);
+}
+
+/* Tells the elements with gp_on_hover that the pointer left or entered them since the last time: after the pointer moved, and after the tree
+ * changed under it. The handlers of the elements it is in are kept, with a hold on the frame that built them, so that one that goes away can
+ * still be told; each time, a new hold is taken for the handlers of now and the last one let go. True if a handler was called. */
+static bool update_hovers(gp_window *w) {
+    gp_hover_set *now = &w->hovers_new, *was = &w->hovers;
+    now->len = 0;
+    if (w->mouse_in && w->tree && (w->tree->sub_flags & GP_SUB_ON_HOVER || w->app->on_hover_seen)) gp_hover_collect(w->tree, w->mouse, now);
+    if (!now->len && !was->len) return false;
+    uint32_t hold = now->len ? gp_arena_hold() : 0;
+    bool fired = false;
+    for (size_t i = 0; i < was->len; i++)   /* (innermost first) */
+        if (!hover_has(now, &was->items[i])) { fire_hover(w, &was->items[i].h, false); fired = true; }
+    for (size_t i = now->len; i-- > 0;)     /* (outermost first) */
+        if (!hover_has(was, &now->items[i])) { fire_hover(w, &now->items[i].h, true); fired = true; }
+    gp_hover_set t = *was;
+    *was = *now;
+    *now = t;
+    gp_arena_release(w->hover_hold);
+    w->hover_hold = hold;
+    return fired;
 }
 
 static void update_cursor(gp_window *w) {
@@ -244,13 +293,13 @@ static void update_cursor(gp_window *w) {
     }
 }
 
-void gp_window_on_mouse_move(gp_window *w, float x, float y) {
+void gp_window_on_mouse_move(gp_window *w, float x, float y, uint32_t mods) {
     w->mouse = (gp_point){ x, y };
     w->mouse_in = true;
     w->dirty_paint = true;
     if (w->drag_key) gp_scroll_drag_to(w, w->mouse);
     if (w->capture.active) /* a press is held on an element with gp_on_drag */
-        fire(w, &w->capture.move, w->mouse, w->capture.origin, GP_MOUSE_LEFT, 0, 0);
+        fire(w, &w->capture.move, w->mouse, w->capture.origin, GP_MOUSE_LEFT, 0, mods);
     update_cursor(w);
 }
 
@@ -299,13 +348,15 @@ void gp_window_on_mouse_button(gp_window *w, float x, float y, int button, bool 
             gp_point origin = { p.x - (hit.qx - hit.ox), p.y - (hit.qy - hit.oy) };   /* (so that p - origin is where it is in the element, through a transform too) */
             fire(w, &hit.el->on_mouse_down, p, origin, button, clicks, mods);
             if (button == GP_MOUSE_LEFT && (hit.el->on_drag.fn || hit.el->on_mouse_up.fn)) {
-                /* capture by copy: the element itself may be rebuilt before the release (and the handlers taken again from the new one, whose data is that
-                 * frame's: a C++ lambda's captures live in the arena of the frame that built them) */
+                /* the drag stays with this element's handlers until the release, however the tree changes meanwhile (the element may be rebuilt, moved
+                 * among its siblings, or gone). Their data may be in the arena of the frame that built them (a C++ lambda's captures are): a hold keeps
+                 * that until the release. */
+                capture_end(w);
                 w->capture.active = true;
                 w->capture.move = hit.el->on_drag;
                 w->capture.up = hit.el->on_mouse_up;
                 w->capture.origin = origin;
-                w->capture.path = hit.path;
+                w->capture.hold = gp_arena_hold();
             }
         }
     } else if (button == GP_MOUSE_LEFT) {
@@ -318,6 +369,7 @@ void gp_window_on_mouse_button(gp_window *w, float x, float y, int button, bool 
         if (w->capture.active) {
             w->capture.active = false;
             fire(w, &w->capture.up, p, w->capture.origin, button, clicks, mods);
+            capture_end(w);
         }
         /* A click needs press and release on the same element. */
         if (w->down_path && gp_hit_test(w->tree, p, GP_HIT_CLICK, &hit) &&
@@ -399,29 +451,6 @@ static void run_layout_handlers(gp_window *w, gp_el *n) {
     for (uint32_t i = 0; i < n->nchildren; i++) run_layout_handlers(w, n->children[i]);
 }
 
-/* the element at `path` in the tree (layout gave every element its path), or NULL */
-static gp_el *find_path(gp_el *n, uint64_t path) {
-    if (!n) return NULL;
-    if (n->path == path) return n;
-    for (uint32_t i = 0; i < n->nchildren; i++) {
-        gp_el *f = find_path(n->children[i], path);
-        if (f) return f;
-    }
-    return NULL;
-}
-
-/* After a new tree: a drag in progress goes on with the handlers of the element as it is now (the old ones' data went with the old frame); if it is gone, the drag ends */
-static void refresh_capture(gp_window *w) {
-    if (!w->capture.active) return;
-    gp_el *e = find_path(w->tree, w->capture.path);
-    if (!e || (!e->on_drag.fn && !e->on_mouse_up.fn)) {
-        w->capture.active = false;
-        return;
-    }
-    w->capture.move = e->on_drag;
-    w->capture.up = e->on_mouse_up;
-}
-
 static void build_and_layout(gp_app *app, gp_window *w) {
     /* Build and lay out. gp_on_layout handlers run after each layout and may ask for another round
      * (a text field that learned its width re-wraps); iterate so that nothing is painted from a
@@ -443,7 +472,6 @@ static void build_and_layout(gp_app *app, gp_window *w) {
         gp_layout_root(w->tree, app->text, w->size, &w->scrolls, &w->views, &w->anims);
         gp_layout_use_states(NULL);
         if (rebuild) gp_views_sweep(w);
-        if (rebuild) refresh_capture(w);
         app->stat_build_ns += t1 - t0;
         app->stat_layout_ns += gp_now_ns() - t1;
         run_layout_handlers(w, w->tree);
@@ -479,7 +507,8 @@ static uint64_t lstate_situation(const gp_window *w) {
  * under the pointer grows), until the two agree. A style that moves its element away from the pointer would have it go back and forth
  * for ever, so only so many layouts follow while the pointer, the button, the focus and the scroll offsets stay where they are; then
  * what was last laid out stays (as in a browser, which looks again only when the pointer moves). */
-static void paint_window(gp_app *app, gp_window *w) {
+static bool paint_window(gp_app *app, gp_window *w) {
+    bool relaid = false;
     for (;;) {
         int64_t tp = gp_now_ns();
         gp_paint_collect_states(&w->lstates_seen);
@@ -491,14 +520,15 @@ static void paint_window(gp_app *app, gp_window *w) {
         if (seen->len > 1) qsort(seen->items, seen->len, sizeof *seen->items, lstate_cmp);
         bool same = seen->len == used->len;
         for (size_t i = 0; same && i < seen->len; i++) same = seen->items[i].path == used->items[i].path && seen->items[i].bits == used->items[i].bits;
-        if (same) return;
+        if (same) return relaid;
         uint64_t sit = lstate_situation(w);
         if (sit != w->lstate_situation || w->anims.running) {
             w->lstate_situation = sit;
             w->lstate_budget = 4;
         }
-        if (w->lstate_budget <= 0) return;
+        if (w->lstate_budget <= 0) return relaid;
         w->lstate_budget--;
+        relaid = true;
         gp_lstate_set t = *used;
         *used = *seen;
         *seen = t;
@@ -525,9 +555,11 @@ static void window_draw(gp_app *app, gp_window *w) {
     }
     /* something is still animating: ask for the next frame (at the display's rate); when nothing is, no more are */
     if (w->anims.running && !w->anims.job_pending) gp_exec_window_frame(app, w, GP_WAKE_LAYOUT);
+    /* gp_on_hover: told before the frame is painted; what a handler changes is built into this frame (a few rounds at most) */
+    for (int round = 0; round < 3 && update_hovers(w) && (w->dirty_render || w->dirty_layout); round++) build_and_layout(app, w);
     w->dirty_paint = false;
     gp_scroll_autohide_update(w);   /* how visible the fading scrollbars are now, and when to look again */
-    paint_window(app, w);
+    if (paint_window(app, w)) update_hovers(w);   /* (a state style that lays out moved things under the pointer: what changes now is for the next frame) */
 
     gp_platform_make_current(w);
     int64_t ts = gp_now_ns();
@@ -667,11 +699,11 @@ int gp_application_run(gp_ready_fn ready, void *userdata) {
             gp_window *w = app->windows[0];
             if (app->frames == 2 && app->has_hover) {
                 app->has_hover = false;
-                gp_window_on_mouse_move(w, app->hover_at.x, app->hover_at.y);
+                gp_window_on_mouse_move(w, app->hover_at.x, app->hover_at.y, 0);
             }
             if (app->frames == 2 && app->has_click) {
                 app->has_click = false;
-                gp_window_on_mouse_move(w, app->click_at.x, app->click_at.y);
+                gp_window_on_mouse_move(w, app->click_at.x, app->click_at.y, 0);
                 gp_window_on_mouse_button(w, app->click_at.x, app->click_at.y, GP_MOUSE_LEFT, true, 1, 0);
                 gp_window_on_mouse_button(w, app->click_at.x, app->click_at.y, GP_MOUSE_LEFT, false, 1, 0);
             }
@@ -680,7 +712,7 @@ int gp_application_run(gp_ready_fn ready, void *userdata) {
                 if (app->clicks[i].done || app->frames < 1 || elapsed_ms < app->clicks[i].ms) continue;
                 app->clicks[i].done = true;
                 gp_point p = app->clicks[i].at;
-                gp_window_on_mouse_move(w, p.x, p.y);
+                gp_window_on_mouse_move(w, p.x, p.y, 0);
                 gp_window_on_mouse_button(w, p.x, p.y, GP_MOUSE_LEFT, true, 1, 0);
                 gp_window_on_mouse_button(w, p.x, p.y, GP_MOUSE_LEFT, false, 1, 0);
                 app->shot_at = app->frames + 3;
@@ -695,10 +727,10 @@ int gp_application_run(gp_ready_fn ready, void *userdata) {
                 /* press, move halfway, move to the end, release: one step per frame */
                 float *d = app->drag;
                 switch (app->drag_stage++) {
-                case 0: gp_window_on_mouse_move(w, d[0], d[1]);
+                case 0: gp_window_on_mouse_move(w, d[0], d[1], 0);
                         gp_window_on_mouse_button(w, d[0], d[1], GP_MOUSE_LEFT, true, 1, 0); break;
-                case 1: gp_window_on_mouse_move(w, (d[0] + d[2]) / 2, (d[1] + d[3]) / 2); break;
-                case 2: gp_window_on_mouse_move(w, d[2], d[3]); break;
+                case 1: gp_window_on_mouse_move(w, (d[0] + d[2]) / 2, (d[1] + d[3]) / 2, 0); break;
+                case 2: gp_window_on_mouse_move(w, d[2], d[3], 0); break;
                 default:
                     gp_window_on_mouse_button(w, d[2], d[3], GP_MOUSE_LEFT, false, 1, 0);
                     app->has_drag = false;
@@ -740,6 +772,7 @@ int gp_application_run(gp_ready_fn ready, void *userdata) {
     gp_text_system_free(app->text);
     gp_gfx_free(app->gfx);
     gp_platform_shutdown(app);
+    gp_arena_holds_free();
     free(app);
     return status;
 }

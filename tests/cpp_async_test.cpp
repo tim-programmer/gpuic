@@ -495,8 +495,7 @@ static void test_ctx_and_handles(Co& co, Ctx cx) {
     }
     {   // Co::run is false when the coroutine was cancelled while it waited
         std::optional<bool> ran;
-        std::optional<int> value = 5;
-        Task t = cx.spawn([&ran, &value](Co& co2) {
+        Task t = cx.spawn([&ran](Co& co2) {
             ran = co2.run([] { usleep(100000); });
         });
         co.sleep(0.03);

@@ -303,7 +303,7 @@ void gp_primary_set(gp_app *app, const char *utf8);
 /* Synthetic input for tests and demos. It is queued as real platform events, so the whole
  * path (key mapping, bindings, focus, text input gating) is exercised. Events are handled on
  * the following loop turns: yield or sleep before asserting. They go to the first window. */
-enum { GP_SIM_MOVE, GP_SIM_DOWN, GP_SIM_UP };
+enum { GP_SIM_MOVE, GP_SIM_DOWN, GP_SIM_UP, GP_SIM_LEAVE };   /* (GP_SIM_LEAVE: the pointer left the window; x and y are not used) */
 void gp_simulate_keystrokes(gp_app *app, const char *keys);   /* "tab h i shift-tab ctrl-a": each is a press and a release */
 void gp_simulate_key(gp_app *app, const char *keystroke, bool down);   /* one press or one release: "shift-a" */
 void gp_simulate_text(gp_app *app, const char *utf8);         /* as if typed / committed by an IME */
@@ -1282,11 +1282,23 @@ gp_node *gp_on_mouse_down(gp_mouse_fn fn);
 gp_node *gp_on_mouse_down_data(gp_mouse_fn fn, void *data);
 /* If the element has a mouse-down handler and the press lands on it, the element captures
  * the mouse until release: every move goes to on_drag and the release to on_mouse_up, with
- * `local` relative to the element, even outside it. */
+ * `local` relative to the element, even outside it, and `mods` the modifiers held at that moment.
+ * The capture keeps the handlers (and their data) of the element pressed until the release, however
+ * the tree changes meanwhile: rebuilt, moved among its siblings, or gone. */
 gp_node *gp_on_drag(gp_mouse_fn fn);
 gp_node *gp_on_drag_data(gp_mouse_fn fn, void *data);
 gp_node *gp_on_mouse_up(gp_mouse_fn fn);
 gp_node *gp_on_mouse_up_data(gp_mouse_fn fn, void *data);
+/* The pointer entered (`inside` true) or left (false) the element: its hit area (as for the hover style: through its transforms and clips, on the
+ * stroke for a curve), or that of anything inside it. Entering a child does not leave its parent (mouseenter and mouseleave, not mouseover and
+ * mouseout); leaving the window leaves everything. Also called when the tree changes under a pointer that did not move: an element that appears
+ * under it is entered, one that goes away (or moves away) is left, with the handler (and the data) it had when it was entered. The element is
+ * known by its place in the tree, or its gp_key: give one to an element whose siblings come and go, or another element that takes its place
+ * is taken for it (if its handler differs, the one is left and the other entered). Leaves come first (innermost first), then entries
+ * (outermost first), just before the frame they change is painted. */
+typedef void (*gp_hover_fn)(void *self, gp_ctx *cx, bool inside, void *data);
+gp_node *gp_on_hover(gp_hover_fn fn);
+gp_node *gp_on_hover_data(gp_hover_fn fn, void *data);
 
 /* Called after every layout with the element's final (border-box) size. Lets an element react to
  * the space it was given, which only layout can decide (a text field wrapping at its width). If

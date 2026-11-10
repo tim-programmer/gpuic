@@ -492,6 +492,7 @@ template <class D> void text_tramp(void* self, gp_ctx* cx, const char* utf8, voi
     run_handler<D>(self, data, cx, utf8, sv);
 }
 template <class D> void wheel_tramp(void* self, gp_ctx* cx, const gp_wheel_event* ev, void* data) { run_handler<D>(self, data, cx, *ev); }
+template <class D> void hover_tramp(void* self, gp_ctx* cx, bool inside, void* data) { run_handler<D>(self, data, cx, inside); }
 template <class D> void scroll_tramp(void* self, gp_ctx* cx, gp_point offset, void* data) { run_handler<D>(self, data, cx, offset); }
 template <class D> void layout_tramp(void* self, gp_ctx* cx, gp_size size, void* data) { run_handler<D>(self, data, cx, size); }
 template <class D> void ime_tramp(void* self, gp_ctx* cx, const char* preedit, int cursor, void* data) {
@@ -666,6 +667,14 @@ public:
         return add(gp_on_mouse_up_data(&detail::mouse_tramp<std::decay_t<F>>, detail::box(std::forward<F>(f))));
     }
     template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element&& on_mouse_up(F&& f) && { on_mouse_up(std::forward<F>(f)); return std::move(*this); }
+
+    /** The pointer entered (`bool inside` true) or left the element (see gp_on_hover): `f(Self&, Ctx, bool inside)`; a lambda may capture. */
+    Element& on_hover(gp_hover_fn fn, void* data = nullptr) & { return add(gp_on_hover_data(fn, data)); }
+    Element&& on_hover(gp_hover_fn fn, void* data = nullptr) && { return std::move(add(gp_on_hover_data(fn, data))); }
+    template <class F> requires(!std::is_convertible_v<F, gp_hover_fn>) Element& on_hover(F&& f) & {
+        return add(gp_on_hover_data(&detail::hover_tramp<std::decay_t<F>>, detail::box(std::forward<F>(f))));
+    }
+    template <class F> requires(!std::is_convertible_v<F, gp_hover_fn>) Element&& on_hover(F&& f) && { on_hover(std::forward<F>(f)); return std::move(*this); }
 
     /** The wheel turned over this element (see gp_on_wheel): `const gp_wheel_event&` has dx, dy, mods and the pointer; it is used up unless the handler calls cx.propagate(). */
     Element& on_wheel(gp_wheel_fn fn, void* data = nullptr) & { return add(gp_on_wheel_data(fn, data)); }

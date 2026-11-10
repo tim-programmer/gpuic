@@ -68,7 +68,7 @@ static bool same_text_style(const gp_text_style *a, const gp_text_style *b) {
  * its key is a function of its path.) A list below has rows that come and go, and memoized sizes above
  * it that go stale as rows are measured, so such a root is walked, but a walk that finds the same place
  * leaves the verdict that its layout is still valid alone. */
-enum { PREP_STATE_CHANGED = 0x100 };   /* (prepare's result, above the GP_SUB_* flags: a state style was put on or taken off below) */
+enum { PREP_STATE_CHANGED = 0x10000 };   /* (prepare's result, above the GP_SUB_* flags: a state style was put on or taken off below) */
 
 static const gp_lstate_set *g_lstates;
 void gp_layout_use_states(const gp_lstate_set *states) { g_lstates = states; }
@@ -141,6 +141,7 @@ static unsigned prepare(gp_el *n, gp_text_style parent, uint64_t path) {
     if (n->style.has_hover_bg || n->style.has_active_bg || n->style.hover_style || n->style.active_style) flags |= GP_SUB_HOVER;
     if (n->focus_id) flags |= GP_SUB_FOCUS;
     if (n->style.autohide_scrollbar) flags |= GP_SUB_AUTOHIDE;
+    if (n->on_hover.fn) flags |= GP_SUB_ON_HOVER;
     for (uint32_t i = 0; i < n->nchildren; i++) {
         gp_el *c = n->children[i];
         c->parent = n;
@@ -152,7 +153,7 @@ static unsigned prepare(gp_el *n, gp_text_style parent, uint64_t path) {
         flags |= prepare(n->mask, ts, (path ^ 0x6d61736bull) * 1099511628211ull);   /* (a mask inherits as a child would) */
     }
     if (style_changed || (flags & (GP_SUB_LIST | PREP_STATE_CHANGED))) n->ncache = 0;   /* (a state put on or taken off below: the sizes measured differ) */
-    n->sub_flags = (uint8_t)flags;
+    n->sub_flags = (uint16_t)flags;
     n->prep_valid = cached_root;
     n->lk_valid = was_laid_out && !(flags & PREP_STATE_CHANGED);   /* any other subtree was walked again: whatever it was laid out for may differ */
     return flags;

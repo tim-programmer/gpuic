@@ -148,7 +148,7 @@ static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     gp_simulate_keystrokes(app, "ctrl-home");
     for (int k = 0; k < first_alt; k++) gp_simulate_keystrokes(app, "shift-right");
     settle();
-    float ax, ay;
+    float ax = 0.f, ay = 0.f;
     CHECK(first_alt < n && !gp_text_input_caret_pos_alt(app, mixed, &ax, &ay), "a selection ending at a boundary has no second caret (stop %d)", first_alt);
 
     /* a composition has none either (its own caret is the one) */
