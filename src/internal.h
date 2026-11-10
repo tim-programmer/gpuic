@@ -603,6 +603,7 @@ size_t gp_curve_triangulate(const gp_point *p, size_t m, gp_arena *a, gp_point *
 size_t gp_curve_fill(const gp_point *p, size_t m, int rule, gp_arena *a, gp_point **out, int8_t **edge);   /* the same, for any outline, by a fill rule */
 typedef struct { gp_point c; float ux, uy, size, t; uint8_t shape; } gp_marker_at;   /* a marker: where, the direction of the line there, how big, which end (0, 1: for a gradient's color), what */
 size_t gp_curve_markers(const gp_el *n, const gp_point *p, size_t m, gp_arena *a, gp_marker_at **out);
+bool gp_curve_self_overlaps(const gp_el *n, const gp_point *p, const float *arc, size_t m, float scale);   /* can its stroke cover a pixel twice (then a translucent one needs a layer)? */
 int gp_marker_tris(const gp_marker_at *mk, float stroke_w, gp_point tri[6], int8_t ed[6]);   /* a square, diamond or bar as two triangles (gp_curve_triangulate's edges); 0 for a circle */
 gp_affine gp_style_affine(const struct gp_style *s, float x, float y, float w, float h);   /* what a transformed element does to what is in it (paint.c) */
 gp_affine gp_el_affine(const struct gp_el *n, float x, float y);
@@ -894,6 +895,8 @@ typedef struct {
     bool subtree_dirty;      /* a view below it was */
     bool cached;             /* `root` is its element tree, reused while clean */
     bool reads_focus;        /* its last render called gp_is_focused */
+    gp_svg *svgs;            /* the drawings its last render showed (gp_svg_img): releasing one renders these views again, and only these */
+    uint32_t nsvgs, cap_svgs;
     uint64_t used_epoch;     /* the build it was last reached in; others are dropped after a build */
     uint64_t skipped_epoch;  /* the build in which its layout was skipped: the rows of lists below it were not built again */
     bool from_row;           /* built for a row of a list (at layout or scroll time): not a kid of its parent */
@@ -915,6 +918,7 @@ struct gp_vviews {
     size_t cap, len;
     uint64_t epoch;          /* bumped at the start of every build of the window */
     bool all_dirty;          /* every cached view renders again at the next build */
+    bool svg_loose;          /* a drawing was shown by an element built outside any view's render: releasing a drawing renders everything again */
 };
 
 /* views.c */
@@ -932,6 +936,8 @@ void gp_views_invalidate_all(gp_app *app);
 /* Focus moved: views whose render looked at focus render again. */
 void gp_views_focus_changed(gp_window *w);
 void gp_view_reads_focus(gp_window *w, gp_entity view);
+void gp_view_uses_svg(gp_window *w, gp_entity view, gp_svg svg);   /* the view's render built an element showing `svg` */
+void gp_views_svg_released(gp_app *app, gp_svg svg);             /* the views that show it render again */
 gp_arena *gp_view_arena(gp_vview *v);               /* a cached view's own arena, created on first use */
 void gp_view_drop_cache(gp_vview *v);
 
@@ -979,7 +985,7 @@ struct gp_window {
     gp_vviews views;
     gp_scroll_table scrolls;
     gp_anim_table anims;
-    struct { bool active; gp_handler move, up; gp_point origin; } capture; /* gp_on_drag */
+    struct { bool active; gp_handler move, up; gp_point origin; uint64_t path; } capture; /* gp_on_drag: the handlers of the element at `path` (taken again from each new tree) */
     uint64_t drag_key;     /* scroll key whose thumb is being dragged, 0 = none */
     uint64_t page_key;     /* scroll key whose track the button is held on (it pages again and again), 0 = none */
     int page_axis;
@@ -1084,6 +1090,8 @@ struct gp_app {
     unsigned long stat_view_renders;   /* render functions called */
     unsigned long stat_layout_skips, stat_paint_hits, stat_paint_misses, stat_paint_shifts;   /* cached subtrees not laid out / painted again / reused moved */
     int64_t stat_build_ns, stat_layout_ns, stat_paint_ns, stat_submit_ns, stat_instances;   /* time in each phase of drawing, for GPUIC_STATS */
+    int64_t stat_last_instances;
+    unsigned long stat_layout_skips0;   /* gp_layout_skips() at the last gp_app_stats_reset (that counter is the layout's own) */
     int force_atlas_reset_every; /* GPUIC_ATLAS_RESET_EVERY=n: reset the glyph atlases every n draws (test hook) */ /* GPUIC_STATS=1 prints these at exit */
     int wait_ms;           /* GPUIC_WAIT_MS: hold the screenshot until this long after start */
     struct { gp_point at; int ms; bool done; } clicks[8]; /* GPUIC_CLICKS="x,y@ms;..." */

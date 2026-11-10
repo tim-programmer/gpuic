@@ -32,6 +32,9 @@
 #pragma GCC diagnostic ignored "-Wcomment"
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#if !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"   /* (nsvg__parseTransform's t[6], which every path that reads it has set first) */
+#endif
 #endif
 #include "../third_party/nanosvg/nanosvg.h"
 #include "../third_party/nanosvg/nanosvgrast.h"
@@ -239,5 +242,5 @@ bool gp_svg_size(gp_app *app, gp_svg svg, float *width, float *height) {
 void gp_svg_release(gp_app *app, gp_svg svg) {
     if (!app) return;
     gp_gfx_svg_release(app->gfx, svg);
-    gp_app_notify(app);
+    gp_views_svg_released(app, svg);   /* the views that show it, not every view */
 }

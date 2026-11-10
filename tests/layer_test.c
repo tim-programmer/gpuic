@@ -37,6 +37,8 @@ static gp_window *win(void) { return app->windows[0]; }
 
 static const gp_point cross1[] = { { 300, 20 }, { 380, 100 }, { 380, 20 }, { 300, 100 } };      /* crosses itself at (340, 60) */
 static const gp_point cross2[] = { { 300, 120 }, { 380, 200 }, { 380, 120 }, { 300, 200 } };    /* ... at (340, 160) */
+static const gp_point straight[] = { { 300, 230 }, { 330, 232 }, { 360, 230 }, { 400, 230 } };  /* never near itself: no layer */
+static const gp_point hairpin[] = { { 300, 260 }, { 380, 260 }, { 380, 264 }, { 300, 264 } };   /* back along itself 4 px away, 10 wide: a layer */
 
 static gp_entity g_root, g_boxview, g_textview;
 static int g_phase;   /* 1: row 9 is put in a group, and the child of row 10 moves */
@@ -80,7 +82,9 @@ static gp_node *render(void *self, gp_ctx *cx) {
         gp_div(gp_flex_none(), gp_opacity(0.5f), gp_div(gp_w(10), gp_h(10))),
         /* the strokes, absolute in the root: translucent; opaque at an opacity */
         gp_polyline(cross1, 4, gp_stroke_width(10), gp_stroke_color(gp_rgba(0xffffff80))),
-        gp_polyline(cross2, 4, gp_stroke_width(10), gp_stroke_color(WHITE), gp_opacity(0.5f)));
+        gp_polyline(cross2, 4, gp_stroke_width(10), gp_stroke_color(WHITE), gp_opacity(0.5f)),
+        gp_polyline(straight, 4, gp_stroke_width(6), gp_stroke_color(gp_rgba(0xffffff80))),
+        gp_polyline(hairpin, 4, gp_stroke_width(10), gp_stroke_color(gp_rgba(0xffffff80))));
 }
 
 static bool wait_draws(unsigned n) {
@@ -108,8 +112,8 @@ static void run(void) {
     gp_fonts_set_antialiasing(app, GP_AA_LCD_RGB);
     win()->dirty_render = true;
     wait_draws(3);
-    CHECK(win()->tree->nchildren == 14, "%u children", win()->tree->nchildren);
-    if (win()->tree->nchildren != 14) return;
+    CHECK(win()->tree->nchildren == 16, "%u children", win()->tree->nchildren);
+    if (win()->tree->nchildren != 16) return;
     uint8_t *f = frame();
     if (!f) { CHECK(0, "no frame"); return; }
     const uint8_t *p;
@@ -167,6 +171,11 @@ static void run(void) {
     p = px(f, 340, 160);
     q = px(f, 320, 140);
     CHECK(rgb(p, 128, 128, 128, 3) && rgb(q, 128, 128, 128, 3), "an opaque stroke at .5: crossing %d %d %d, elsewhere %d %d %d", P3(p), P3(q));
+    p = px(f, 330, 231);
+    q = px(f, 315, 231);
+    CHECK(rgb(p, 128, 128, 128, 3) && rgb(q, 128, 128, 128, 3), "a translucent stroke drawn without a layer, at its joints: %d %d %d, %d %d %d", P3(p), P3(q));
+    p = px(f, 340, 262);
+    CHECK(rgb(p, 128, 128, 128, 3), "a hairpin's two legs over each other, once: %d %d %d", P3(p));
 
     /* the scene: which layers there are, and the kind of glyph each text was drawn with */
     const gp_scene *sc = &win()->scene;
@@ -179,8 +188,8 @@ static void run(void) {
         if (k == GP_PRIM_LCD_GLYPH) { if (depth) lcd_in++; else lcd_out++; }
         if (k == GP_PRIM_GLYPH && depth) { gray_in++; in_text_layer = true; }
     }
-    /* 0, 1 (two), 2, 3, 4 (eight of ten), 5, 6, 8, 10, and one for each stroke; none for 7, 9 or 11 */
-    CHECK(begins == 19 && ends == 19 && depth == 0, "%d layers begun, %d ended, want 19", begins, ends);
+    /* 0, 1 (two), 2, 3, 4 (eight of ten), 5, 6, 8, 10, one for each crossing stroke and the hairpin; none for 7, 9, 11 or the straight stroke */
+    CHECK(begins == 20 && ends == 20 && depth == 0, "%d layers begun, %d ended, want 20", begins, ends);
     CHECK(maxdepth == GP_MAX_LAYERS, "layers nest %d deep, want %d", maxdepth, GP_MAX_LAYERS);
     CHECK(lcd_out > 0 && gray_in > 0 && lcd_in == 0 && in_text_layer, "glyphs: %d LCD outside a layer, %d gray and %d LCD in one", lcd_out, gray_in, lcd_in);
     /* every BEGIN's region is whole device pixels and holds its END's */

@@ -433,7 +433,9 @@ gp_node *gp_on_mouse_down_data(gp_mouse_fn fn, void *data) {
 }
 
 gp_node *gp_on_drag(gp_mouse_fn fn) { return mod_fn(M_ON_DRAG, (gp_any_fn)fn, NULL); }
+gp_node *gp_on_drag_data(gp_mouse_fn fn, void *data) { return mod_fn(M_ON_DRAG, (gp_any_fn)fn, data); }
 gp_node *gp_on_mouse_up(gp_mouse_fn fn) { return mod_fn(M_ON_MOUSE_UP, (gp_any_fn)fn, NULL); }
+gp_node *gp_on_mouse_up_data(gp_mouse_fn fn, void *data) { return mod_fn(M_ON_MOUSE_UP, (gp_any_fn)fn, data); }
 gp_node *gp_on_ime(gp_ime_fn fn) { return mod_fn(M_ON_IME, (gp_any_fn)fn, NULL); }
 gp_node *gp_on_layout(gp_layout_fn fn) { return mod_fn(M_ON_LAYOUT, (gp_any_fn)fn, NULL); }
 gp_node *gp_on_scroll(gp_scroll_fn fn) { return mod_fn(M_ON_SCROLL, (gp_any_fn)fn, NULL); }
@@ -1070,6 +1072,7 @@ gp_node *gp_img_(gp_image image, ...) {
 gp_node *gp_svg_img_(gp_svg svg, ...) {
     gp_el *el = gp_el_new(g_bc->arena, GP_EL_SVG);
     el->svg = svg;
+    gp_view_uses_svg(g_bc->window, g_bc->view, svg);   /* (releasing it renders this view again) */
     va_list ap;
     va_start(ap, svg);
     collect(el, ap, false);
@@ -1212,6 +1215,7 @@ gp_el *gp_build_view(gp_build_ctx *bc, gp_entity view, bool cached) {
     if (vv && !again) {   /* cleared first: a notify made by the render itself stays for the next build */
         vv->dirty = vv->subtree_dirty = false;
         vv->reads_focus = false;
+        vv->nsvgs = 0;
         vv->nkids = 0;
         if (bc->view.generation && !bc->no_cache) gp_views_add_kid(&w->views, bc->view, view);
     }

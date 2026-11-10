@@ -184,6 +184,7 @@ struct Vec {
     }
     Vec(Vec&& o) noexcept : p(o.p), n(o.n), cap(o.cap) { o.p = nullptr; o.n = o.cap = 0; }
     Vec& operator=(Vec&& o) noexcept {
+        if (this == &o) return *this;   /* `e = std::move(e).w(10)` moves an element into itself: emptying it would lose it, silently */
         p = o.p; n = o.n; cap = o.cap;
         o.p = nullptr; o.n = o.cap = 0;
         return *this;
@@ -652,19 +653,17 @@ public:
     }
     template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element&& on_mouse_down(F&& f) && { on_mouse_down(std::forward<F>(f)); return std::move(*this); }
 
-    // (the C library has no data pointer for these: the lambda must capture nothing)
-    Element& on_drag(gp_mouse_fn fn) & { return add(gp_on_drag(fn)); }
-    Element&& on_drag(gp_mouse_fn fn) && { return std::move(add(gp_on_drag(fn))); }
-    template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element& on_drag(F&&) & {
-        static_assert(detail::stateless_v<std::decay_t<F>>, "gpuic: on_drag has no data pointer in the C library: the lambda cannot capture");
-        return add(gp_on_drag(&detail::mouse_tramp<std::decay_t<F>>));
+    // (a lambda may capture: what it holds lives with the element, as for on_click)
+    Element& on_drag(gp_mouse_fn fn, void* data = nullptr) & { return add(gp_on_drag_data(fn, data)); }
+    Element&& on_drag(gp_mouse_fn fn, void* data = nullptr) && { return std::move(add(gp_on_drag_data(fn, data))); }
+    template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element& on_drag(F&& f) & {
+        return add(gp_on_drag_data(&detail::mouse_tramp<std::decay_t<F>>, detail::box(std::forward<F>(f))));
     }
     template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element&& on_drag(F&& f) && { on_drag(std::forward<F>(f)); return std::move(*this); }
-    Element& on_mouse_up(gp_mouse_fn fn) & { return add(gp_on_mouse_up(fn)); }
-    Element&& on_mouse_up(gp_mouse_fn fn) && { return std::move(add(gp_on_mouse_up(fn))); }
-    template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element& on_mouse_up(F&&) & {
-        static_assert(detail::stateless_v<std::decay_t<F>>, "gpuic: on_mouse_up has no data pointer in the C library: the lambda cannot capture");
-        return add(gp_on_mouse_up(&detail::mouse_tramp<std::decay_t<F>>));
+    Element& on_mouse_up(gp_mouse_fn fn, void* data = nullptr) & { return add(gp_on_mouse_up_data(fn, data)); }
+    Element&& on_mouse_up(gp_mouse_fn fn, void* data = nullptr) && { return std::move(add(gp_on_mouse_up_data(fn, data))); }
+    template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element& on_mouse_up(F&& f) & {
+        return add(gp_on_mouse_up_data(&detail::mouse_tramp<std::decay_t<F>>, detail::box(std::forward<F>(f))));
     }
     template <class F> requires(!std::is_convertible_v<F, gp_mouse_fn>) Element&& on_mouse_up(F&& f) && { on_mouse_up(std::forward<F>(f)); return std::move(*this); }
 

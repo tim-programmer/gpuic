@@ -100,6 +100,25 @@ void gp_entity_release(gp_app *app, gp_entity e);
  * gp_app_notify() is the last case without a ctx: every window rebuilds and every cached view renders again. */
 void gp_notify(gp_ctx *cx);
 void gp_app_notify(gp_app *app);
+/* Every window paints again (nothing is built or laid out again): for measuring what painting costs. */
+void gp_app_request_paint(gp_app *app);
+
+/* ---- statistics ----
+ * What the app has done since it started (or since gp_app_stats_reset), all windows together: what GPUIC_STATS=1 prints at exit, for performance tests of
+ * one's own. Take two and subtract to measure one stretch; the times are summed over draws (divide by `draws` for one). */
+typedef struct {
+    unsigned long draws;            /* frames drawn */
+    unsigned long wakeups;          /* times the loop woke */
+    unsigned long view_renders;     /* render functions called */
+    unsigned long atlas_resets;     /* glyph / gradient atlases emptied because they were full */
+    unsigned long layout_skips;     /* cached views whose layout was skipped */
+    unsigned long paint_hits, paint_misses, paint_shifts;   /* cached views' painting: reused, painted again, reused moved */
+    int64_t build_ns, layout_ns, paint_ns, submit_ns;        /* time in each phase of drawing (submit: handing the scene to the GPU) */
+    int64_t instances;              /* instances drawn, summed over draws */
+    int64_t last_instances;         /* ... in the last draw */
+} gp_stats;
+void gp_app_stats(gp_app *app, gp_stats *out);
+void gp_app_stats_reset(gp_app *app);
 
 /* ---- observing entities ----
  * GPUI's cx.observe / cx.subscribe / cx.emit / cx.observe_release. A callback is registered by
@@ -1265,7 +1284,9 @@ gp_node *gp_on_mouse_down_data(gp_mouse_fn fn, void *data);
  * the mouse until release: every move goes to on_drag and the release to on_mouse_up, with
  * `local` relative to the element, even outside it. */
 gp_node *gp_on_drag(gp_mouse_fn fn);
+gp_node *gp_on_drag_data(gp_mouse_fn fn, void *data);
 gp_node *gp_on_mouse_up(gp_mouse_fn fn);
+gp_node *gp_on_mouse_up_data(gp_mouse_fn fn, void *data);
 
 /* Called after every layout with the element's final (border-box) size. Lets an element react to
  * the space it was given, which only layout can decide (a text field wrapping at its width). If

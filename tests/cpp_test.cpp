@@ -265,6 +265,13 @@ static std::vector<Pair> pairs(Fix& f) {
                   div().size_full().bg(C1).mask(div().size_full().p(5).child(box(20, 20, RED))) });
     p.push_back({ "backdrop filter", gp_div(gp_size_full(), gp_bg(C1), c_box(30, 30, RED), gp_div(gp_w(40), gp_h(40), gp_backdrop_filter(gp_group(gp_filter_invert(1), gp_filter_blur(1))))),
                   div().size_full().bg(C1).child(box(30, 30, RED)).child(div().w(40).h(40).backdrop_filter(style().filter_invert(1).filter_blur(1))) });
+    p.push_back({ "moved into itself", gp_div(gp_w(60), gp_h(30), gp_bg(C1), c_box(20, 20, RED)),
+                  [] {   /* e = std::move(e).method(): the element moves into itself, and is still all there */
+                      Element e = div().w(60);
+                      e = std::move(e).h(30).bg(C1);
+                      e = std::move(e).child(box(20, 20, RED));
+                      return e;
+                  }() });
     p.push_back({ "right to left", gp_div(gp_size_full(), gp_flex_row(), gp_text_dir_rtl(), c_box(30, 30, RED), c_box(50, 20, C2)),
                   div().size_full().flex_row().text_dir_rtl().children({ box(30, 30, RED), box(50, 20, C2) }) });
     {
@@ -281,7 +288,7 @@ static std::vector<Pair> pairs(Fix& f) {
 }
 
 static constexpr int kHandlerBoxes = 18;   // the boxes after the pairs, before the style carriers
-static constexpr int kCellW = 200, kCellH = 70, kPairs = 24;
+static constexpr int kCellW = 200, kCellH = 70, kPairs = 25;
 
 Element Fix::render(Ctx) {
     std::vector<Pair> ps = pairs(*this);
@@ -301,7 +308,8 @@ Element Fix::render(Ctx) {
         .child(hb(C1).on_click([](gp_ctx* cx, Fix& s) { s.ctx_ok = cx != nullptr && cx->app != nullptr; s.n3++; }))   // 4
         .child(hb(C1).on_click([](gp_mouse_event ev) { g_free_calls += ev.click_count; }))                // 5 (the event by value, no state)
         .child(hb(C1).on_click(c_click, &cdata))                                                          // 6
-        .child(hb(C1).on_mouse_down([add](Fix& s) { s.downs += add; }).on_mouse_up([](Fix& s) { s.ups++; }).on_drag([](Fix& s) { s.drags++; }))   // 7
+        .child(hb(C1).on_mouse_down([add](Fix& s) { s.downs += add; }).on_mouse_up([add](Fix& s) { s.ups += add; })   // 7: all three capture; the drag builds the view again
+                     .on_drag([add](Fix& s, Ctx cx) { s.drags += add; cx.notify(); }))
         .child(hb(C2).track_focus(focus).tab_stop().key_context("CppBox")                                 // 8: keys, text, actions
                    .on_key_down([](Fix& s, const gp_key_event& ev) { s.keys += ev.key; s.keys += ';'; })
                    .on_key_up([](const gp_key_event& ev, Fix& s) { s.ups_k += ev.key; })
@@ -434,7 +442,7 @@ static void test_pixels() {
     const unsigned char* px = cpp_probe_capture(g_app, g_co, &pw, &ph);
     CHECK(px != nullptr, "no frame");
     if (!px) return;
-    float winw = 900;
+    float winw = 1280;   // (the window's width: open_window below)
     float scale = (float)pw / winw;
     for (int i = 0; i < kPairs; i++) {
         int a[2] = { i, 0 }, b[2] = { i, 1 };
@@ -443,6 +451,7 @@ static void test_pixels() {
         int ax = (int)std::lround(ra[0] * scale), ay = (int)std::lround(ra[1] * scale), bx = (int)std::lround(rb[0] * scale), by = (int)std::lround(rb[1] * scale);
         int w = (int)std::lround(ra[2] * scale), h = (int)std::lround(ra[3] * scale);
         int tol = (i == 3 || i == 13 || i == 14) ? 2 : 0;   // a gradient is dithered by the pixel's position on screen, so the two halves differ by a level or two
+        if (i >= kPairs - 2) tol = 1;   // (the curves: a stroke's antialiased edge at another place on screen rounds a level differently)
         long diff = 0, nonbg = 0;
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
@@ -473,17 +482,21 @@ static void test_handlers(Fix& f) {
     click_box(6);
     CHECK(g_cdata_seen == 77, "a C function pointer with its data: %d", g_cdata_seen);
     click_box(7);
-    CHECK(f.downs == 5 && f.ups == 1, "on_mouse_down (capturing) and on_mouse_up (stateless): %d %d", f.downs, f.ups);
+    CHECK(f.downs == 5 && f.ups == 5, "on_mouse_down and on_mouse_up (capturing): %d %d", f.downs, f.ups);
     {
         int path[1] = { base_index() + 7 };
         float r[4];
         cpp_probe_rect(g_app, path, 1, r);
         gp_simulate_mouse(g_app, GP_SIM_MOVE, r[0] + 10, r[1] + 10, 0, 0);
         gp_simulate_mouse(g_app, GP_SIM_DOWN, r[0] + 10, r[1] + 10, 1, 0);
+        gp_sleep(g_co, 0.05);
         gp_simulate_mouse(g_app, GP_SIM_MOVE, r[0] + 20, r[1] + 12, 0, 0);
-        gp_simulate_mouse(g_app, GP_SIM_UP, r[0] + 20, r[1] + 12, 1, 0);
+        gp_sleep(g_co, 0.05);   /* (the drag notified: the view is built again before the next move, and the drag goes on with the new element's handlers) */
+        gp_simulate_mouse(g_app, GP_SIM_MOVE, r[0] + 30, r[1] + 14, 0, 0);
+        gp_sleep(g_co, 0.05);
+        gp_simulate_mouse(g_app, GP_SIM_UP, r[0] + 30, r[1] + 14, 1, 0);
         gp_sleep(g_co, 0.1);
-        CHECK(f.drags >= 1, "on_drag (stateless): %d", f.drags);
+        CHECK(f.drags == 10 && f.ups == 10, "on_drag and on_mouse_up capturing, across a rebuild in the middle of the drag: %d %d", f.drags, f.ups);
     }
 
     click_box(8);   // clicking a tracked element focuses it
@@ -615,7 +628,7 @@ int main() {
     int rc = run([](App app) {
         g_app = app.raw();
         g_root = app.new_view<Fix>(app);
-        app.open_window("cpp_test", 900, 960, g_root);
+        app.open_window("cpp_test", 1280, 960, g_root);
         gp_ctx cx = gp_ctx_for(g_app, GP_ENTITY_NULL);
         gp_spawn(&cx, driver, nullptr);
     });

@@ -71,6 +71,29 @@ void gp_entity_release(gp_app *app, gp_entity e) {
 
 void gp_app_notify(gp_app *app) { gp_views_invalidate_all(app); }
 
+void gp_app_request_paint(gp_app *app) {
+    for (int i = 0; i < app->nwindows; i++) {
+        app->windows[i]->dirty_paint = true;
+        gp_exec_window_frame(app, app->windows[i], GP_WAKE_PAINT);
+    }
+}
+
+void gp_app_stats(gp_app *app, gp_stats *out) {
+    *out = (gp_stats){
+        .draws = app->stat_draws, .wakeups = app->stat_wakeups, .view_renders = app->stat_view_renders, .atlas_resets = app->stat_atlas_resets,
+        .layout_skips = gp_layout_skips() - app->stat_layout_skips0, .paint_hits = app->stat_paint_hits, .paint_misses = app->stat_paint_misses,
+        .paint_shifts = app->stat_paint_shifts, .build_ns = app->stat_build_ns, .layout_ns = app->stat_layout_ns, .paint_ns = app->stat_paint_ns,
+        .submit_ns = app->stat_submit_ns, .instances = app->stat_instances, .last_instances = app->stat_last_instances,
+    };
+}
+
+void gp_app_stats_reset(gp_app *app) {
+    app->stat_draws = app->stat_wakeups = app->stat_view_renders = app->stat_atlas_resets = 0;
+    app->stat_paint_hits = app->stat_paint_misses = app->stat_paint_shifts = 0;
+    app->stat_build_ns = app->stat_layout_ns = app->stat_paint_ns = app->stat_submit_ns = app->stat_instances = 0;
+    app->stat_layout_skips0 = gp_layout_skips();
+}
+
 /* The entity changed. If it is a view, it renders again and the windows showing it rebuild (views
  * that are cached and unaffected are reused); anything observing it is called. A ctx with no entity
  * is the app itself: everything is invalidated. */
@@ -276,11 +299,13 @@ void gp_window_on_mouse_button(gp_window *w, float x, float y, int button, bool 
             gp_point origin = { p.x - (hit.qx - hit.ox), p.y - (hit.qy - hit.oy) };   /* (so that p - origin is where it is in the element, through a transform too) */
             fire(w, &hit.el->on_mouse_down, p, origin, button, clicks, mods);
             if (button == GP_MOUSE_LEFT && (hit.el->on_drag.fn || hit.el->on_mouse_up.fn)) {
-                /* capture by copy: the element itself may be rebuilt before the release */
+                /* capture by copy: the element itself may be rebuilt before the release (and the handlers taken again from the new one, whose data is that
+                 * frame's: a C++ lambda's captures live in the arena of the frame that built them) */
                 w->capture.active = true;
                 w->capture.move = hit.el->on_drag;
                 w->capture.up = hit.el->on_mouse_up;
                 w->capture.origin = origin;
+                w->capture.path = hit.path;
             }
         }
     } else if (button == GP_MOUSE_LEFT) {
@@ -374,6 +399,29 @@ static void run_layout_handlers(gp_window *w, gp_el *n) {
     for (uint32_t i = 0; i < n->nchildren; i++) run_layout_handlers(w, n->children[i]);
 }
 
+/* the element at `path` in the tree (layout gave every element its path), or NULL */
+static gp_el *find_path(gp_el *n, uint64_t path) {
+    if (!n) return NULL;
+    if (n->path == path) return n;
+    for (uint32_t i = 0; i < n->nchildren; i++) {
+        gp_el *f = find_path(n->children[i], path);
+        if (f) return f;
+    }
+    return NULL;
+}
+
+/* After a new tree: a drag in progress goes on with the handlers of the element as it is now (the old ones' data went with the old frame); if it is gone, the drag ends */
+static void refresh_capture(gp_window *w) {
+    if (!w->capture.active) return;
+    gp_el *e = find_path(w->tree, w->capture.path);
+    if (!e || (!e->on_drag.fn && !e->on_mouse_up.fn)) {
+        w->capture.active = false;
+        return;
+    }
+    w->capture.move = e->on_drag;
+    w->capture.up = e->on_mouse_up;
+}
+
 static void build_and_layout(gp_app *app, gp_window *w) {
     /* Build and lay out. gp_on_layout handlers run after each layout and may ask for another round
      * (a text field that learned its width re-wraps); iterate so that nothing is painted from a
@@ -395,6 +443,7 @@ static void build_and_layout(gp_app *app, gp_window *w) {
         gp_layout_root(w->tree, app->text, w->size, &w->scrolls, &w->views, &w->anims);
         gp_layout_use_states(NULL);
         if (rebuild) gp_views_sweep(w);
+        if (rebuild) refresh_capture(w);
         app->stat_build_ns += t1 - t0;
         app->stat_layout_ns += gp_now_ns() - t1;
         run_layout_handlers(w, w->tree);
@@ -486,6 +535,7 @@ static void window_draw(gp_app *app, gp_window *w) {
                      w->background);
     app->stat_submit_ns += gp_now_ns() - ts;
     app->stat_instances += (int64_t)w->scene.len;
+    app->stat_last_instances = (int64_t)w->scene.len;
     app->frames++;
     bool forced = app->force_atlas_reset_every > 0 && app->frames % app->force_atlas_reset_every == 0;
     if (gp_text_atlas_overflowed(app->text) || gp_gfx_overflowed(app->gfx) || forced) {

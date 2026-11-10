@@ -42,8 +42,11 @@ static void drop_entry(gp_vview *v) {
     drop_cache(v);
     free(v->kids);
     free(v->chunk);
+    free(v->svgs);
     v->kids = NULL;
     v->chunk = NULL;
+    v->svgs = NULL;
+    v->nsvgs = v->cap_svgs = 0;
     v->nkids = v->cap_kids = 0;
     v->nchunk = v->cap_chunk = 0;
 }
@@ -200,6 +203,37 @@ void gp_views_invalidate_all(gp_app *app) {
 void gp_view_reads_focus(gp_window *w, gp_entity view) {
     gp_vview *v = w ? gp_views_find(&w->views, view) : NULL;
     if (v) v->reads_focus = true;
+}
+
+void gp_view_uses_svg(gp_window *w, gp_entity view, gp_svg svg) {
+    if (!w) return;
+    gp_vview *v = view.generation ? gp_views_find(&w->views, view) : NULL;
+    if (!v) { w->views.svg_loose = true; return; }
+    for (uint32_t i = 0; i < v->nsvgs; i++)
+        if (v->svgs[i].index == svg.index && v->svgs[i].generation == svg.generation) return;
+    if (v->nsvgs == v->cap_svgs) {
+        v->cap_svgs = v->cap_svgs ? v->cap_svgs * 2 : 4;
+        v->svgs = realloc(v->svgs, v->cap_svgs * sizeof *v->svgs);
+        if (!v->svgs) abort();
+    }
+    v->svgs[v->nsvgs++] = svg;
+}
+
+void gp_views_svg_released(gp_app *app, gp_svg svg) {
+    for (int k = 0; k < app->nwindows; k++) {
+        gp_window *w = app->windows[k];
+        if (w->views.svg_loose) {   /* (shown by something no view owns: everything, as before) */
+            w->dirty_render = true;
+            w->views.all_dirty = true;
+            continue;
+        }
+        for (size_t i = 0; i < w->views.cap; i++) {
+            gp_vview *v = &w->views.v[i];
+            if (!v->entity.generation) continue;
+            for (uint32_t j = 0; j < v->nsvgs; j++)
+                if (v->svgs[j].index == svg.index && v->svgs[j].generation == svg.generation) { mark(w, v); break; }
+        }
+    }
 }
 
 void gp_views_focus_changed(gp_window *w) {

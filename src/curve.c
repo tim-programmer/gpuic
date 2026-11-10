@@ -131,6 +131,48 @@ bool gp_curve_arrow(const gp_el *n, const gp_point *p, const float *arc, size_t 
 
 static float cross3(gp_point a, gp_point b, gp_point c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); }
 
+/* the point a + t (b - a) nearest q: its t, and how far it is */
+static float near_on(gp_point q, gp_point a, gp_point b, float *t) {
+    float dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    float u = l2 > 0.f ? ((q.x - a.x) * dx + (q.y - a.y) * dy) / l2 : 0.f;
+    *t = u = fminf(fmaxf(u, 0.f), 1.f);
+    return hypotf(q.x - (a.x + u * dx), q.y - (a.y + u * dy));
+}
+
+/* Can the stroke over the centerline p[0..m) (arc: lengths along it) cover a pixel twice? The pieces are cut from each other at every joint, so a stroke that does not come back
+ * near itself covers each pixel once, and a translucent one can be drawn straight onto what is under it; one that does needs a layer to be blended once. It does where two
+ * pieces that are apart along the line come within the stroke's width (and a pixel of antialiasing) of each other: a crossing, a loop, or a turn tighter than half the
+ * width (two pieces are "apart" when they are much nearer each other than along the line: on a smooth bend they are about as near as they are along it); where markers
+ * are drawn over it; and where the round caps of two dashes reach across the gap between them. */
+bool gp_curve_self_overlaps(const gp_el *n, const gp_point *p, const float *arc, size_t m, float scale) {
+    const gp_style *s = &n->style;
+    if (s->marker[0] || s->marker[1] || s->marker[2]) return true;
+    float reach = s->stroke_w + 1.5f / (scale > 0.f ? scale : 1.f);
+    if (s->dash_n && s->stroke_cap == 0)
+        for (int i = 1; i < s->dash_n * (s->dash_n % 2 ? 2 : 1); i += 2)
+            if (s->dash[i % s->dash_n] < reach) return true;
+    if (m < 4) return false;
+    /* each piece's box, grown by half the reach, to pass over far pairs quickly */
+    for (size_t i = 0; i + 1 < m; i++) {
+        float ax0 = fminf(p[i].x, p[i + 1].x) - reach, ax1 = fmaxf(p[i].x, p[i + 1].x) + reach;
+        float ay0 = fminf(p[i].y, p[i + 1].y) - reach, ay1 = fmaxf(p[i].y, p[i + 1].y) + reach;
+        for (size_t j = i + 2; j + 1 < m; j++) {
+            if (s->closed && i == 0 && j + 2 == m) continue;   /* (a closed stroke's last piece joins its first) */
+            if (fmaxf(p[j].x, p[j + 1].x) < ax0 || fminf(p[j].x, p[j + 1].x) > ax1 || fmaxf(p[j].y, p[j + 1].y) < ay0 || fminf(p[j].y, p[j + 1].y) > ay1) continue;
+            float d1 = cross3(p[i], p[i + 1], p[j]), d2 = cross3(p[i], p[i + 1], p[j + 1]), d3 = cross3(p[j], p[j + 1], p[i]), d4 = cross3(p[j], p[j + 1], p[i + 1]);
+            if ((d1 > 0) != (d2 > 0) && (d3 > 0) != (d4 > 0) && d1 != 0 && d2 != 0 && d3 != 0 && d4 != 0) return true;   /* the centerline crosses itself */
+            /* each end of one piece against the other piece: near it, and further from it along the line than across */
+            for (int e = 0; e < 4; e++) {
+                size_t a = e < 2 ? i : j, o = e < 2 ? j : i, k = a + (size_t)(e & 1);
+                float t, d = near_on(p[k], p[o], p[o + 1], &t);
+                float along = fabsf(arc[k] - (arc[o] + t * (arc[o + 1] - arc[o])));
+                if (d < reach && d < 0.7f * along) return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* The markers the style asks for, on the centerline p[0..m): at the first point (along the first piece), the last (along the last), and a polyline's corners between
  * (half way between the piece before and the piece after). Arena memory; the count. */
 size_t gp_curve_markers(const gp_el *n, const gp_point *p, size_t m, gp_arena *a, gp_marker_at **out) {

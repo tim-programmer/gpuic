@@ -1,9 +1,9 @@
 /*
  * A rack: 40 panels (a title, a few knobs) and N cables, every one a cached view of its own, in a window of 1400 x 900. Measures the cost of a draw (the numbers GPUIC_STATS=1 prints,
- * but per phase of the run) when nothing changed, when a knob turns, when one cable moves, and when both do. Not a test: `cables_bench [cables]` (default 100) prints a table.
+ * but per phase of the run) when nothing changed, when a knob turns, when one cable moves, and when both do. Not a test: `cables_bench [cables] [alpha]` (default 100 cables, opaque) prints a table.
  * Draws wait for the display's vertical blank; the numbers are the CPU time each phase of a draw takes, not the frame time.
  */
-#include "../src/internal.h"
+#include <gpuic/gpuic.h>   /* (the public API only: gp_app_stats has the numbers) */
 
 #include <math.h>
 #include <stdio.h>
@@ -16,6 +16,7 @@
 static gp_app *app;
 static gp_co *co_;
 static int ncables = 100;
+static float alpha = 1.f;   /* the cables' color's alpha */
 
 typedef struct { gp_point p[4]; int hue; } Cable;
 typedef struct { float value; int id; } Panel;
@@ -24,7 +25,7 @@ static gp_entity cable_e[MAXCABLES], panel_e[NPANELS];
 static gp_node *cable_view(void *self, gp_ctx *cx) {
     Cable *c = self;
     static const uint32_t pal[6] = { 0xf38ba8, 0xa6e3a1, 0x89b4fa, 0xf9e2af, 0xcba6f7, 0x94e2d5 };
-    return gp_curve(c->p[0], c->p[1], c->p[2], c->p[3], gp_stroke_width(5), gp_stroke_color(gp_rgb(pal[c->hue % 6])), gp_hit_tolerance(4), gp_hover_bg(gp_rgb(0xffffff)));
+    return gp_curve(c->p[0], c->p[1], c->p[2], c->p[3], gp_stroke_width(5), gp_stroke_color(gp_rgba(pal[c->hue % 6] << 8 | (uint32_t)(alpha * 255.f + 0.5f))), gp_hit_tolerance(4), gp_hover_bg(gp_rgb(0xffffff)));
 }
 
 static gp_node *knob(float v) {
@@ -48,7 +49,7 @@ static gp_node *root_view(void *self, gp_ctx *cx) {
                   gp_children(cables, (size_t)ncables));
 }
 
-static unsigned long draws(void) { return app->stat_draws; }
+static unsigned long draws(void) { gp_stats s; gp_app_stats(app, &s); return s.draws; }
 static bool next_draw(void) {
     unsigned long target = draws() + 1;
     for (int i = 0; i < 2000 && draws() < target; i++) gp_sleep(co_, 0.001);
@@ -61,8 +62,8 @@ static float frand(void) { rng = rng * 1664525u + 1013904223u; return (float)(rn
 
 static void measure(const char *name, Mode m, int frames) {
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
-    int64_t b0 = app->stat_build_ns, l0 = app->stat_layout_ns, p0 = app->stat_paint_ns, s0 = app->stat_submit_ns, i0 = app->stat_instances;
-    unsigned long d0 = draws(), v0 = app->stat_view_renders, a0 = app->stat_atlas_resets;
+    gp_stats s0, s1;
+    gp_app_stats(app, &s0);
     for (int f = 0; f < frames; f++) {
         float t = (float)f / 30.f;
         if (m.knob) {
@@ -78,24 +79,24 @@ static void measure(const char *name, Mode m, int frames) {
             gp_ctx c2 = gp_ctx_for(app, cable_e[0]);
             gp_notify(&c2);
         }
-        if (!m.knob && !m.cable) app->windows[0]->dirty_paint = true;
+        if (!m.knob && !m.cable) gp_app_request_paint(app);
         if (!next_draw()) { printf("  (no draw)\n"); break; }
     }
     (void)cx;
-    unsigned long n = draws() - d0;
+    gp_app_stats(app, &s1);
+    unsigned long n = s1.draws - s0.draws;
     if (!n) return;
     double dn = (double)n;
+    double b = (double)(s1.build_ns - s0.build_ns) / 1e6 / dn, l = (double)(s1.layout_ns - s0.layout_ns) / 1e6 / dn, p = (double)(s1.paint_ns - s0.paint_ns) / 1e6 / dn,
+           g = (double)(s1.submit_ns - s0.submit_ns) / 1e6 / dn;
     printf("%-26s %4lu draws  build %.3f  layout %.3f  paint %.3f  GL submit %.3f  total %.3f ms/draw;  %5ld instances; %.2f view renders/draw; atlas resets %lu\n", name, n,
-           (double)(app->stat_build_ns - b0) / 1e6 / dn, (double)(app->stat_layout_ns - l0) / 1e6 / dn, (double)(app->stat_paint_ns - p0) / 1e6 / dn,
-           (double)(app->stat_submit_ns - s0) / 1e6 / dn,
-           (double)((app->stat_build_ns - b0) + (app->stat_layout_ns - l0) + (app->stat_paint_ns - p0) + (app->stat_submit_ns - s0)) / 1e6 / dn,
-           (long)((app->stat_instances - i0) / (int64_t)n), (double)(app->stat_view_renders - v0) / dn, app->stat_atlas_resets - a0);
+           b, l, p, g, b + l + p + g, (long)((s1.instances - s0.instances) / (int64_t)n), (double)(s1.view_renders - s0.view_renders) / dn, s1.atlas_resets - s0.atlas_resets);
 }
 
 static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     co_ = co;
     for (int i = 0; i < 40; i++) next_draw();
-    printf("%d cables, %d panels, window 1400 x 900 (all of them cached views)\n", ncables, NPANELS);
+    printf("%d cables (alpha %.2f), %d panels, window 1400 x 900 (all of them cached views)\n", ncables, (double)alpha, NPANELS);
     measure("nothing changes", (Mode){ false, false }, 200);
     measure("one knob turns", (Mode){ true, false }, 200);
     measure("one cable moves", (Mode){ false, true }, 200);
@@ -123,5 +124,6 @@ static void ready(gp_app *a, void *userdata) {
 
 int main(int argc, char **argv) {
     if (argc > 1) ncables = atoi(argv[1]) > MAXCABLES ? MAXCABLES : atoi(argv[1]);
+    if (argc > 2) alpha = (float)atof(argv[2]);
     return gp_application_run(ready, NULL);
 }

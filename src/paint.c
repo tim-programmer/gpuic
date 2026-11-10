@@ -618,10 +618,11 @@ static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, fl
             if (row >= 0) { sp.row = row; sp.grad = grad; }
             else sp.color = grad->stops[0].color;   /* the ramp table is full: repainted after it is cleared */
         }
-        /* A translucent stroke is drawn opaque into a layer that is put down at its alpha: where it crosses itself (or a dash meets the next, or the
-         * head its stroke) it is no darker. A gradient's own alpha stays in its colors (the layer takes only the opacity). */
+        /* A translucent stroke that can cover a pixel twice (it crosses or nears itself, has markers, or round-capped dashes close together) is drawn opaque into a
+         * layer that is put down at its alpha, so it is no darker there. Any other is drawn straight onto what is under it: its pieces tile it, each pixel blended once,
+         * at no more cost than an opaque one. A gradient's own alpha stays in its colors (the layer takes only the opacity). */
         float layer_alpha = 1.f;
-        if ((sp.grad ? opacity : color.a * opacity) < 1.f && layer_begin(pc)) {
+        if ((sp.grad ? opacity : color.a * opacity) < 1.f && gp_curve_self_overlaps(n, p, arc, m, pc->scale) && layer_begin(pc)) {
             layer_alpha = sp.grad ? opacity : color.a * opacity;
             sp.color.a = sp.grad ? sp.color.a : 1.f;
             sp.opacity = 1.f;
