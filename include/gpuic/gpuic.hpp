@@ -604,6 +604,9 @@ public:
     /** A mask (gp_mask): any element, laid out over this one's box; where it is transparent this one is not seen. `.mask(div().size_full().bg_gradient(180, {...}))` */
     template <class T> Element& mask(T&& x) & { return add(gp_mask(detail::into_node(std::forward<T>(x)))); }
     template <class T> Element&& mask(T&& x) && { mask(std::forward<T>(x)); return std::move(*this); }
+    /** Filters on what is behind (gp_backdrop_filter): a style() with the filters, in order. `.backdrop_filter(style().filter_blur(12).filter_saturate(1.4f))` */
+    Element& backdrop_filter(const Element& filters) & { return add(gp_backdrop_filter(filters.build())); }
+    Element&& backdrop_filter(const Element& filters) && { backdrop_filter(filters); return std::move(*this); }
     /** One modifier made by a C function, for anything the methods do not name. */
     Element& with(gp_node* mod) & { return add(mod); }
     Element&& with(gp_node* mod) && { return std::move(add(mod)); }

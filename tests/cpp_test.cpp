@@ -263,6 +263,8 @@ static std::vector<Pair> pairs(Fix& f) {
                   div().flex_col().child(g_shared).child(SharedString()) });
     p.push_back({ "mask", gp_div(gp_size_full(), gp_bg(C1), gp_mask(gp_div(gp_size_full(), gp_p(5), c_box(20, 20, RED)))),
                   div().size_full().bg(C1).mask(div().size_full().p(5).child(box(20, 20, RED))) });
+    p.push_back({ "backdrop filter", gp_div(gp_size_full(), gp_bg(C1), c_box(30, 30, RED), gp_div(gp_w(40), gp_h(40), gp_backdrop_filter(gp_group(gp_filter_invert(1), gp_filter_blur(1))))),
+                  div().size_full().bg(C1).child(box(30, 30, RED)).child(div().w(40).h(40).backdrop_filter(style().filter_invert(1).filter_blur(1))) });
     p.push_back({ "right to left", gp_div(gp_size_full(), gp_flex_row(), gp_text_dir_rtl(), c_box(30, 30, RED), c_box(50, 20, C2)),
                   div().size_full().flex_row().text_dir_rtl().children({ box(30, 30, RED), box(50, 20, C2) }) });
     {
@@ -279,7 +281,7 @@ static std::vector<Pair> pairs(Fix& f) {
 }
 
 static constexpr int kHandlerBoxes = 18;   // the boxes after the pairs, before the style carriers
-static constexpr int kCellW = 200, kCellH = 70, kPairs = 23;
+static constexpr int kCellW = 200, kCellH = 70, kPairs = 24;
 
 Element Fix::render(Ctx) {
     std::vector<Pair> ps = pairs(*this);

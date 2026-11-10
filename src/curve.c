@@ -131,6 +131,58 @@ bool gp_curve_arrow(const gp_el *n, const gp_point *p, const float *arc, size_t 
 
 static float cross3(gp_point a, gp_point b, gp_point c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); }
 
+/* The markers the style asks for, on the centerline p[0..m): at the first point (along the first piece), the last (along the last), and a polyline's corners between
+ * (half way between the piece before and the piece after). Arena memory; the count. */
+size_t gp_curve_markers(const gp_el *n, const gp_point *p, size_t m, gp_arena *a, gp_marker_at **out) {
+    const gp_style *s = &n->style;
+    *out = NULL;
+    if (m < 2) return 0;
+    size_t cap = 2 + (s->marker[2] && n->curve_kind == 1 ? m : 0), k = 0;
+    gp_marker_at *mk = gp_arena_alloc(a, cap * sizeof *mk, 4);
+    for (int e = 0; e < 2; e++) {
+        if (!s->marker[e] || !(s->marker_size[e] > 0.f)) continue;
+        gp_point c = e ? p[m - 1] : p[0], o = e ? p[m - 2] : p[1];
+        float dx = e ? c.x - o.x : o.x - c.x, dy = e ? c.y - o.y : o.y - c.y, l = hypotf(dx, dy);
+        if (!(l > 0.f)) continue;
+        mk[k++] = (gp_marker_at){ c, dx / l, dy / l, s->marker_size[e], (float)e, s->marker[e] };
+    }
+    if (s->marker[2] && s->marker_size[2] > 0.f && n->curve_kind == 1)
+        for (size_t i = 1; i + 1 < m; i++) {
+            float ax = p[i].x - p[i - 1].x, ay = p[i].y - p[i - 1].y, bx = p[i + 1].x - p[i].x, by = p[i + 1].y - p[i].y;
+            float la = hypotf(ax, ay), lb = hypotf(bx, by);
+            if (!(la > 0.f) || !(lb > 0.f)) continue;
+            float ux = ax / la + bx / lb, uy = ay / la + by / lb, lu = hypotf(ux, uy);
+            if (lu < 1e-4f) { ux = ax / la; uy = ay / la; lu = 1.f; }   /* (straight back: along the way in) */
+            mk[k++] = (gp_marker_at){ p[i], ux / lu, uy / lu, s->marker_size[2], 0.f, s->marker[2] };
+        }
+    *out = mk;
+    return k;
+}
+
+int gp_marker_tris(const gp_marker_at *mk, float stroke_w, gp_point tri[6], int8_t ed[6]) {
+    float h = mk->size * 0.5f, ux = mk->ux, uy = mk->uy, vx = -uy, vy = ux;
+    gp_point c = mk->c, q[4];
+    if (mk->shape == GP_MARKER_SQUARE) {
+        q[0] = (gp_point){ c.x + (ux + vx) * h, c.y + (uy + vy) * h }; q[1] = (gp_point){ c.x + (ux - vx) * h, c.y + (uy - vy) * h };
+        q[2] = (gp_point){ c.x - (ux + vx) * h, c.y - (uy + vy) * h }; q[3] = (gp_point){ c.x - (ux - vx) * h, c.y - (uy - vy) * h };
+    } else if (mk->shape == GP_MARKER_DIAMOND) {
+        q[0] = (gp_point){ c.x + ux * h, c.y + uy * h }; q[1] = (gp_point){ c.x + vx * h, c.y + vy * h };
+        q[2] = (gp_point){ c.x - ux * h, c.y - uy * h }; q[3] = (gp_point){ c.x - vx * h, c.y - vy * h };
+    } else if (mk->shape == GP_MARKER_BAR) {
+        float t = fmaxf(stroke_w, 1.f) * 0.5f;
+        q[0] = (gp_point){ c.x + ux * t + vx * h, c.y + uy * t + vy * h }; q[1] = (gp_point){ c.x + ux * t - vx * h, c.y + uy * t - vy * h };
+        q[2] = (gp_point){ c.x - ux * t - vx * h, c.y - uy * t - vy * h }; q[3] = (gp_point){ c.x - ux * t + vx * h, c.y - uy * t + vy * h };
+    } else {
+        return 0;
+    }
+    /* two triangles sharing the diagonal q0-q2, which the first owns */
+    tri[0] = q[0]; tri[1] = q[1]; tri[2] = q[2];
+    tri[3] = q[0]; tri[4] = q[2]; tri[5] = q[3];
+    const int8_t e[6] = { 0, 0, 1, -1, 0, 0 };
+    memcpy(ed, e, sizeof e);
+    return 2;
+}
+
 static bool in_tri(gp_point p, gp_point a, gp_point b, gp_point c) {
     float d0 = cross3(a, b, p), d1 = cross3(b, c, p), d2 = cross3(c, a, p);
     bool neg = d0 < 0 || d1 < 0 || d2 < 0, pos = d0 > 0 || d1 > 0 || d2 > 0;
@@ -162,8 +214,11 @@ size_t gp_curve_triangulate(const gp_point *p, size_t m, gp_arena *a, gp_point *
                 float c = cross3(A, B, C) * sgn;
                 bool ear = c > 0.f;
                 if (ear && pass == 0)
-                    for (size_t j = 0; j < left && ear; j++)
-                        if (j != ip && j != i && j != in && in_tri(p[idx[j]], A, B, C)) ear = false;
+                    for (size_t j = 0; j < left && ear; j++) {
+                        gp_point P = p[idx[j]];
+                        bool corner = (P.x == A.x && P.y == A.y) || (P.x == B.x && P.y == B.y) || (P.x == C.x && P.y == C.y);   /* (a copy of a corner: a hole's bridge) */
+                        if (j != ip && j != i && j != in && !corner && in_tri(P, A, B, C)) ear = false;
+                    }
                 if (pass == 1) ear = true;
                 if (!ear) continue;
                 if (fabsf(c) > 1e-9f) {
@@ -187,12 +242,329 @@ size_t gp_curve_triangulate(const gp_point *p, size_t m, gp_arena *a, gp_point *
     return k;
 }
 
-/* Is (x, y) inside the closed outline (even-odd)? */
-static bool inside_outline(const gp_point *p, size_t m, float x, float y) {
-    bool in = false;
-    for (size_t i = 0, j = m - 1; i < m; j = i++)
-        if ((p[i].y > y) != (p[j].y > y) && x < (p[j].x - p[i].x) * (y - p[i].y) / (p[j].y - p[i].y) + p[i].x) in = !in;
-    return in;
+/* ---------------------------------------------------------------- fills of outlines that cross themselves */
+
+/* How many times the closed outline p[0..m) winds around (x, y), counterclockwise positive in the algebra used throughout (cross > 0: to the left) */
+static int winding(const gp_point *p, size_t m, double x, double y) {
+    int w = 0;
+    for (size_t i = 0; i < m; i++) {
+        double ax = p[i].x, ay = p[i].y, bx = p[(i + 1) % m].x, by = p[(i + 1) % m].y;
+        double side = (bx - ax) * (y - ay) - (x - ax) * (by - ay);
+        if (ay <= y) { if (by > y && side > 0) w++; }
+        else if (by <= y && side < 0) w--;
+    }
+    return w;
+}
+static bool filled(int w, int rule) { return rule == 1 ? (w & 1) != 0 : w != 0; }
+
+/* Is (x, y) inside the closed outline, by the fill rule (0 non-zero, 1 even-odd)? */
+static bool inside_outline(const gp_point *p, size_t m, float x, float y, int rule) { return filled(winding(p, m, x, y), rule); }
+
+typedef struct { double x, y; } dpt;
+typedef struct { int a, b; } dseg;
+
+/* where segments p0-p1 and q0-q1 meet: their parameters along each; false if parallel */
+static bool seg_meet(dpt p0, dpt p1, dpt q0, dpt q1, double *t, double *u) {
+    double rx = p1.x - p0.x, ry = p1.y - p0.y, sx = q1.x - q0.x, sy = q1.y - q0.y;
+    double den = rx * sy - ry * sx;
+    if (fabs(den) < 1e-12 * (fabs(rx) + fabs(ry)) * (fabs(sx) + fabs(sy))) return false;
+    double qx = q0.x - p0.x, qy = q0.y - p0.y;
+    *t = (qx * sy - qy * sx) / den;
+    *u = (qx * ry - qy * rx) / den;
+    return true;
+}
+/* do the open segments a-b and c-d cross or touch (other than at an end they share)? */
+static bool seg_hits(dpt a, dpt b, dpt c, dpt d) {
+    double t, u;
+    if (!seg_meet(a, b, c, d, &t, &u)) return false;
+    const double e = 1e-9;
+    return t > e && t < 1 - e && u > -e && u < 1 + e;
+}
+
+static double loop_area(const dpt *v, const int *ids, size_t n) {
+    double a = 0;
+    for (size_t i = 0; i < n; i++) { dpt p = v[ids[i]], q = v[ids[(i + 1) % n]]; a += p.x * q.y - q.x * p.y; }
+    return a * 0.5;
+}
+static int loop_winding(const dpt *v, const int *ids, size_t n, double x, double y) {
+    int w = 0;
+    for (size_t i = 0; i < n; i++) {
+        dpt a = v[ids[i]], b = v[ids[(i + 1) % n]];
+        double side = (b.x - a.x) * (y - a.y) - (x - a.x) * (b.y - a.y);
+        if (a.y <= y) { if (b.y > y && side > 0) w++; }
+        else if (b.y <= y && side < 0) w--;
+    }
+    return w;
+}
+
+/* The inside of the closed outline p[0..m) by a fill rule (0 non-zero, 1 even-odd), as gp_curve_triangulate gives it: triangles, and what each edge is (0 the outline,
+ * 1 / -1 a line inside owned by this triangle / the other one). An outline that does not cross itself is triangulated as it is. One that does is cut where it crosses
+ * itself into the pieces between crossings; a piece is the outline of the fill when the fill rule differs on its two sides (probed a hair away), and those pieces, turned
+ * to have the inside on their left, are joined into loops (at a point where several meet, the one that turns most to the right, which keeps each loop around one piece
+ * of the inside). A loop around the inside is an outer one, one around a hole a hole; each hole is joined to the outer loop it is in by a bridge (to the nearest corner that
+ * can be reached without crossing anything) and the whole is triangulated; the bridges, which are inside, are made lines shared by the two triangles beside them. */
+size_t gp_curve_fill(const gp_point *p, size_t m, int rule, gp_arena *a, gp_point **out, int8_t **edge) {
+    if (m >= 2 && fabsf(p[m - 1].x - p[0].x) < 1e-5f && fabsf(p[m - 1].y - p[0].y) < 1e-5f) m--;
+    *out = NULL; *edge = NULL;
+    if (m < 3) return 0;
+    double minx = INFINITY, miny = INFINITY, maxx = -INFINITY, maxy = -INFINITY;
+    for (size_t i = 0; i < m; i++) { minx = fmin(minx, p[i].x); maxx = fmax(maxx, p[i].x); miny = fmin(miny, p[i].y); maxy = fmax(maxy, p[i].y); }
+    double scale = fmax(maxx - minx, maxy - miny);
+    if (!(scale > 0)) return 0;
+    const double eps = scale * 1e-7;
+
+    /* the crossings: where edge i is cut, as parameters along it */
+    size_t cap_t = 4 * m;
+    double *cuts = gp_arena_alloc(a, cap_t * sizeof *cuts, 8);
+    int *cut_edge = gp_arena_alloc(a, cap_t * sizeof *cut_edge, 4);
+    size_t ncuts = 0;
+    for (size_t i = 0; i < m; i++)
+        for (size_t j = i + 1; j < m; j++) {
+            bool adjacent = j == i + 1 || (i == 0 && j == m - 1);
+            if (adjacent) continue;
+            dpt p0 = { p[i].x, p[i].y }, p1 = { p[(i + 1) % m].x, p[(i + 1) % m].y }, q0 = { p[j].x, p[j].y }, q1 = { p[(j + 1) % m].x, p[(j + 1) % m].y };
+            double t, u;
+            double tv[4];
+            int te[4], nt = 0;
+            if (!seg_meet(p0, p1, q0, q1, &t, &u)) {
+                /* parallel: on one line and overlapping, each is cut where the other ends (the overlap is then a piece of both) */
+                double rx = p1.x - p0.x, ry = p1.y - p0.y, rl2 = rx * rx + ry * ry, sx = q1.x - q0.x, sy = q1.y - q0.y, sl2 = sx * sx + sy * sy;
+                if (!(rl2 > 0) || !(sl2 > 0)) continue;
+                double off = fabs((q0.x - p0.x) * ry - (q0.y - p0.y) * rx) / sqrt(rl2);
+                if (off > eps * 10) continue;
+                double a0 = ((q0.x - p0.x) * rx + (q0.y - p0.y) * ry) / rl2, a1 = ((q1.x - p0.x) * rx + (q1.y - p0.y) * ry) / rl2;
+                double b0 = ((p0.x - q0.x) * sx + (p0.y - q0.y) * sy) / sl2, b1 = ((p1.x - q0.x) * sx + (p1.y - q0.y) * sy) / sl2;
+                tv[nt] = a0; te[nt++] = (int)i;
+                tv[nt] = a1; te[nt++] = (int)i;
+                tv[nt] = b0; te[nt++] = (int)j;
+                tv[nt] = b1; te[nt++] = (int)j;
+            } else {
+                const double e = 1e-9;
+                if (t < -e || t > 1 + e || u < -e || u > 1 + e) continue;
+                tv[nt] = t; te[nt++] = (int)i;
+                tv[nt] = u; te[nt++] = (int)j;
+            }
+            for (int k = 0; k < nt; k++) {
+                double v = tv[k];
+                if (v <= 1e-9 || v >= 1 - 1e-9) continue;   /* (at a corner: nothing to cut) */
+                if (ncuts == cap_t) {
+                    size_t nc = cap_t * 2;
+                    double *c2 = gp_arena_alloc(a, nc * sizeof *c2, 8);
+                    int *e2 = gp_arena_alloc(a, nc * sizeof *e2, 4);
+                    memcpy(c2, cuts, ncuts * sizeof *cuts);
+                    memcpy(e2, cut_edge, ncuts * sizeof *cut_edge);
+                    cuts = c2; cut_edge = e2; cap_t = nc;
+                }
+                cuts[ncuts] = v;
+                cut_edge[ncuts++] = te[k];
+            }
+        }
+    if (ncuts == 0) {   /* no crossing: the outline is its own fill */
+        bool touching = false;   /* (a corner on another edge, or two corners at one point, count as a crossing too: they were skipped above as cuts at a corner) */
+        for (size_t i = 0; i < m && !touching; i++)
+            for (size_t j = i + 1; j < m && !touching; j++)
+                if (fabs((double)p[i].x - p[j].x) <= eps * 10 && fabs((double)p[i].y - p[j].y) <= eps * 10) touching = true;
+        for (size_t i = 0; i < m && !touching; i++)
+            for (size_t j = 0; j < m && !touching; j++) {
+                if (j == i || (j + 1) % m == i) continue;
+                dpt v = { p[i].x, p[i].y }, q0 = { p[j].x, p[j].y }, q1 = { p[(j + 1) % m].x, p[(j + 1) % m].y };
+                double dx = q1.x - q0.x, dy = q1.y - q0.y, l2 = dx * dx + dy * dy;
+                if (l2 <= 0) continue;
+                double t = ((v.x - q0.x) * dx + (v.y - q0.y) * dy) / l2;
+                double cx = q0.x + t * dx - v.x, cy = q0.y + t * dy - v.y;
+                if (t > 1e-9 && t < 1 - 1e-9 && cx * cx + cy * cy < eps * eps) touching = true;
+            }
+        if (!touching) return gp_curve_triangulate(p, m, a, out, edge);
+    }
+
+    /* the points: the corners and the crossings, merged when they coincide */
+    size_t cap_v = m + ncuts;
+    dpt *v = gp_arena_alloc(a, cap_v * sizeof *v, 8);
+    int nv = 0;
+    int *corner = gp_arena_alloc(a, m * sizeof *corner, 4);
+    #define ADD_POINT(X, Y, OUT) do { \
+        double ax_ = (X), ay_ = (Y); int f_ = -1; \
+        for (int q_ = 0; q_ < nv && f_ < 0; q_++) if (fabs(v[q_].x - ax_) <= eps * 10 && fabs(v[q_].y - ay_) <= eps * 10) f_ = q_; \
+        if (f_ < 0) { v[nv] = (dpt){ ax_, ay_ }; f_ = nv++; } \
+        (OUT) = f_; } while (0)
+    for (size_t i = 0; i < m; i++) ADD_POINT(p[i].x, p[i].y, corner[i]);
+    /* the pieces of each edge, in order along it */
+    size_t cap_s = m + ncuts;
+    dseg *sg = gp_arena_alloc(a, cap_s * sizeof *sg, 4);
+    size_t ns = 0;
+    double *ts = gp_arena_alloc(a, (ncuts + 2) * sizeof *ts, 8);
+    for (size_t i = 0; i < m; i++) {
+        size_t nt = 0;
+        for (size_t k = 0; k < ncuts; k++) if (cut_edge[k] == (int)i) ts[nt++] = cuts[k];
+        for (size_t x = 1; x < nt; x++) for (size_t y = x; y > 0 && ts[y - 1] > ts[y]; y--) { double tmp = ts[y]; ts[y] = ts[y - 1]; ts[y - 1] = tmp; }
+        int prev = corner[i];
+        double ax = p[i].x, ay = p[i].y, bx = p[(i + 1) % m].x, by = p[(i + 1) % m].y;
+        for (size_t k = 0; k <= nt; k++) {
+            int id;
+            if (k < nt) ADD_POINT(ax + (bx - ax) * ts[k], ay + (by - ay) * ts[k], id);
+            else id = corner[(i + 1) % m];
+            if (id != prev) sg[ns++] = (dseg){ prev, id };
+            prev = id;
+        }
+    }
+    #undef ADD_POINT
+
+    /* the pieces that are the outline of the fill, turned to have it on their left; one of each (an outline that goes over itself gives two) */
+    dseg *keep = gp_arena_alloc(a, (ns ? ns : 1) * sizeof *keep, 4);
+    size_t nk = 0;
+    for (size_t i = 0; i < ns; i++) {
+        dpt A = v[sg[i].a], B = v[sg[i].b];
+        double dx = B.x - A.x, dy = B.y - A.y, l = hypot(dx, dy);
+        if (!(l > 0)) continue;
+        double h = fmin(scale * 1e-5, l * 0.01);
+        double mx = (A.x + B.x) * 0.5, my = (A.y + B.y) * 0.5, nx = -dy / l * h, ny = dx / l * h;
+        bool fl = filled(winding(p, m, mx + nx, my + ny), rule), fr = filled(winding(p, m, mx - nx, my - ny), rule);
+        if (fl == fr) continue;
+        dseg d = fl ? sg[i] : (dseg){ sg[i].b, sg[i].a };
+        bool dup = false;
+        for (size_t k = 0; k < nk && !dup; k++) dup = keep[k].a == d.a && keep[k].b == d.b;
+        if (!dup) keep[nk++] = d;
+    }
+    if (!nk) return 0;
+
+    /* join them into loops: from the end of one, the next that turns most to the right from going back the way it came */
+    bool *used = gp_arena_alloc(a, nk, 1);
+    int *loopv = gp_arena_alloc(a, (nk + 1) * sizeof *loopv, 4);   /* every loop's points, one after another */
+    size_t *loop_at = gp_arena_alloc(a, (nk + 1) * sizeof *loop_at, 8), nloops = 0, nlv = 0;
+    for (size_t s0 = 0; s0 < nk; s0++) {
+        if (used[s0]) continue;
+        loop_at[nloops] = nlv;
+        size_t cur = s0;
+        size_t guard = 0;
+        while (!used[cur] && guard++ <= nk) {
+            used[cur] = true;
+            loopv[nlv++] = keep[cur].a;
+            int at = keep[cur].b;
+            dpt in = { v[at].x - v[keep[cur].a].x, v[at].y - v[keep[cur].a].y };
+            double best = INFINITY;
+            size_t next = (size_t)-1;
+            for (size_t k = 0; k < nk; k++) {
+                if (used[k] && k != s0) continue;
+                if (keep[k].a != at) continue;
+                dpt d = { v[keep[k].b].x - v[at].x, v[keep[k].b].y - v[at].y };
+                double bx = -in.x, by = -in.y;   /* back the way it came */
+                double ang = atan2(bx * d.y - by * d.x, bx * d.x + by * d.y);   /* counterclockwise from back to d */
+                double cw = -ang;
+                while (cw <= 1e-12) cw += 2 * M_PI;   /* clockwise, in (0, 2 pi] */
+                if (cw < best) { best = cw; next = k; }
+            }
+            if (next == (size_t)-1 || next == s0) break;
+            cur = next;
+        }
+        if (nlv - loop_at[nloops] >= 3) nloops++;
+        else nlv = loop_at[nloops];
+    }
+    loop_at[nloops] = nlv;
+    if (!nloops) return 0;
+
+    /* outer loops (area > 0: the inside on the left goes counterclockwise) and holes */
+    double *area = gp_arena_alloc(a, nloops * sizeof *area, 8);
+    for (size_t l = 0; l < nloops; l++) area[l] = loop_area(v, loopv + loop_at[l], loop_at[l + 1] - loop_at[l]);
+    int *owner = gp_arena_alloc(a, nloops * sizeof *owner, 4);
+    for (size_t l = 0; l < nloops; l++) {
+        owner[l] = -1;
+        if (area[l] >= 0) continue;
+        const int *ids = loopv + loop_at[l];
+        dpt A = v[ids[0]], B = v[ids[1]];
+        double dx = B.x - A.x, dy = B.y - A.y, ln = hypot(dx, dy), h = fmin(scale * 1e-5, ln * 0.01);
+        double px = (A.x + B.x) * 0.5 + dy / ln * h, py = (A.y + B.y) * 0.5 - dx / ln * h;   /* (to its right: the fill around the hole) */
+        double best = INFINITY;
+        for (size_t o = 0; o < nloops; o++)
+            if (area[o] > 0 && area[o] < best && loop_winding(v, loopv + loop_at[o], loop_at[o + 1] - loop_at[o], px, py) != 0) { best = area[o]; owner[l] = (int)o; }
+    }
+
+    /* every outer loop with its holes bridged in, triangulated */
+    gp_point *tri = NULL;
+    int8_t *fl = NULL;
+    size_t ntri = 0, cap_tri = 0;
+    for (size_t o = 0; o < nloops; o++) {
+        if (area[o] <= 0) continue;
+        size_t cap_m = loop_at[nloops] + 4 * nloops + 4, nm = 0;
+        int *mp = gp_arena_alloc(a, cap_m * sizeof *mp, 4);
+        for (size_t k = loop_at[o]; k < loop_at[o + 1]; k++) mp[nm++] = loopv[k];
+        int *bridge = gp_arena_alloc(a, 2 * nloops * sizeof *bridge, 4);   /* pairs of points joined by a bridge */
+        size_t nb = 0;
+        for (;;) {   /* the hole with the point furthest right first */
+            int pick = -1, pk = -1;
+            double bestx = -INFINITY;
+            for (size_t h = 0; h < nloops; h++) {
+                if (owner[h] != (int)o) continue;
+                for (size_t k = loop_at[h]; k < loop_at[h + 1]; k++)
+                    if (v[loopv[k]].x > bestx) { bestx = v[loopv[k]].x; pick = (int)h; pk = (int)(k - loop_at[h]); }
+            }
+            if (pick < 0) break;
+            owner[pick] = -2;
+            const int *hv = loopv + loop_at[pick];
+            size_t hn = loop_at[pick + 1] - loop_at[pick];
+            dpt M = v[hv[pk]];
+            /* the nearest corner of what is there so far that a straight line reaches without crossing anything */
+            int vi = -1;
+            double bestd = INFINITY;
+            for (size_t c = 0; c < nm; c++) {
+                dpt V = v[mp[c]];
+                double dd = (V.x - M.x) * (V.x - M.x) + (V.y - M.y) * (V.y - M.y);
+                if (dd >= bestd || mp[c] == hv[pk]) continue;
+                bool clear = true;
+                for (size_t e = 0; e < nm && clear; e++) {
+                    int e0 = mp[e], e1 = mp[(e + 1) % nm];
+                    if (e0 == mp[c] || e1 == mp[c]) continue;
+                    clear = !seg_hits(M, V, v[e0], v[e1]) && !seg_hits(v[e0], v[e1], M, V);
+                }
+                for (size_t h = 0; h < nloops && clear; h++) {
+                    if (owner[h] != (int)o && (int)h != pick) continue;
+                    for (size_t k = loop_at[h]; k < loop_at[h + 1] && clear; k++) {
+                        int e0 = loopv[k], e1 = loopv[k + 1 < loop_at[h + 1] ? k + 1 : loop_at[h]];
+                        if (e0 == hv[pk] || e1 == hv[pk]) continue;
+                        clear = !seg_hits(M, V, v[e0], v[e1]) && !seg_hits(v[e0], v[e1], M, V);
+                    }
+                }
+                if (clear) { bestd = dd; vi = (int)c; }
+            }
+            if (vi < 0) continue;   /* (cannot be reached: the hole is left out) */
+            /* ... V, M, around the hole back to M, V, ... */
+            memmove(mp + vi + 1 + hn + 2, mp + vi + 1, (nm - (size_t)vi - 1) * sizeof *mp);
+            for (size_t k = 0; k <= hn; k++) mp[vi + 1 + k] = hv[(pk + k) % hn];
+            mp[vi + 1 + hn + 1] = mp[vi];
+            nm += hn + 2;
+            bridge[nb++] = mp[vi];
+            bridge[nb++] = hv[pk];
+        }
+        gp_point *pts = gp_arena_alloc(a, nm * sizeof *pts, 4);
+        for (size_t k = 0; k < nm; k++) pts[k] = (gp_point){ (float)v[mp[k]].x, (float)v[mp[k]].y };
+        gp_point *t;
+        int8_t *f;
+        size_t nt = gp_curve_triangulate(pts, nm, a, &t, &f);
+        /* a bridge is inside: the two triangles along it share it, the one on its left (going from the lesser end to the greater) owning it */
+        for (size_t k = 0; k < nt; k++)
+            for (int j = 0; j < 3; j++) {
+                if (f[3 * k + j]) continue;
+                gp_point P = t[3 * k + j], Q = t[3 * k + (j + 1) % 3], R = t[3 * k + (j + 2) % 3];
+                for (size_t b = 0; b < nb; b += 2) {
+                    gp_point B0 = { (float)v[bridge[b]].x, (float)v[bridge[b]].y }, B1 = { (float)v[bridge[b + 1]].x, (float)v[bridge[b + 1]].y };
+                    bool on = (P.x == B0.x && P.y == B0.y && Q.x == B1.x && Q.y == B1.y) || (P.x == B1.x && P.y == B1.y && Q.x == B0.x && Q.y == B0.y);
+                    if (!on) continue;
+                    gp_point L0 = B0, L1 = B1;
+                    if (L1.x < L0.x || (L1.x == L0.x && L1.y < L0.y)) { L0 = B1; L1 = B0; }
+                    f[3 * k + j] = cross3(L0, L1, R) > 0 ? 1 : -1;
+                }
+            }
+        if (ntri + nt > cap_tri) {
+            size_t nc = (ntri + nt) * 2;
+            gp_point *t2 = gp_arena_alloc(a, 3 * nc * sizeof *t2, 4);
+            int8_t *f2 = gp_arena_alloc(a, 3 * nc, 1);
+            if (ntri) { memcpy(t2, tri, 3 * ntri * sizeof *tri); memcpy(f2, fl, 3 * ntri); }
+            tri = t2; fl = f2; cap_tri = nc;
+        }
+        if (nt) { memcpy(tri + 3 * ntri, t, 3 * nt * sizeof *t); memcpy(fl + 3 * ntri, f, 3 * nt); }
+        ntri += nt;
+    }
+    *out = tri; *edge = fl;
+    return ntri;
 }
 
 /* The smallest distance from (x, y), in the element's own coordinates, to the stroke's centerline, with the open ends of a butt-capped stroke not reaching past their
@@ -224,11 +596,21 @@ bool gp_curve_hit(const gp_el *n, float x, float y) {
     const gp_style *s = &n->style;
     float reach = s->stroke_w * 0.5f + s->hit_tol;
     if (reach >= 0.f && s->stroke_w > 0.f && gp_curve_distance(n, x, y) <= reach) return true;
-    if (!s->has_fill && !(s->arrow[0] > 0.f) && !(s->arrow[1] > 0.f)) return false;
+    if (!s->has_fill && !(s->arrow[0] > 0.f) && !(s->arrow[1] > 0.f) && !s->marker[0] && !s->marker[1] && !s->marker[2]) return false;
     gp_arena tmp = { .chunk_size = 4096 };
     gp_point *pts, tri[3];
     size_t m = gp_curve_flatten(n, 0.05f, &tmp, &pts);
-    bool hit = s->has_fill && s->fill_color.a > 0.f && m >= 3 && inside_outline(pts, m, x, y);
+    bool hit = s->has_fill && s->fill_color.a > 0.f && m >= 3 && inside_outline(pts, m, x, y, s->fill_rule);
+    if (!hit && s->stroke_w > 0.f && (s->marker[0] || s->marker[1] || s->marker[2])) {
+        gp_marker_at *mk;
+        size_t nm = gp_curve_markers(n, pts, m, &tmp, &mk);
+        for (size_t i = 0; i < nm && !hit; i++) {
+            gp_point t6[6];
+            int8_t e6[6];
+            if (gp_marker_tris(&mk[i], s->stroke_w, t6, e6)) hit = in_tri((gp_point){ x, y }, t6[0], t6[1], t6[2]) || in_tri((gp_point){ x, y }, t6[3], t6[4], t6[5]);
+            else hit = hypotf(x - mk[i].c.x, y - mk[i].c.y) <= mk[i].size * 0.5f + s->hit_tol;
+        }
+    }
     float *arc = m ? gp_curve_arcs(pts, m, &tmp) : NULL, cut;
     for (int e = 0; e < 2 && !hit && s->stroke_w > 0.f; e++)
         if (m && gp_curve_arrow(n, pts, arc, m, e, tri, &cut)) hit = in_tri((gp_point){ x, y }, tri[0], tri[1], tri[2]);

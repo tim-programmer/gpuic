@@ -193,6 +193,59 @@ static bool layer_begin(paint_ctx *pc) {
 
 /* Closes it: the region (the box of what was painted, out to whole device pixels) goes on both markers, and the end is the quad that composites
  * the texture at `alpha`. A layer nothing was painted into is taken out. */
+/* how far filters spread what is in L (logical px, x0 y0 x1 y1): a blur by three of its deviations, a shadow by its offset and its blur's */
+static void filters_spread(const gp_filter_op *ops, int nf, float L[4]) {
+    for (int i = 0; i < nf; i++) {
+        const gp_filter_op *op = &ops[i];
+        if (op->kind == GP_FX_BLUR) {
+            float g = 3.f * op->v;
+            L[0] -= g; L[1] -= g; L[2] += g; L[3] += g;
+        } else if (op->kind == GP_FX_DROP_SHADOW) {
+            float g = 1.5f * op->v;   /* (sigma is half the blur, as for gp_shadow: three of them) */
+            L[0] = fminf(L[0], L[0] + op->dx - g); L[1] = fminf(L[1], L[1] + op->dy - g);
+            L[2] = fmaxf(L[2], L[2] + op->dx + g); L[3] = fmaxf(L[3], L[3] + op->dy + g);
+        }
+    }
+}
+
+/* the passes for filters over a region (a layer's, or a backdrop's copy), in order */
+static void emit_passes(paint_ctx *pc, const gp_filter_op *ops, int nf, const float region[4]) {
+    for (int i = 0; i < nf; i++) {
+        const gp_filter_op *op = &ops[i];
+        gp_instance f = { 0 };
+        memcpy(f.bounds, region, 4 * sizeof *region);
+        memcpy(f.clip, region, 4 * sizeof *region);
+        if (op->kind == GP_FX_BLUR || op->kind == GP_FX_DROP_SHADOW) {
+            float sigma = op->kind == GP_FX_BLUR ? op->v : op->v * 0.5f;
+            f.kind = GP_PRIM_FX_BLUR;
+            f.blur = sigma;
+            set4(f.side[0], 0.f, op->kind == GP_FX_DROP_SHADOW, 0.f, 0.f);
+            gp_scene_push(pc->scene, &f);
+            if (op->kind == GP_FX_BLUR) {
+                f.side[0][0] = 1.f;
+            } else {
+                f.kind = GP_PRIM_FX_SHADOW;
+                set4(f.side[0], op->dx, op->dy, 0.f, 0.f);
+                set_color(f.color, op->color, 1.f);
+            }
+            gp_scene_push(pc->scene, &f);
+        } else {
+            float M[4][5];
+            fx_matrix(op, M);
+            f.kind = GP_PRIM_FX_MATRIX;
+            for (int j = 0; j < 4; j++) {
+                f.color[j] = M[0][j];
+                f.border_color[j] = M[1][j];
+                f.radii[j] = M[2][j];
+                f.uv[j] = M[3][j];
+            }
+            set4(f.side[0], M[0][4], M[1][4], M[2][4], M[3][4]);
+            gp_scene_push(pc->scene, &f);
+        }
+    }
+
+}
+
 static void layer_end_fx(paint_ctx *pc, float alpha, const layer_fx *fx) {
     pc->depth--;
     size_t at = pc->lbegin[pc->depth];
@@ -204,18 +257,7 @@ static void layer_end_fx(paint_ctx *pc, float alpha, const layer_fx *fx) {
     }
     const gp_style *st = fx ? fx->s : NULL;
     int nf = st ? st->nfilters : 0;
-    /* how far the filters spread what was painted: a blur by three of its deviations, a shadow by its offset and its blur's */
-    for (int i = 0; i < nf; i++) {
-        const gp_filter_op *op = &st->filters[i];
-        if (op->kind == GP_FX_BLUR) {
-            float g = 3.f * op->v;
-            L[0] -= g; L[1] -= g; L[2] += g; L[3] += g;
-        } else if (op->kind == GP_FX_DROP_SHADOW) {
-            float g = 1.5f * op->v;   /* (sigma is half the blur, as for gp_shadow: three of them) */
-            L[0] = fminf(L[0], L[0] + op->dx - g); L[1] = fminf(L[1], L[1] + op->dy - g);
-            L[2] = fmaxf(L[2], L[2] + op->dx + g); L[3] = fmaxf(L[3], L[3] + op->dy + g);
-        }
-    }
+    if (nf) filters_spread(st->filters, nf, L);
     float s = pc->scale, lim = 1e6f;
     float x0 = floorf(fmaxf(L[0], -lim) * s) / s, y0 = floorf(fmaxf(L[1], -lim) * s) / s;
     float x1 = ceilf(fminf(L[2], lim) * s) / s, y1 = ceilf(fminf(L[3], lim) * s) / s;
@@ -246,40 +288,7 @@ static void layer_end_fx(paint_ctx *pc, float alpha, const layer_fx *fx) {
         }
     }
 
-    /* the filters, as passes over the layer's region, in order */
-    for (int i = 0; i < nf; i++) {
-        const gp_filter_op *op = &st->filters[i];
-        gp_instance f = { 0 };
-        memcpy(f.bounds, region, sizeof region);
-        memcpy(f.clip, region, sizeof region);
-        if (op->kind == GP_FX_BLUR || op->kind == GP_FX_DROP_SHADOW) {
-            float sigma = op->kind == GP_FX_BLUR ? op->v : op->v * 0.5f;
-            f.kind = GP_PRIM_FX_BLUR;
-            f.blur = sigma;
-            set4(f.side[0], 0.f, op->kind == GP_FX_DROP_SHADOW, 0.f, 0.f);
-            gp_scene_push(pc->scene, &f);
-            if (op->kind == GP_FX_BLUR) {
-                f.side[0][0] = 1.f;
-            } else {
-                f.kind = GP_PRIM_FX_SHADOW;
-                set4(f.side[0], op->dx, op->dy, 0.f, 0.f);
-                set_color(f.color, op->color, 1.f);
-            }
-            gp_scene_push(pc->scene, &f);
-        } else {
-            float M[4][5];
-            fx_matrix(op, M);
-            f.kind = GP_PRIM_FX_MATRIX;
-            for (int j = 0; j < 4; j++) {
-                f.color[j] = M[0][j];
-                f.border_color[j] = M[1][j];
-                f.radii[j] = M[2][j];
-                f.uv[j] = M[3][j];
-            }
-            set4(f.side[0], M[0][4], M[1][4], M[2][4], M[3][4]);
-            gp_scene_push(pc->scene, &f);
-        }
-    }
+    emit_passes(pc, st ? st->filters : NULL, nf, region);   /* the filters, as passes over the layer's region, in order */
 
     gp_instance e = { 0 };
     e.kind = GP_PRIM_LAYER_END;
@@ -485,7 +494,7 @@ static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, fl
     if (s->has_fill && s->fill_color.a > 0.f && m >= 3) {   /* under the stroke: triangles, outline edges soft, the diagonals between them hard and owned by one */
         gp_point *t;
         int8_t *ed;
-        size_t nt = gp_curve_triangulate(p, m, pc->scratch, &t, &ed);
+        size_t nt = gp_curve_fill(p, m, s->fill_rule, pc->scratch, &t, &ed);
         for (size_t i = 0; i < nt; i++) push_triangle(pc, t + 3 * i, ed + 3 * i, 0.f, x, y, clip, s->fill_color, opacity);
     }
     if (hw > 0.f && color.a > 0.f) {
@@ -552,6 +561,26 @@ static void paint_curve(paint_ctx *pc, gp_el *n, float x, float y, rect clip, fl
                 const int8_t ed[3] = { 0, (int8_t)(e ? -2 : 2), 0 };   /* tip to corner, the base (shared with the stroke: at the start a pixel on the line is the head's, at the end the stroke's), corner to tip */
                 push_triangle(pc, tri[e], ed, hw, x, y, clip, sp.grad ? ramp_at(sp.grad, (float)e) : sp.color, sp.opacity);
             }
+        gp_marker_at *mk;   /* markers: over the stroke, in the same layer (so a translucent one is one blend with it) */
+        size_t nmk = gp_curve_markers(n, p, m, pc->scratch, &mk);
+        for (size_t i = 0; i < nmk; i++) {
+            gp_color mc = sp.grad ? ramp_at(sp.grad, mk[i].t) : sp.color;
+            gp_point t6[6];
+            int8_t e6[6];
+            if (gp_marker_tris(&mk[i], s->stroke_w, t6, e6)) {
+                push_triangle(pc, t6, e6, 0.f, x, y, clip, mc, sp.opacity);
+                push_triangle(pc, t6 + 3, e6 + 3, 0.f, x, y, clip, mc, sp.opacity);
+            } else {   /* a circle: a round box */
+                float r = mk[i].size * 0.5f;
+                gp_instance inst = { 0 };
+                set4(inst.bounds, x + mk[i].c.x - r, y + mk[i].c.y - r, 2 * r, 2 * r);
+                set_clip(&inst, clip);
+                set_color(inst.color, mc, sp.opacity);
+                set4(inst.radii, r, r, r, r);
+                inst.kind = GP_PRIM_QUAD;
+                push(pc, &inst);
+            }
+        }
         if (layer_alpha < 1.f) layer_end(pc, layer_alpha);
     }
     if (s->path_text && n->ts.color.a > 0.f) paint_path_text(pc, n, p, arc, m, x, y, clip, opacity);
@@ -923,6 +952,37 @@ static void paint_node_body(paint_ctx *pc, gp_el *n, float ox, float oy, rect cl
     float group = 1.f;
     bool layered = false, effects = s->nfilters || s->blend_mode || n->mask;   /* (these always take a layer) */
     if (s->opacity <= 0.f || opacity <= 0.f) return;
+    if (s->nbackdrop && w > 0.f && h > 0.f) {   /* what is behind, filtered, in the box: before the element's own layer (it reads what is under that) */
+        float r4b[4];
+        corner_radii(s, w, h, r4b);
+        gp_instance box = { 0 };
+        set4(box.bounds, x, y, w, h);
+        set_clip(&box, clip);
+        set4(box.radii, r4b[0], r4b[1], r4b[2], r4b[3]);
+        set_color(box.color, (gp_color){ 1, 1, 1, 1 }, opacity * s->opacity);
+        box.kind = GP_PRIM_BACKDROP_END;
+        if (pc->has_xf) {   /* (as push() would: for where it is on screen) */
+            const gp_affine *mx = &pc->xf;
+            box.xf0[0] = mx->a - 1.f; box.xf0[1] = mx->b; box.xf0[2] = mx->c; box.xf0[3] = mx->d - 1.f;
+            box.xf1[0] = mx->tx; box.xf1[1] = mx->ty; box.xf1[2] = sqrtf(fabsf(mx->a * mx->d - mx->b * mx->c)) - 1.f;
+        }
+        float L[4];
+        inst_screen_box(&box, L);
+        filters_spread(s->backdrop, s->nbackdrop, L);
+        float sc = pc->scale, lim = 1e6f;
+        float region[4] = { floorf(fmaxf(L[0], -lim) * sc) / sc, floorf(fmaxf(L[1], -lim) * sc) / sc, 0, 0 };
+        region[2] = ceilf(fminf(L[2], lim) * sc) / sc - region[0];
+        region[3] = ceilf(fminf(L[3], lim) * sc) / sc - region[1];
+        if (region[2] > 0.f && region[3] > 0.f) {
+            gp_instance b = { 0 };
+            b.kind = GP_PRIM_BACKDROP;
+            memcpy(b.bounds, region, sizeof region);
+            memcpy(b.clip, region, sizeof region);
+            gp_scene_push(pc->scene, &b);
+            emit_passes(pc, s->backdrop, s->nbackdrop, region);
+            scene_add(pc, &box);
+        }
+    }
     if ((effects || (s->opacity < 1.f && wants_group(n, s))) && layer_begin(pc)) {
         layered = true;
         group = s->opacity;

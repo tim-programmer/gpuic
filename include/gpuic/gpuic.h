@@ -724,11 +724,22 @@ gp_node *gp_stroke_gradient_stops(const gp_color_stop *stops, int n);
  * stroke for the pointer. Not on a closed outline. */
 gp_node *gp_arrow_start(float length);
 gp_node *gp_arrow_end(float length);
+/* Markers, as SVG's: a shape `size` px across centered on the first point, the last, or every corner between (a polyline's), turned along the line there (at a corner, half
+ * way between the two directions). In the stroke's color (with a gradient, the color at that end; in the middle, the start's), drawn over the stroke and part of it for the
+ * pointer. GP_MARKER_BAR is a line across the stroke, as thick as it and `size` long. Arrowheads are gp_arrow_start / gp_arrow_end. */
+enum { GP_MARKER_NONE = 0, GP_MARKER_CIRCLE, GP_MARKER_SQUARE, GP_MARKER_DIAMOND, GP_MARKER_BAR };
+gp_node *gp_marker_start(int shape, float size);
+gp_node *gp_marker_end(int shape, float size);
+gp_node *gp_marker_mid(int shape, float size);
 /* A shape: gp_closed() joins the last point back to the first (the stroke goes round, with a join there, and has no ends), and gp_fill_color(c) fills the inside, under the
- * stroke, whether or not the stroke is closed (gp_stroke_width(0) for a fill alone). The fill is for an outline that does not cross itself (concave is fine; one that crosses
- * itself or has holes is filled, but not as even-odd or non-zero would). Inside the fill is the shape's for the pointer. A Bezier is closed by a straight line. */
+ * stroke, whether or not the stroke is closed (gp_stroke_width(0) for a fill alone). Concave outlines, ones that cross themselves and ones that go round more than once are
+ * filled by the fill rule, as SVG's fill-rule: non-zero by default (a point is inside where the outline winds around it, counting directions), or gp_fill_evenodd() (where it
+ * crosses the outline an odd number of times going out: a star drawn in one line has a hole in the middle). Inside the fill is the shape's for the pointer, by the same rule.
+ * A Bezier is closed by a straight line. */
 gp_node *gp_fill_color(gp_color c);
 gp_node *gp_closed(void);
+gp_node *gp_fill_evenodd(void);
+gp_node *gp_fill_nonzero(void);
 /* Text along the centerline, in the element's text style (gp_text_size, gp_text_color, the font), each glyph turned to the line where it stands, its baseline on the line
  * (moved `gp_path_text_dy` px to the right of the direction of travel: negative is above a line drawn left to right). gp_text_center / gp_text_right place it along the length
  * (from the start by default). Glyphs that do not fit are left out. Left to right only; not hit tested (the stroke is). The string is copied. */
@@ -1087,6 +1098,10 @@ gp_node *gp_filter_invert(float amount);
 gp_node *gp_filter_hue_rotate(float degrees);
 gp_node *gp_filter_opacity(float amount);
 gp_node *gp_filter_drop_shadow(float dx, float dy, float blur, gp_color c);
+/* Filters on what is behind the element, as CSS's backdrop-filter: `gp_backdrop_filter(gp_group(gp_filter_blur(12), gp_filter_saturate(1.4f)))` behind a translucent
+ * panel is frosted glass. What was drawn under the element's box (inside its nearest group, or the window) is filtered and drawn in the box (its rounded corners too), under
+ * the element's own background and content, and faded with it. The group's filters, in order; a blur reads past the box as far as it spreads (the window's edge repeats). */
+gp_node *gp_backdrop_filter(gp_node *filters);
 
 /* How the element (and what is in it, as one picture) is put on what is under it: CSS's mix-blend-mode, with what is under it inside its nearest group (an ancestor with
  * gp_opacity, a filter, a mask or a blend mode of its own), or the window. */

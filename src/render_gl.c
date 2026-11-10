@@ -96,7 +96,7 @@ static const char *vs_src =
     "void main() {\n"
     "  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
     "  float kind = a_params.y;\n"
-    "  float pad = kind == 1.0 ? a_params.z * 1.5 + 1.0 : ((kind == 0.0 || kind == 5.0 || kind == 6.0 || kind == 7.0 || kind == 8.0) ? 1.0 : 0.0);\n"
+    "  float pad = kind == 1.0 ? a_params.z * 1.5 + 1.0 : ((kind == 0.0 || kind == 5.0 || kind == 6.0 || kind == 7.0 || kind == 8.0 || kind == 18.0) ? 1.0 : 0.0);\n"
     "  vec2 size = a_bounds.zw + 2.0 * pad;\n"
     "  vec2 pos0 = a_bounds.xy - pad + corner * size;\n"   /* where it is in the layout, before the transform */
     "  vec2 pos = pos0 + vec2(a_xf0.x * pos0.x + a_xf0.z * pos0.y + a_xf1.x, a_xf0.y * pos0.x + a_xf0.w * pos0.y + a_xf1.y);\n"
@@ -156,9 +156,10 @@ static const char *fs_src =
     "bool in_region(ivec2 q) {\n"
     "  vec2 c = (vec2(q) + 0.5) / u_scale;\n"
     "  c.y = u_viewport.y - c.y;\n"   /* (GL's rows go up, the layout's down) */
-    "  return q.x >= 0 && q.y >= 0 && c.x >= v_clip.x && c.y >= v_clip.y && c.x < v_clip.x + v_clip.z && c.y < v_clip.y + v_clip.w;\n"
+    "  return c.x >= v_clip.x && c.y >= v_clip.y && c.x < v_clip.x + v_clip.z && c.y < v_clip.y + v_clip.w;\n"
     "}\n"
-    "vec4 fetch(sampler2D t, ivec2 q) { return in_region(q) && q.x < textureSize(t, 0).x && q.y < textureSize(t, 0).y ? texelFetch(t, q, 0) : vec4(0.0); }\n"
+    /* inside the region, past the window's edge, the edge's pixel (nothing was drawn there: it goes on as it was) */
+    "vec4 fetch(sampler2D t, ivec2 q) { return in_region(q) ? texelFetch(t, clamp(q, ivec2(0), textureSize(t, 0) - 1), 0) : vec4(0.0); }\n"
     /* a Gaussian along `dir` (whole pixels), sigma in device px; wide ones are sampled every few pixels */
     "vec4 gauss(sampler2D t, ivec2 q, ivec2 dir, float sigma) {\n"
     "  if (sigma < 0.3) return fetch(t, q);\n"
@@ -313,6 +314,9 @@ static const char *fs_src =
     "      sc = vec4(sc.rgb * (1.0 - db.a) + db.rgb * (1.0 - sc.a) + sc.a * db.a * bl, sc.a + db.a * (1.0 - sc.a));\n"
     "    }\n"
     "    frag = sc;\n"
+    "  } else if (kind == 18.0) {\n" /* a backdrop filter's result, in the element's rounded box */
+    "    float cov = clamp(0.5 - sd_rounded(v_local, half_size, v_radii) * us, 0.0, 1.0);\n"
+    "    frag = texelFetch(u_layer, ivec2(gl_FragCoord.xy), 0) * (cov * v_color.a);\n"
     "  } else if (kind == 13.0) {\n" /* a color filter: a matrix over straight RGBA (rows in color, border, radii, uvr; offsets in s0) */
     "    vec4 t = texelFetch(u_layer, ivec2(gl_FragCoord.xy), 0);\n"
     "    vec4 c = t.a > 0.0 ? vec4(t.rgb / t.a, t.a) : vec4(0.0);\n"
@@ -686,14 +690,50 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
     int skipped = 0;     /* ... of which these could not be made, inside the open ones: drawn straight on what is under them */
     int cur = -1;        /* where the layer about to end is now, after the filter passes so far (-1: its own target) */
     GLuint mask_tex = 0; /* the mask of the layer about to end */
+    bool backdrop = false;   /* between a BACKDROP and its END: the passes are over the copy of what is under it */
     for (size_t i = 0; i < scene->len; i++) {
         const gp_instance *in = &scene->items[i];
         int kind = (int)in->kind;
+        if (kind == GP_PRIM_BACKDROP) {   /* what is under the region, out of the target being drawn on (bound now), into the backdrop texture */
+            if (i > run) draw_run(r, scene, run, i - run);
+            run = i + 1;
+            if (!layer_target(r, T_BACKDROP, px_w, px_h)) continue;
+            int x0 = (int)floorf(in->bounds[0] * scale + 0.5f), x1 = (int)floorf((in->bounds[0] + in->bounds[2]) * scale + 0.5f);
+            int y0 = (int)floorf(in->bounds[1] * scale + 0.5f), y1 = (int)floorf((in->bounds[1] + in->bounds[3]) * scale + 0.5f);
+            if (x0 < 0) x0 = 0;
+            if (y0 < 0) y0 = 0;
+            if (x1 > px_w) x1 = px_w;
+            if (y1 > px_h) y1 = px_h;
+            gl.glActiveTexture(GL_TEXTURE7);
+            gl.glBindTexture(GL_TEXTURE_2D, r->layers[T_BACKDROP].tex);
+            if (x1 > x0 && y1 > y0) gl.glCopyTexSubImage2D(GL_TEXTURE_2D, 0, x0, px_h - y1, x0, px_h - y1, x1 - x0, y1 - y0);
+            gl.glBindTexture(GL_TEXTURE_2D, 0);
+            gl.glActiveTexture(GL_TEXTURE0);
+            cur = T_BACKDROP;
+            backdrop = true;
+            continue;
+        }
+        if (kind == GP_PRIM_BACKDROP_END) {   /* back on the target, the result drawn in the box */
+            if (i > run) draw_run(r, scene, run, i - run);
+            run = i + 1;
+            if (!backdrop) continue;
+            backdrop = false;
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, depth ? r->layers[depth - 1].fbo : 0);
+            gl.glActiveTexture(GL_TEXTURE5);
+            gl.glBindTexture(GL_TEXTURE_2D, r->layers[cur].tex);
+            gl.glActiveTexture(GL_TEXTURE0);
+            draw_run(r, scene, i, 1);
+            gl.glActiveTexture(GL_TEXTURE5);
+            gl.glBindTexture(GL_TEXTURE_2D, 0);
+            gl.glActiveTexture(GL_TEXTURE0);
+            cur = -1;
+            continue;
+        }
         if (kind == GP_PRIM_FX_MATRIX || kind == GP_PRIM_FX_BLUR || kind == GP_PRIM_FX_SHADOW) {
             /* a pass over the open layer: from where it is now into the other of the two pass targets (a shadow's first pass: into the aside one) */
             if (i > run) draw_run(r, scene, run, i - run);
             run = i + 1;
-            if (skipped || !depth) continue;
+            if (!backdrop && (skipped || !depth)) continue;
             int src = cur >= 0 ? cur : depth - 1;
             int dst = kind == GP_PRIM_FX_BLUR && in->side[0][1] > 0.5f ? T_AUX : (cur == T_FX0 ? T_FX1 : T_FX0);
             if (!layer_target(r, dst, px_w, px_h)) continue;

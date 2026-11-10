@@ -66,7 +66,7 @@ enum {
     M_HOVER_STYLE, M_ACTIVE_STYLE, M_FOCUS_STYLE, M_ROTATE, M_SCALE, M_TRANSLATE, M_XF_ORIGIN, M_SKEW,
     M_STROKE_W, M_STROKE_COLOR, M_STROKE_CAP, M_STROKE_JOIN, M_MITER_LIMIT, M_HIT_TOL,
     M_DASH, M_DASH_OFF, M_STROKE_GRADIENT, M_ARROW, M_FILL, M_CLOSED, M_PATH_TEXT, M_PATH_TEXT_DY,
-    M_FILTER, M_BLEND, M_MASK, M_MASK_LUM,
+    M_FILTER, M_BLEND, M_MASK, M_MASK_LUM, M_FILL_RULE, M_MARKER, M_BACKDROP,
 };
 
 enum { SIDE_L = 1, SIDE_T = 2, SIDE_R = 4, SIDE_B = 8, SIDE_ALL = 15 };
@@ -493,6 +493,18 @@ gp_node *gp_arrow_start(float length) { return mod_f2(M_ARROW, 0, length); }
 gp_node *gp_arrow_end(float length) { return mod_f2(M_ARROW, 1, length); }
 gp_node *gp_fill_color(gp_color c) { return mod_c(M_FILL, c); }
 gp_node *gp_closed(void) { return mod_f(M_CLOSED, 1); }
+gp_node *gp_fill_evenodd(void) { return mod_f(M_FILL_RULE, 1); }
+static gp_node *marker(int where, int shape, float size) {
+    gp_mod *m = mod_new(M_MARKER);
+    m->f[0] = (float)where;
+    m->f[1] = (float)(shape >= GP_MARKER_NONE && shape <= GP_MARKER_BAR ? shape : GP_MARKER_NONE);
+    m->f[2] = isfinite(size) && size > 0.f ? size : 0.f;
+    return &m->base;
+}
+gp_node *gp_marker_start(int shape, float size) { return marker(0, shape, size); }
+gp_node *gp_marker_end(int shape, float size) { return marker(1, shape, size); }
+gp_node *gp_marker_mid(int shape, float size) { return marker(2, shape, size); }
+gp_node *gp_fill_nonzero(void) { return mod_f(M_FILL_RULE, 0); }
 gp_node *gp_path_text(const char *text) {
     gp_mod *m = mod_new(M_PATH_TEXT);
     m->name = text ? gp_arena_strdup(g_bc->arena, text) : NULL;
@@ -525,6 +537,11 @@ gp_node *gp_mask(gp_node *mask) {
     return &m->base;
 }
 gp_node *gp_mask_luminance(void) { return mod_f(M_MASK_LUM, 1); }
+gp_node *gp_backdrop_filter(gp_node *filters) {
+    gp_mod *m = mod_new(M_BACKDROP);
+    m->data = filters;
+    return &m->base;
+}
 gp_node *gp_rotate(float degrees) { return mod_f2(M_ROTATE, degrees, 0); }
 gp_node *gp_scale(float s) { return mod_f2(M_SCALE, s, s); }
 gp_node *gp_scale_xy(float sx, float sy) { return mod_f2(M_SCALE, sx, sy); }
@@ -811,6 +828,8 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
     case M_ARROW: s->arrow[m->f[0] > 0.5f] = isfinite(m->f[1]) && m->f[1] > 0.f ? m->f[1] : 0.f; break;
     case M_FILL: s->fill_color = m->c; s->has_fill = true; break;
     case M_CLOSED: s->closed = true; break;
+    case M_FILL_RULE: s->fill_rule = (uint8_t)m->f[0]; break;
+    case M_MARKER: s->marker[(int)m->f[0]] = (uint8_t)m->f[1]; s->marker_size[(int)m->f[0]] = m->f[2]; break;
     case M_PATH_TEXT: s->path_text = m->name; break;
     case M_PATH_TEXT_DY: s->path_text_dy = m->f[0]; break;
     case M_FILTER: {   /* one more at the end of the list: a new array (the old one may be the element's base, which an animation goes back to) */
@@ -829,6 +848,14 @@ static void apply_mod(gp_el *el, const gp_mod *m) {
         break;
     }
     case M_MASK_LUM: s->mask_mode = 1; break;
+    case M_BACKDROP: {   /* the group's filters, applied to an element of its own */
+        gp_el *tmp = gp_el_new(g_bc->arena, GP_EL_DIV);
+        gp_node *g = m->data;
+        if (g && g->tag == GP_TAG_MOD) apply_mod(tmp, (const gp_mod *)g);
+        s->backdrop = tmp->style.filters;
+        s->nbackdrop = tmp->style.nfilters;
+        break;
+    }
     case M_ROTATE: s->xf_rot = m->f[0]; s->has_xf = true; break;
     case M_SCALE: s->xf_sx = m->f[0]; s->xf_sy = m->f[1]; s->has_xf = true; break;
     case M_TRANSLATE: s->xf_tx = m->f[0]; s->xf_ty = m->f[1]; s->has_xf = true; break;
@@ -964,6 +991,8 @@ static gp_node *make_curve(int kind, const gp_point *pts, size_t n, va_list ap) 
     float hw = s->stroke_w * 0.5f;
     float pad = hw * (s->stroke_join == 1 && kind == 1 ? fmaxf(1.f, s->miter_limit) : 1.f) + s->hit_tol;
     pad = fmaxf(pad, fmaxf(s->arrow[0], s->arrow[1]) * 0.5f + s->hit_tol);   /* an arrowhead is as wide as it is long */
+    for (int i = 0; i < 3; i++)   /* a marker turned on the line: its corners up to half its diagonal away */
+        if (s->marker[i]) pad = fmaxf(pad, fmaxf(s->marker_size[i], s->stroke_w) * 0.7072f + s->hit_tol);
     if (s->path_text) pad = fmaxf(pad, (s->font_size > 0.f ? s->font_size : 16.f) * 1.5f + fabsf(s->path_text_dy));   /* text along it stands up to about a line from the centerline */
     el->curve_n = (uint32_t)good;
     el->curve_pts = gp_arena_alloc(g_bc->arena, (good ? good : 1) * sizeof *el->curve_pts, 4);

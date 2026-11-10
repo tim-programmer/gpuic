@@ -24,10 +24,20 @@
     Element&& arrow_start(float length) && { return std::move(add(gp_arrow_start(length))); }
     Element& arrow_end(float length) & { return add(gp_arrow_end(length)); }
     Element&& arrow_end(float length) && { return std::move(add(gp_arrow_end(length))); }
+    Element& marker_start(int shape, float size) & { return add(gp_marker_start(shape, size)); }
+    Element&& marker_start(int shape, float size) && { return std::move(add(gp_marker_start(shape, size))); }
+    Element& marker_end(int shape, float size) & { return add(gp_marker_end(shape, size)); }
+    Element&& marker_end(int shape, float size) && { return std::move(add(gp_marker_end(shape, size))); }
+    Element& marker_mid(int shape, float size) & { return add(gp_marker_mid(shape, size)); }
+    Element&& marker_mid(int shape, float size) && { return std::move(add(gp_marker_mid(shape, size))); }
     Element& fill_color(gp_color c) & { return add(gp_fill_color(c)); }
     Element&& fill_color(gp_color c) && { return std::move(add(gp_fill_color(c))); }
     Element& closed() & { return add(gp_closed()); }
     Element&& closed() && { return std::move(add(gp_closed())); }
+    Element& fill_evenodd() & { return add(gp_fill_evenodd()); }
+    Element&& fill_evenodd() && { return std::move(add(gp_fill_evenodd())); }
+    Element& fill_nonzero() & { return add(gp_fill_nonzero()); }
+    Element&& fill_nonzero() && { return std::move(add(gp_fill_nonzero())); }
     Element& path_text(Str text) & { return add(gp_path_text(text.c_str())); }
     Element&& path_text(Str text) && { return std::move(add(gp_path_text(text.c_str()))); }
     Element& path_text_dy(float px) & { return add(gp_path_text_dy(px)); }

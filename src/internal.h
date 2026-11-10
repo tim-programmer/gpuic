@@ -90,6 +90,9 @@ typedef struct gp_style {
     uint8_t stroke_cap, stroke_join;   /* 0 round, 1 butt / 0 round, 1 miter */
     uint8_t dash_n;                     /* entries in dash (0: a solid stroke); an odd count is used twice, as SVG does */
     bool closed, has_fill;              /* the last point joins the first / the inside is filled with fill_color */
+    uint8_t fill_rule;                  /* 0 non-zero, 1 even-odd */
+    uint8_t marker[3];                  /* GP_MARKER_* at the start, the end, every corner between (a polyline's) */
+    float marker_size[3];
     const float *dash;                  /* on, off, on, ... lengths (arena of the element) */
     float dash_off;                     /* where in the pattern the stroke starts */
     const struct gp_gradient *stroke_gradient;   /* the stroke's color along its length, start to end (arena of the element), or NULL */
@@ -110,6 +113,8 @@ typedef struct gp_style {
     /* effects that need the element in a layer of its own (paint.c): filters in order (arena of the element), how it blends with what is under it, how a mask counts */
     const struct gp_filter_op *filters;
     uint8_t nfilters, blend_mode, mask_mode;   /* blend: GP_BLEND_*; mask: 0 its alpha, 1 its luminance */
+    const struct gp_filter_op *backdrop;       /* gp_backdrop_filter: filters on what is behind the element, inside its box */
+    uint8_t nbackdrop;
     struct { float dx, dy, blur; gp_color color; } shadow;
 } gp_style;
 
@@ -546,7 +551,10 @@ enum { GP_PRIM_QUAD = 0, GP_PRIM_SHADOW = 1, GP_PRIM_GLYPH = 2, GP_PRIM_COLOR_GL
        /* passes over a layer before its END puts it down (bounds and clip: the layer's region): a color matrix (rows in color, border_color, radii, uv; the offsets in side[0]),
         * a blur along one axis (blur: sigma in logical px; side[0].x: 0 across, 1 down; side[0].y: 1 into the aside texture for a shadow), a drop shadow (the aside texture blurred
         * down at side[0].zw... see render_gl.c), and the end of a mask's layer (MASK_END: the layer just closed is the mask of the next END) */
-       GP_PRIM_FX_MATRIX = 13, GP_PRIM_FX_BLUR = 14, GP_PRIM_FX_SHADOW = 15, GP_PRIM_MASK_END = 16 };
+       GP_PRIM_FX_MATRIX = 13, GP_PRIM_FX_BLUR = 14, GP_PRIM_FX_SHADOW = 15, GP_PRIM_MASK_END = 16,
+       /* a backdrop filter: BACKDROP copies what is under the region (bounds) out of the target being drawn on, passes follow, and BACKDROP_END draws the result in a
+        * rounded box (bounds, radii, the transform) at color.a */
+       GP_PRIM_BACKDROP = 17, GP_PRIM_BACKDROP_END = 18 };
 enum { GP_FX_BLUR = 1, GP_FX_BRIGHTNESS, GP_FX_CONTRAST, GP_FX_SATURATE, GP_FX_GRAYSCALE, GP_FX_SEPIA, GP_FX_INVERT, GP_FX_HUE_ROTATE, GP_FX_OPACITY, GP_FX_DROP_SHADOW };
 typedef struct gp_filter_op { uint8_t kind; float v, dx, dy; gp_color color; } gp_filter_op;   /* v: the amount (blur, drop shadow: the blur) */
 #define GP_MAX_LAYERS 8
@@ -584,6 +592,10 @@ gp_point gp_curve_at(const gp_point *p, const float *arc, size_t m, float s, siz
 size_t gp_curve_cut(const gp_point *p, const float *arc, size_t m, float s0, float s1, gp_arena *a, gp_point **out);
 bool gp_curve_arrow(const gp_el *n, const gp_point *p, const float *arc, size_t m, int e, gp_point tri[3], float *cut);
 size_t gp_curve_triangulate(const gp_point *p, size_t m, gp_arena *a, gp_point **out, int8_t **edge);
+size_t gp_curve_fill(const gp_point *p, size_t m, int rule, gp_arena *a, gp_point **out, int8_t **edge);   /* the same, for any outline, by a fill rule */
+typedef struct { gp_point c; float ux, uy, size, t; uint8_t shape; } gp_marker_at;   /* a marker: where, the direction of the line there, how big, which end (0, 1: for a gradient's color), what */
+size_t gp_curve_markers(const gp_el *n, const gp_point *p, size_t m, gp_arena *a, gp_marker_at **out);
+int gp_marker_tris(const gp_marker_at *mk, float stroke_w, gp_point tri[6], int8_t ed[6]);   /* a square, diamond or bar as two triangles (gp_curve_triangulate's edges); 0 for a circle */
 gp_affine gp_style_affine(const struct gp_style *s, float x, float y, float w, float h);   /* what a transformed element does to what is in it (paint.c) */
 static inline gp_affine gp_aff_identity(void) { return (gp_affine){ 1, 0, 0, 1, 0, 0 }; }
 /* p after n: the map that does n first */

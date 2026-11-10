@@ -180,6 +180,12 @@ const char *cpp_probe_el_same(gp_app *app, int ia, int ib, char *why, size_t cap
         if (x->kind != y->kind || x->v != y->v || x->dx != y->dx || x->dy != y->dy || memcmp(&x->color, &y->color, sizeof x->color) != 0) { snprintf(why, cap, "filter %d", i); return why; }
     }
     sa.filters = sb.filters = NULL;
+    if (sa.nbackdrop != sb.nbackdrop) { snprintf(why, cap, "backdrop filter count"); return why; }
+    for (int i = 0; i < sa.nbackdrop; i++) {
+        const gp_filter_op *x = &sa.backdrop[i], *y = &sb.backdrop[i];
+        if (x->kind != y->kind || x->v != y->v || x->dx != y->dx || x->dy != y->dy || memcmp(&x->color, &y->color, sizeof x->color) != 0) { snprintf(why, cap, "backdrop filter %d", i); return why; }
+    }
+    sa.backdrop = sb.backdrop = NULL;
     if (memcmp(&sa, &sb, sizeof sa) != 0) {
         const unsigned char *x = (const unsigned char *)&sa, *y = (const unsigned char *)&sb;
         size_t i = 0;
