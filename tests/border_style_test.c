@@ -103,7 +103,7 @@ static bool in_poly(const float (*v)[2], int n, float x, float y) {
         if ((v[i][1] > y) != (v[j][1] > y) && x < (v[j][0] - v[i][0]) * (y - v[i][1]) / (v[j][1] - v[i][1]) + v[i][0]) in = !in;
     return in;
 }
-/* bw: top, right, bottom, left. Returns the side (0 top, 1 right, 2 bottom, 3 left) with a second one in *alt if on a diagonal (within a hair) */
+/* bw: top, right, bottom, left. Returns the side (0 top, 1 right, 2 bottom, 3 left) whose trapezoid holds the point, -1 inside the padding box (*alt: a second one, on a diagonal) */
 static int side_of(float W, float H, const float bw[4], float x, float y, int *alt) {
     float t = bw[0], r = bw[1], b = bw[2], l = bw[3];
     float top[4][2] = { { 0, 0 }, { W, 0 }, { W - r, t }, { l, t } };
@@ -133,18 +133,20 @@ static void test_sides(const uint8_t *px, int pw, int idx, const float bw[4], co
             int s = side_of(100, 60, bw, cx, cy, &alt);
             const uint8_t *p = px_at(px, pw, o, x, y);
             if (s < 0) { if (!is_rgb(p, 0x18, 0x20, 0x30, 2)) { bad++; } checked++; continue; }
-            /* a pixel on a diagonal (centre within 0.51 of the line) may be either neighbour's */
+            /* near a diagonal (the mitre between two sides) the two colors are blended over a pixel across it: half and half on the line itself
+             * (whichever way a renderer rounds a pixel centre that lies on it), all one side a pixel away */
             bool ok = is_color(p, col[s], 2);
             if (!ok) {
-                for (int t = 0; t < 4 && !ok; t++) {
-                    if (t == s) continue;
-                    float d[2] = { 0, 0 };
-                    (void)d;
-                    int a2;
-                    float e = 0.51f;
-                    int s1 = side_of(100, 60, bw, cx + e, cy, &a2), s2 = side_of(100, 60, bw, cx - e, cy, &a2), s3 = side_of(100, 60, bw, cx, cy + e, &a2), s4 = side_of(100, 60, bw, cx, cy - e, &a2);
-                    ok = (s1 == t || s2 == t || s3 == t || s4 == t) && is_color(p, col[t], 2);
-                }
+                float t = bw[0], r = bw[1], b = bw[2], l = bw[3];
+                float d[4] = { t > 0 ? cy / t : 1e9f, r > 0 ? (100 - cx) / r : 1e9f, b > 0 ? (60 - cy) / b : 1e9f, l > 0 ? cx / l : 1e9f };   /* in from each side, in its widths */
+                float g[4][2] = { { 0, t > 0 ? 1 / t : 0 }, { r > 0 ? -1 / r : 0, 0 }, { 0, b > 0 ? -1 / b : 0 }, { l > 0 ? 1 / l : 0, 0 } };
+                int sa = 0, sb = 1;
+                if (d[sb] < d[sa]) { sa = 1; sb = 0; }
+                for (int i = 2; i < 4; i++) { if (d[i] < d[sa]) { sb = sa; sa = i; } else if (d[i] < d[sb]) sb = i; }
+                float e = (d[sb] - d[sa]) / hypotf(g[sb][0] - g[sa][0], g[sb][1] - g[sa][1]);   /* how far from the mitre, in pixels */
+                float k = fminf(fmaxf(0.5f + e, 0.f), 1.f);
+                gp_color m = { k * col[sa].r + (1 - k) * col[sb].r, k * col[sa].g + (1 - k) * col[sb].g, k * col[sa].b + (1 - k) * col[sb].b, 1 };
+                ok = e < 1.5f && is_color(p, m, 4);
             }
             checked++;
             if (!ok) { if (bad < 3) printf("  %s: pixel (%d,%d) is %d %d %d, side %d\n", name, x, y, p[0], p[1], p[2], s); bad++; }

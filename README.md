@@ -93,6 +93,22 @@ cmake -S . -B build -G Ninja && cmake --build build
 It builds without warnings with GCC (Debug and Release, whose optimizer finds more) and with clang (`CC=clang CXX=clang++`); the pragmas around the
 bundled nanosvg name only the warnings the compiler at hand knows.
 
+**Presets** (`CMakePresets.json`, CMake 3.25+, Ninja) build into `out/<preset>`: `debug`, `release`, `release-clang`, `sanitize` and
+`sanitize-clang` (ASan + UBSan, `GPUIC_SANITIZE`), and `tsan`. Each is also a workflow that configures, builds and runs the tests:
+
+```sh
+cmake --workflow --preset release          # or: cmake --preset sanitize-clang && cmake --build --preset sanitize-clang && ctest --preset sanitize-clang
+```
+
+**CI** (`.github/workflows/ci.yml`) runs the `release`, `release-clang`, `sanitize` and `sanitize-clang` workflows on Ubuntu 24.04 for every
+push to `main` and every pull request, with the dependencies downloaded at their pinned versions (`GPUIC_DEPENDENCIES=FETCH`: Ubuntu has no
+SDL3), the Noto and DejaVu fonts installed, and the windowed tests drawn by Mesa's software renderer under Xvfb. A failed run keeps the test log.
+The suite passes there as it does on a GPU. Getting it there fixed what a second renderer showed: borders with sides of different colors blend the two
+colors across the mitre (it was all one side or the other, decided by rounding where a pixel centre lies on the diagonal), turned text is sampled between
+texels, tests that compare two frames of an animation hold the animations' clock still between them, and a fixed wait in a test became a wait until the
+window is idle. Mesa 26.2's llvmpipe with its rasterizer threads could copy what is under a blended layer before all of it was drawn; gpuic waits for the
+drawing first there (`glFinish` before the copy, only when the renderer is llvmpipe).
+
 Headless checks: `GPUIC_SCREENSHOT=out.ppm` renders a few frames, writes a PPM and exits.
 Inject input after the second frame with `GPUIC_HOVER=x,y`, `GPUIC_CLICK=x,y` and
 `GPUIC_KEYS="tab h i shift-tab enter"` and `GPUIC_WHEEL="x,y,dx,dy;..."` (real SDL key / wheel
@@ -887,12 +903,15 @@ translate; nested ones compose. They are made for `gp_with_animation` (which cou
   is not LCD antialiased (its stripes are not the screen's).
 * **The pointer follows:** a click, a hover, a cursor and a mouse-down land on what is seen where the pointer is, not where the box would have been, and the event's `local` position is in
   the element's own coordinates (through the inverse of the matrix; a drag after a press keeps the offsets it started with). `gp_hit` has the point in the element's coordinates for it.
+* **Text under a transform** that does more than move it is sampled between the glyph bitmap's texels (bilinear, with texels outside the glyph's own
+  rectangle in the atlas counted as empty) and its quad grows by a pixel, so a turned or scaled glyph fades out at its edges instead of being cut along its quad
+  (where a pixel whose centre lay on that edge was in or out by rounding). Upright text that is only moved is drawn texel for pixel, as before.
 * **Clips:** an `overflow: hidden` box (and a scroller) inside a transformed element is cut to the box as it is seen when the transform keeps the axes (a scale, a move, a quarter turn); at any
   other angle there is no clip (a clip is an axis-aligned rectangle in screen space). A clip *above* a transformed element applies to it as usual.
 * **Cached views:** a cached view painted under a transform is repainted when the matrix above it changes (the matrix is in the painted copy's signature) and is never just moved
   (`tests/paintshift_test.c`'s shifting is for views with no transform above or below). `tests/transform_test.c` compares frames: a quarter turn exactly, 45 degrees against a supersampled box,
   scales, moves, origins, nested, turned text (same ink, width and height swapped, no color fringes with LCD on), clicks (position included) and hover on a turned box and not where it was, clipping,
-  a cached view under a turn by an animation against a full paint, and an animation of a rotation (with the clock jumped), and about 20 mutants.
+  a cached view under a turn by an animation against a full paint (the animations' clock held still between the two frames: `gp_debug_anim_clock`), and an animation of a rotation (with the clock jumped), and about 20 mutants.
 * **Scrollers inside a transformed element** follow the matrix: the wheel (and a touch drag) finds the scroller where it is seen, and a scrollbar thumb or track is pressed where it is
   seen and dragged by the distance as the scroller sees it (a drag across a parent scaled 2x moves the thumb half as far in its own track; under a quarter turn the drag turns with it).
   `tests/xform2_test.c` checks a skewed box's pixels and clicks, the wheel over a scroller in a turned parent (and not where its box would be), a thumb dragged in a doubled one, and a hover text color (11 mutants, all caught).
@@ -1669,8 +1688,9 @@ that falls back to a round one; polylines only: a Bezier has no corners), `gp_hi
 * **Border colors per side.** `gp_border_color_top/_right/_bottom/_left(c)` (and `_x`, `_y`); the sides not named keep `gp_border_color`'s, and a
   `gp_border_color` after them sets all four again (last wins, like the widths). Where two sides meet the join is CSS's: the diagonal from the outer
   corner to the inner corner, whatever the two widths (the shader picks the side the pixel is nearest to *in units of that side's width*, which is that line),
-  and a pixel on the diagonal is one side's or the other's (the left's on a tie), never both or neither. `tests/border_style_test.c` compares every pixel of a
-  100 x 60 box with four colors, with equal widths and with 12, 6, 10 and 4, against the trapezoids of that geometry.
+  and the two colors are blended across that line over a pixel (half and half on it, all one side a pixel away), so a pixel centre that lies on the
+  diagonal no longer goes to one side or the other by rounding (renderers round it differently where the element is). `tests/border_style_test.c` compares every
+  pixel of a 100 x 60 box with four colors, with equal widths and with 12, 6, 10 and 4, against the trapezoids of that geometry and the blend across their diagonals.
 * **Dashed and dotted.** `gp_border_dashed()`, `gp_border_dotted()` (`gp_border_solid()` undoes them): dashes are 2 border-widths long with a gap of 1, dots are circles of the width
   2 widths apart; they start at the top left and run along each side, by that side's own width, anti-aliased, with the element's fill showing in the gaps and
   with the side's color if the sides have their own. A corner is not specially joined (the pattern is laid along each side and just goes on), and a rounded

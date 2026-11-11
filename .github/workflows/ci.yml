@@ -1,0 +1,64 @@
+# Builds and tests gpuic on Linux with the CMake presets (CMakePresets.json): an optimized build with GCC and with clang, and
+# AddressSanitizer + UndefinedBehaviorSanitizer builds with each (GPUIC_SANITIZE: any undefined behavior fails its test).
+#
+# The tests open windows and draw with OpenGL 3.3: they run under Xvfb with Mesa's software renderer (llvmpipe). SDL3, FreeType,
+# HarfBuzz and FriBidi are downloaded at the versions gpuic pins (GPUIC_DEPENDENCIES=FETCH): Ubuntu has no SDL3, and older versions
+# of the others; with a downloaded FreeType, fonts are found by gpuic's own scan rather than fontconfig.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [release, release-clang, sanitize, sanitize-clang]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build clang pkg-config python3 \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libdrm-dev libgbm-dev libgl-dev libegl-dev libpng-dev \
+            xvfb xauth libgl1-mesa-dri libglx-mesa0 libegl-mesa0 \
+            fonts-noto-core fonts-noto-mono fonts-noto-cjk fonts-noto-color-emoji fonts-dejavu-core
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DGPUIC_DEPENDENCIES=FETCH
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        env:
+          SDL_VIDEO_DRIVER: x11
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        # (two at a time: the tests draw on the CPU here, and some of them time what they do)
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" ctest --preset ${{ matrix.preset }} -j 2
+
+      - name: Upload the test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.preset }}
+          path: out/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

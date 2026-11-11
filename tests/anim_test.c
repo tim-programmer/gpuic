@@ -1,8 +1,8 @@
 /*
  * Declarative animations (gp_with_animation). Needs a display.
  *
- * Time is jumped with gp_debug_clock_skew instead of waited for, so progress values can be checked exactly
- * (to within the few milliseconds of real time between a jump and the frame that follows it). After every
+ * Time is jumped with gp_debug_clock_skew instead of waited for, and the time animations see is held still between jumps
+ * (gp_debug_anim_clock), so progress values can be checked exactly however long frames take to draw (a software renderer, a busy machine). After every
  * step the frame on screen is compared with one painted without the frame caches, and the geometry with a
  * full layout, as in views_test, because animating inside cached views is where reuse could go wrong.
  */
@@ -31,10 +31,12 @@ static gp_window *win(void) { return app->windows[0]; }
 
 /* ------------------------------------------------------------ the clock and frames */
 
-static int64_t skew;
+static int64_t skew, anim_at;   /* (anim_at: what animations see; it moves only with jumps) */
 static void jump(double seconds) {
     skew += (int64_t)(seconds * 1e9);
     gp_debug_clock_skew(skew);
+    anim_at += (int64_t)(seconds * 1e9);
+    gp_debug_anim_clock(anim_at);
 }
 
 static bool wait_draws(unsigned n) {
@@ -223,11 +225,14 @@ static void test_frames_while_running(void) {
     f->show = true;
     f->anim.duration = 100;
     f->p.calls = 0;
+    gp_debug_anim_clock(0);   /* (this one is about frames in real time: the clock runs) */
     rerender(root);
     wait_draws(2);
     unsigned long draws = app->stat_draws;
     gp_sleep(co_, 0.5);
     unsigned long n = app->stat_draws - draws;
+    anim_at = gp_now_ns();
+    gp_debug_anim_clock(anim_at);
     CHECK(n >= 10, "only %lu frames in half a second of animation", n);
     CHECK(n <= 140, "%lu frames in half a second: a runaway loop?", n);
     CHECK(f->renders < 5, "the view rendered %d times for an animation", f->renders);
@@ -577,6 +582,8 @@ static void test_shutdown_with_animation(void) {
 static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     co_ = co;
     gp_sleep(co, 0.3);
+    anim_at = gp_now_ns();
+    gp_debug_anim_clock(anim_at);
     check_frames = true;
     test_one_run();
     test_frames_while_running();
@@ -587,6 +594,7 @@ static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     test_cached_view();
     test_rows();
     test_shutdown_with_animation();
+    gp_debug_anim_clock(0);
     gp_debug_clock_skew(0);
     gp_quit(app);
 }

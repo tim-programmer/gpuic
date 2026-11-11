@@ -43,7 +43,15 @@ static bool wait_draws(unsigned n) {
     for (int i = 0; i < 2500 && app->stat_draws < target; i++) gp_sleep(co_, 0.004);
     return app->stat_draws >= target;
 }
-static void settle(void) { wait_draws(2); gp_sleep(co_, 0.15); wait_draws(1); }
+/* until the window has nothing left to do: what a frame started (rows wrapped later, a scroll that rebuilds) is done, however slow frames are */
+static bool window_idle(void) { gp_window *w = win(); return !w->dirty_render && !w->dirty_layout && !w->dirty_paint && !w->anims.running; }
+static void settle(void) {
+    wait_draws(2);
+    for (int i = 0, quiet = 0; i < 1000 && quiet < 3; i++) {   /* (idle three looks in a row, 10 ms apart) */
+        gp_sleep(co_, 0.01);
+        quiet = window_idle() ? quiet + 1 : 0;
+    }
+}
 static void keys(const char *k) { gp_simulate_keystrokes(app, k); settle(); }
 
 /* ---- the tree */

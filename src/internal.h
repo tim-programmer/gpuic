@@ -810,6 +810,8 @@ bool gp_frame_caches_enabled(void);
 
 int64_t gp_now_ns(void);
 void gp_debug_clock_skew(int64_t ns);   /* tests: makes every clock here run ns ahead, so time can be jumped */
+void gp_debug_anim_clock(int64_t ns);   /* tests: animations see the time ns (0: the clock again), while timers and sleeps go on; two frames then show one moment */
+int64_t gp_anim_now(void);              /* the time animations see */
 enum { GP_WAKE_LAYOUT = 1, GP_WAKE_PAINT = 2 };   /* what a window-bound frame or timer asks the window for */
 uint64_t gp_exec_window_frame(gp_app *app, gp_window *w, int what);   /* a frame (at the display's rate), then the window lays out / paints again */
 uint64_t gp_exec_window_at(gp_app *app, gp_window *w, int64_t due_ns, int what);   /* the same at a time */

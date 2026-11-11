@@ -18,10 +18,14 @@
 
 #define MAX_CACHED_DEPTH 256
 
+static int64_t g_anim_clock;   /* gp_debug_anim_clock: the time animations see, or 0 for the clock's */
+void gp_debug_anim_clock(int64_t ns) { g_anim_clock = ns; }
+int64_t gp_anim_now(void) { return g_anim_clock ? g_anim_clock : gp_now_ns(); }
+
 void gp_anim_begin(gp_anim_table *t) {
     t->pass++;
     t->running = false;
-    t->now = gp_now_ns();
+    t->now = gp_anim_now();
 }
 
 /* An animation that was not met in the last layout is forgotten, so an element that went away starts over

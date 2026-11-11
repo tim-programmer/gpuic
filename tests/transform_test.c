@@ -278,17 +278,19 @@ static void run(void) {
     gp_app_notify(app);
     gp_sleep(co_, 0.05);
     for (int k = 0; k < 4; k++) {
-        if (k) jump_by(1700);   /* of 10000 s: 61 degrees a step, and the real time between two frames is nothing */
+        if (k) jump_by(1700);   /* of 10000 s: 61 degrees a step */
         gp_sleep(co_, 0.08);
+        gp_debug_anim_clock(gp_now_ns());   /* the two frames compared show one moment of the turn, however long drawing them takes */
         uint8_t *a = frame();
-        if (!a) continue;
+        if (!a) { gp_debug_anim_clock(0); continue; }
         size_t n = (size_t)app->capture_w * (size_t)app->capture_h * 3;
         uint8_t *copy = malloc(n);
         memcpy(copy, a, n);
         gp_vviews *t = &win()->views;
         for (size_t q = 0; q < t->len; q++) t->v[q].chunk_valid = false;
         uint8_t *b = frame();
-        long diff = b ? 0 : -1;   /* (the turn goes on in real time between the two frames: small differences at edges are that, a stale copy differs by a lot) */
+        gp_debug_anim_clock(0);
+        long diff = b ? 0 : -1;   /* (a copy replayed under the turn composes its matrices in another order than a full paint: a few edge bytes round apart; a stale copy differs by a lot) */
         for (size_t q = 0; b && q < n; q++) diff += abs((int)copy[q] - (int)b[q]) > 90;
         CHECK(diff == 0, "a cached view under an animated turn (step %d): %ld bytes differ strongly from a full paint", k, diff);
         free(copy);

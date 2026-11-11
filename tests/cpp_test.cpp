@@ -451,6 +451,7 @@ static void test_pixels() {
         int ax = (int)std::lround(ra[0] * scale), ay = (int)std::lround(ra[1] * scale), bx = (int)std::lround(rb[0] * scale), by = (int)std::lround(rb[1] * scale);
         int w = (int)std::lround(ra[2] * scale), h = (int)std::lround(ra[3] * scale);
         int tol = (i == 3 || i == 13 || i == 14) ? 2 : 0;   // a gradient is dithered by the pixel's position on screen, so the two halves differ by a level or two
+        if (i == 6) tol = 1;   // (the shadow: a renderer may interpolate across a triangle by its place on screen (Mesa's llvmpipe does), and a smooth falloff then rounds a level differently)
         if (i >= kPairs - 2) tol = 1;   // (the curves: a stroke's antialiased edge at another place on screen rounds a level differently)
         long diff = 0, nonbg = 0;
         for (int y = 0; y < h; y++)

@@ -1,0 +1,138 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "clang",
+      "hidden": true,
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Debug build with the default compiler",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Optimized build with the default compiler (the optimizer finds warnings a debug build does not)",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "release-clang",
+      "displayName": "Release (clang)",
+      "inherits": ["clang", "release"]
+    },
+    {
+      "name": "sanitize",
+      "displayName": "ASan + UBSan",
+      "description": "AddressSanitizer and UndefinedBehaviorSanitizer; any undefined behavior fails the test (GPUIC_SANITIZE)",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "GPUIC_SANITIZE": "ON" }
+    },
+    {
+      "name": "sanitize-clang",
+      "displayName": "ASan + UBSan (clang)",
+      "description": "The same with clang, whose UBSan checks more (a null pointer given to memcpy for zero bytes)",
+      "inherits": ["clang", "sanitize"]
+    },
+    {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "release-clang", "configurePreset": "release-clang" },
+    { "name": "sanitize", "configurePreset": "sanitize" },
+    { "name": "sanitize-clang", "configurePreset": "sanitize-clang" },
+    { "name": "tsan", "configurePreset": "tsan" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "jobs": 4, "timeout": 900, "noTestsAction": "error" }
+    },
+    { "name": "debug", "inherits": "base", "configurePreset": "debug" },
+    { "name": "release", "inherits": "base", "configurePreset": "release" },
+    { "name": "release-clang", "inherits": "base", "configurePreset": "release-clang" },
+    { "name": "sanitize", "inherits": "base", "configurePreset": "sanitize" },
+    { "name": "sanitize-clang", "inherits": "base", "configurePreset": "sanitize-clang" },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "configurePreset": "tsan",
+      "environment": { "TSAN_OPTIONS": "halt_on_error=1" }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "debug",
+      "steps": [
+        { "type": "configure", "name": "debug" },
+        { "type": "build", "name": "debug" },
+        { "type": "test", "name": "debug" }
+      ]
+    },
+    {
+      "name": "release",
+      "steps": [
+        { "type": "configure", "name": "release" },
+        { "type": "build", "name": "release" },
+        { "type": "test", "name": "release" }
+      ]
+    },
+    {
+      "name": "release-clang",
+      "steps": [
+        { "type": "configure", "name": "release-clang" },
+        { "type": "build", "name": "release-clang" },
+        { "type": "test", "name": "release-clang" }
+      ]
+    },
+    {
+      "name": "sanitize",
+      "steps": [
+        { "type": "configure", "name": "sanitize" },
+        { "type": "build", "name": "sanitize" },
+        { "type": "test", "name": "sanitize" }
+      ]
+    },
+    {
+      "name": "sanitize-clang",
+      "steps": [
+        { "type": "configure", "name": "sanitize-clang" },
+        { "type": "build", "name": "sanitize-clang" },
+        { "type": "test", "name": "sanitize-clang" }
+      ]
+    },
+    {
+      "name": "tsan",
+      "steps": [
+        { "type": "configure", "name": "tsan" },
+        { "type": "build", "name": "tsan" },
+        { "type": "test", "name": "tsan" }
+      ]
+    }
+  ]
+}

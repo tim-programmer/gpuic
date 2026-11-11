@@ -62,6 +62,8 @@
     X(glScissor)                                                        \
     X(glDisable)                                                        \
     X(glCopyTexSubImage2D)                                              \
+    X(glFinish)                                                         \
+    X(glGetString)                                                      \
     X(glDrawArraysInstanced)
 
 /* The headers declare these as prototypes; calls go through `gl.name` instead. */
@@ -88,6 +90,7 @@ static const char *vs_src =
     "layout(location=12) in vec4 a_xf1;\n"   /* (tx, ty, g, h) */
     "layout(location=13) in vec4 a_xf2;\n"   /* (w1, -, -, -): w = g x + h y + 1 + w1 (all 0: no perspective) */
     "uniform vec2 u_viewport;\n"
+    "uniform float u_scale;\n"
     "flat out vec4 v_bounds, v_clip, v_color, v_border, v_radii, v_params, v_uvr, v_s0, v_s1, v_s2, v_bsty;\n"
     "flat out float v_mag;\n"
     "flat out vec4 v_xf0, v_xf1, v_xf2;\n"
@@ -98,6 +101,10 @@ static const char *vs_src =
     "  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
     "  float kind = a_params.y;\n"
     "  float pad = kind == 1.0 ? a_params.z * 1.5 + 1.0 : ((kind == 0.0 || kind == 5.0 || kind == 6.0 || kind == 7.0 || kind == 8.0 || kind == 18.0) ? 1.0 : 0.0);\n"
+    /* a glyph under a transform that is more than a move: a pixel of the window spans parts of several texels, so it is sampled between them (fs: glyph_texel), and its
+     * quad grows by a pixel so that the ink fades out at the bitmap's edge instead of being cut by the quad's (where a pixel's centre on that edge decides) */
+    "  bool turned_glyph = (kind == 2.0 || kind == 3.0 || kind == 4.0) && (a_xf0 != vec4(0.0) || a_xf1.z != 0.0 || a_xf1.w != 0.0 || a_xf2.x != 0.0);\n"
+    "  if (turned_glyph) pad = 1.0 / u_scale;\n"
     "  vec2 size = a_bounds.zw + 2.0 * pad;\n"
     "  vec2 pos0 = a_bounds.xy - pad + corner * size;\n"   /* where it is in the layout, before the transform */
     "  vec2 pos = pos0 + vec2(a_xf0.x * pos0.x + a_xf0.z * pos0.y + a_xf1.x, a_xf0.y * pos0.x + a_xf0.w * pos0.y + a_xf1.y);\n"
@@ -106,7 +113,7 @@ static const char *vs_src =
     "  v_mag = sqrt(abs((1.0 + a_xf0.x) * (1.0 + a_xf0.w) - a_xf0.y * a_xf0.z));\n"   /* how much it magnifies (affine) */
     "  v_xf0 = a_xf0; v_xf1 = a_xf1; v_xf2 = a_xf2;\n"
     "  v_local = pos0 - (a_bounds.xy + a_bounds.zw * 0.5);\n"
-    "  v_uv = a_uv.xy + corner * a_uv.zw;\n"
+    "  v_uv = turned_glyph ? a_uv.xy + (pos0 - a_bounds.xy) / max(a_bounds.zw, vec2(1e-6)) * a_uv.zw : a_uv.xy + corner * a_uv.zw;\n"
     "  v_bounds = a_bounds; v_clip = a_clip; v_color = a_color; v_border = a_border;\n"
     "  v_radii = a_radii; v_params = a_params; v_uvr = a_uv;\n"
     "  v_s0 = a_s0; v_s1 = a_s1; v_s2 = a_s2; v_bsty = a_bsty;\n"
@@ -145,6 +152,56 @@ static const char *fs_src =
     "  return sign(x) * sqrt(1.0 - exp(-x2 * t));\n"
     "}\n"
     "vec4 premul(vec4 c) { return vec4(c.rgb * c.a, c.a); }\n"
+    /* a glyph's bitmap at uv between its texels (bilinear, by hand): texels outside its own rectangle r (uv origin and size) count as empty, so nothing of the
+     * glyphs next to it in the atlas comes in, however far the quad grew */
+    "vec4 glyph_texel(sampler2D t, vec2 uv, vec4 r) {\n"
+    "  vec2 sz = vec2(textureSize(t, 0));\n"
+    "  vec2 lo = r.xy * sz, hi = (r.xy + r.zw) * sz;\n"
+    "  vec2 p = uv * sz - 0.5, f = fract(p);\n"
+    "  ivec2 i0 = ivec2(floor(p));\n"
+    "  vec4 acc = vec4(0.0);\n"
+    "  for (int k = 0; k < 4; k++) {\n"
+    "    ivec2 q = i0 + ivec2(k & 1, k >> 1);\n"
+    "    vec2 c = vec2(q) + 0.5;\n"
+    "    float wgt = ((k & 1) == 1 ? f.x : 1.0 - f.x) * ((k >> 1) == 1 ? f.y : 1.0 - f.y);\n"
+    "    if (all(greaterThanEqual(c, lo)) && all(lessThan(c, hi))) acc += texelFetch(t, q, 0) * wgt;\n"
+    "  }\n"
+    "  return acc;\n"
+    "}\n"
+    /* a border side (0 left, 1 top, 2 right, 3 bottom): how its distance (in units of its width) grows, and its paint: its color or the gradient, then dashes or dots */
+    "vec2 side_grad(int s, vec4 w) {\n"
+    "  float ws = s == 0 ? w.x : s == 1 ? w.y : s == 2 ? w.z : w.w;\n"
+    "  if (ws <= 0.0) return vec2(0.0);\n"
+    "  return s == 0 ? vec2(1.0 / ws, 0.0) : s == 1 ? vec2(0.0, 1.0 / ws) : s == 2 ? vec2(-1.0 / ws, 0.0) : vec2(0.0, -1.0 / ws);\n"
+    "}\n"
+    "vec4 side_ring(int s, vec2 p, vec2 half_size, vec4 w, vec4 col, float us) {\n"
+    "  vec4 ring = premul(v_border);\n"
+    "  if (v_bsty.y > 0.5) ring = s == 0 ? premul(v_border) : s == 1 ? premul(v_s0) : s == 2 ? premul(v_s1) : premul(v_s2);\n"
+    "  if (v_bsty.z > 0.0) {\n" /* a gradient over the box: the same mapping as a background's */
+    "    float gt;\n"
+    "    if (v_bsty.w == 5.0) gt = dot(v_local, v_s0.xy) / v_s0.z + 0.5;\n"
+    "    else if (v_bsty.w == 6.0) gt = length(v_local - v_s0.xy) / v_s0.z;\n"
+    "    else { vec2 gd = v_local - v_s0.xy; gt = fract((atan(gd.x, -gd.y) - v_s0.z) / 6.28318530718); }\n"
+    "    ring = texture(u_ramps, vec2(clamp(gt, 0.0, 1.0), v_bsty.z)) * v_s0.w;\n"
+    "  }\n"
+    "  if (v_bsty.x > 0.5) {\n" /* dashes: 2 widths and a gap of 1; dots: circles of the width, 2 apart: along the side from its start, and across it */
+    "    float wd = s == 0 ? w.x : s == 1 ? w.y : s == 2 ? w.z : w.w;\n"
+    "    float along = (s == 0 || s == 2) ? p.y + half_size.y : p.x + half_size.x;\n"
+    "    float across = s == 0 ? p.x + half_size.x : s == 1 ? p.y + half_size.y : s == 2 ? half_size.x - p.x : half_size.y - p.y;\n"
+    "    float mask;\n"
+    "    if (v_bsty.x < 1.5) {\n"
+    "      float per = 3.0 * wd, ph = mod(along, per);\n"
+    "      mask = clamp(min(ph, 2.0 * wd - ph) * us + 0.5, 0.0, 1.0);\n" /* the dash's edges, each a pixel wide */
+    "      mask = ph < 2.0 * wd ? mask : clamp(0.5 - min(ph - 2.0 * wd, per - ph) * us, 0.0, 1.0);\n"
+    "    } else {\n"
+    "      float per = 2.0 * wd, cx0 = (floor(along / per) + 0.5) * per;\n"
+    "      float dd = length(vec2(along - cx0, across - wd * 0.5)) - wd * 0.5;\n"
+    "      mask = clamp(0.5 - dd * us, 0.0, 1.0);\n"
+    "    }\n"
+    "    ring = mix(col, ring, mask);\n" /* between the dashes the fill shows */
+    "  }\n"
+    "  return ring;\n"
+    "}\n"
     /* Text coverage adjusted so that blending in the encoded (gamma) space gives what blending in linear light would, for text of luma `lt` on a
      * background of the opposite luma (a background that is not that is the technique's limit). u_gamma 1 is no adjustment. */
     "float tone(float c, float lt) {\n"
@@ -224,8 +281,9 @@ static const char *fs_src =
     "  float kind = v_params.y;\n"
     "  vec2 half_size = v_bounds.zw * 0.5;\n"
     "  vec4 lcd_cov = vec4(0.0);\n"
+    "  bool turned = v_xf0 != vec4(0.0) || v_xf1.z != 0.0 || v_xf1.w != 0.0 || v_xf2.x != 0.0;\n"   /* (a glyph so: sampled between texels, see glyph_texel) */
     "  if (kind == 4.0) {\n" /* LCD text: a coverage per channel, blended per channel */
-    "    vec3 cov = texture(u_lcd_atlas, v_uv).rgb;\n"
+    "    vec3 cov = (turned ? glyph_texel(u_lcd_atlas, v_uv, v_uvr) : texture(u_lcd_atlas, v_uv)).rgb;\n"
     "    float lt = dot(v_color.rgb, vec3(0.2126, 0.7152, 0.0722));\n"
     "    cov = vec3(tone(cov.r, lt), tone(cov.g, lt), tone(cov.b, lt));\n"
     "    frag = vec4(v_color.rgb * v_color.a * cov, v_color.a * (cov.r + cov.g + cov.b) / 3.0);\n"
@@ -256,9 +314,9 @@ static const char *fs_src =
     "    c = clamp(c * v_color.rgb, 0.0, 1.0);\n"
     "    frag = vec4(c * t.a, t.a) * (v_color.a * mask);\n"
     "  } else if (kind == 3.0) {\n"
-    "    frag = texture(u_color_atlas, v_uv) * v_color.a;\n" /* premultiplied RGBA; alpha carries opacity */
+    "    frag = (turned ? glyph_texel(u_color_atlas, v_uv, v_uvr) : texture(u_color_atlas, v_uv)) * v_color.a;\n" /* premultiplied RGBA; alpha carries opacity */
     "  } else if (kind == 2.0) {\n"
-    "    float a = tone(texture(u_atlas, v_uv).r, dot(v_color.rgb, vec3(0.2126, 0.7152, 0.0722)));\n"
+    "    float a = tone((turned ? glyph_texel(u_atlas, v_uv, v_uvr) : texture(u_atlas, v_uv)).r, dot(v_color.rgb, vec3(0.2126, 0.7152, 0.0722)));\n"
     "    frag = premul(v_color) * a;\n"
     "  } else if (kind == 9.0) {\n" /* a piece of a stroke: the capsule of segment a-b (v_uvr), half width v_radii.x, the style of its two ends in v_radii.yz (0 round, 1 miter, 2 flat),
                                       the planes that divide it from its neighbours in v_s0 (a normal pointing out of this piece's side; zero: none) */
@@ -368,33 +426,16 @@ static const char *fs_src =
     "      vec4 ring = premul(v_border);\n"
     "      if (v_bsty.x > 0.5 || v_bsty.y > 0.5 || v_bsty.z > 0.0) {\n" /* sides of their own colors, a gradient, dashes or dots */
     "        vec2 p = v_local;\n"
-    "        float dl = bl > 0.0 ? (p.x + half_size.x) / bl : 1e9, dt = bt > 0.0 ? (p.y + half_size.y) / bt : 1e9;\n"
-    "        float dr = br > 0.0 ? (half_size.x - p.x) / br : 1e9, db = bb > 0.0 ? (half_size.y - p.y) / bb : 1e9;\n"
-    "        float m = min(min(dl, dt), min(dr, db));\n" /* the side: the one this pixel is nearest to, in units of its own width: the mitre */
-    "        if (v_bsty.y > 0.5) ring = m == dl ? premul(v_border) : m == dt ? premul(v_s0) : m == dr ? premul(v_s1) : premul(v_s2);\n"
-    "        if (v_bsty.z > 0.0) {\n" /* a gradient over the box: the same mapping as a background's */
-    "          float gt;\n"
-    "          if (v_bsty.w == 5.0) gt = dot(v_local, v_s0.xy) / v_s0.z + 0.5;\n"
-    "          else if (v_bsty.w == 6.0) gt = length(v_local - v_s0.xy) / v_s0.z;\n"
-    "          else { vec2 gd = v_local - v_s0.xy; gt = fract((atan(gd.x, -gd.y) - v_s0.z) / 6.28318530718); }\n"
-    "          ring = texture(u_ramps, vec2(clamp(gt, 0.0, 1.0), v_bsty.z)) * v_s0.w;\n"
-    "        }\n"
-    "        if (v_bsty.x > 0.5) {\n" /* dashes: 2 widths and a gap of 1; dots: circles of the width, 2 apart: along the side from its start, and across it */
-    "          float wd = m == dl ? bl : m == dt ? bt : m == dr ? br : bb;\n"
-    "          float along = (m == dl || m == dr) ? p.y + half_size.y : p.x + half_size.x;\n"
-    "          float across = m == dl ? p.x + half_size.x : m == dt ? p.y + half_size.y : m == dr ? half_size.x - p.x : half_size.y - p.y;\n"
-    "          float mask;\n"
-    "          if (v_bsty.x < 1.5) {\n"
-    "            float per = 3.0 * wd, ph = mod(along, per);\n"
-    "            mask = clamp(min(ph, 2.0 * wd - ph) * us + 0.5, 0.0, 1.0);\n" /* the dash's edges, each a pixel wide */
-    "            mask = ph < 2.0 * wd ? mask : clamp(0.5 - min(ph - 2.0 * wd, per - ph) * us, 0.0, 1.0);\n"
-    "          } else {\n"
-    "            float per = 2.0 * wd, cx0 = (floor(along / per) + 0.5) * per;\n"
-    "            float dd = length(vec2(along - cx0, across - wd * 0.5)) - wd * 0.5;\n"
-    "            mask = clamp(0.5 - dd * us, 0.0, 1.0);\n"
-    "          }\n"
-    "          ring = mix(col, ring, mask);\n" /* between the dashes the fill shows */
-    "        }\n"
+    "        float d[4] = float[4](bl > 0.0 ? (p.x + half_size.x) / bl : 1e9, bt > 0.0 ? (p.y + half_size.y) / bt : 1e9,\n"
+    "                              br > 0.0 ? (half_size.x - p.x) / br : 1e9, bb > 0.0 ? (half_size.y - p.y) / bb : 1e9);\n"   /* how far in from each side (left, top, right, bottom), in units of its width */
+    "        int sa = 0, sb = 1;\n"   /* the side this pixel is nearest to (the mitre divides the sides), and the next nearest */
+    "        if (d[sb] < d[sa]) { sa = 1; sb = 0; }\n"
+    "        for (int i = 2; i < 4; i++) { if (d[i] < d[sa]) { sb = sa; sa = i; } else if (d[i] < d[sb]) sb = i; }\n"
+    "        vec4 wv = vec4(bl, bt, br, bb);\n"
+    "        vec2 ga = side_grad(sa, wv), gb = side_grad(sb, wv);\n"
+    "        float e = (d[sb] - d[sa]) / max(length(gb - ga), 1e-6);\n"   /* how far from the mitre, in units of length (the difference of the two grows at |grad|) */
+    "        float k = clamp(0.5 + e * us, 0.0, 1.0);\n"   /* the join antialiased over a pixel: on the mitre itself half and half, whichever way rounding put the pixel */
+    "        ring = k < 1.0 ? mix(side_ring(sb, p, half_size, wv, col, us), side_ring(sa, p, half_size, wv, col, us), k) : side_ring(sa, p, half_size, wv, col, us);\n"
     "      }\n"
     "      col = mix(ring, col, inner);\n"
     "    }\n"
@@ -411,6 +452,7 @@ struct gp_renderer {
     GLuint prog, vao, vbo, atlas, color_atlas, lcd_atlas, ramps;
     GLint u_viewport, u_scale, u_gamma, u_atlas, u_color_atlas, u_lcd_atlas, u_ramps, u_image, u_layer, u_aux, u_backdrop;
     size_t vbo_cap;
+    bool finish_before_copy;   /* Mesa's llvmpipe: see backdrop_copy */
     /* offscreen targets (made when first needed, again when the window's size changes) */
     struct { GLuint fbo, tex; } layers[T_COUNT];
     int layer_w, layer_h;
@@ -439,6 +481,8 @@ gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
 #undef X
 
     gp_renderer *r = calloc(1, sizeof *r);
+    const char *renderer = (const char *)gl.glGetString(GL_RENDERER);
+    r->finish_before_copy = renderer && strstr(renderer, "llvmpipe");   /* (see backdrop_copy) */
     GLuint vs = compile(GL_VERTEX_SHADER, vs_src), fs = compile(GL_FRAGMENT_SHADER, fs_src);
     if (!vs || !fs) { free(r); return NULL; }
     r->prog = gl.glCreateProgram();
@@ -545,6 +589,15 @@ void gp_renderer_free(gp_renderer *r, gp_gfx *gfx) {
 }
 
 /* instances [first, first + count) in one instanced draw */
+/* What the target being drawn on (bound now) holds over the pixel region x0..x1, y0..y1 (rows from the top), into the texture bound now (the backdrop) at
+ * the same place. Mesa's llvmpipe with its rasterizer threads (26.2 here) could copy the region before all the drawing queued into it had landed: a blend
+ * then saw part of what was under it, a different part each run (a blit did the same). Waiting for the drawing first fixes it there; GPUs need no wait. */
+static void backdrop_copy(gp_renderer *r, int px_h, int x0, int y0, int x1, int y1) {
+    if (x1 <= x0 || y1 <= y0) return;
+    if (r->finish_before_copy) gl.glFinish();
+    gl.glCopyTexSubImage2D(GL_TEXTURE_2D, 0, x0, px_h - y1, x0, px_h - y1, x1 - x0, y1 - y0);
+}
+
 static void draw_run(gp_renderer *r, const gp_scene *scene, size_t first, size_t count) {
     (void)scene;
     for (GLuint a = 0; a < 14; a++)
@@ -714,7 +767,7 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             if (y1 > px_h) y1 = px_h;
             gl.glActiveTexture(GL_TEXTURE7);
             gl.glBindTexture(GL_TEXTURE_2D, r->layers[T_BACKDROP].tex);
-            if (x1 > x0 && y1 > y0) gl.glCopyTexSubImage2D(GL_TEXTURE_2D, 0, x0, px_h - y1, x0, px_h - y1, x1 - x0, y1 - y0);
+            backdrop_copy(r, px_h, x0, y0, x1, y1);
             gl.glBindTexture(GL_TEXTURE_2D, 0);
             gl.glActiveTexture(GL_TEXTURE0);
             cur = T_BACKDROP;
@@ -814,7 +867,7 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
                 if (y1 > px_h) y1 = px_h;
                 gl.glActiveTexture(GL_TEXTURE7);
                 gl.glBindTexture(GL_TEXTURE_2D, r->layers[T_BACKDROP].tex);
-                if (x1 > x0 && y1 > y0) gl.glCopyTexSubImage2D(GL_TEXTURE_2D, 0, x0, px_h - y1, x0, px_h - y1, x1 - x0, y1 - y0);
+                backdrop_copy(r, px_h, x0, y0, x1, y1);
                 gl.glDisable(GL_BLEND);
             }
             gl.glActiveTexture(GL_TEXTURE0);

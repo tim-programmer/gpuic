@@ -895,7 +895,7 @@ void gp_layout_list_scrolled(gp_el *list, gp_text_system *ts, gp_scroll_table *s
     g_ts = ts;
     g_scrolls = scrolls;
     g_anims = anims;
-    if (anims) anims->now = gp_now_ns();   /* rows animated from here are not part of a pass: the clock is now */
+    if (anims) anims->now = gp_anim_now();   /* rows animated from here are not part of a pass: the clock is now */
     if (list->list_var) vlist_scrolled(list);
     else list_realize(list, false);
     list_sticky_update(list);

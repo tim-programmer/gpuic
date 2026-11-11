@@ -133,9 +133,15 @@ static void test_idle(gp_co *co, gp_app *app) {
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_task t = gp_watch_fd(&cx, p[0], GP_FD_READ, on_fd, &w);
     gp_sleep(co, 0.05);
-    unsigned long before = app->stat_wakeups;
-    gp_sleep(co, 0.4);
-    unsigned long woke = app->stat_wakeups - before;
+    /* the quietest of three 400 ms spans: a watch that cost wakeups would cost them in every one, while a window still being mapped and exposed
+     * (a slow start: a sanitizer build, a software renderer) wakes the loop in the first */
+    unsigned long woke = (unsigned long)-1;
+    for (int k = 0; k < 3 && woke > 4; k++) {
+        unsigned long before = app->stat_wakeups;
+        gp_sleep(co, 0.4);
+        unsigned long n = app->stat_wakeups - before;
+        if (n < woke) woke = n;
+    }
     CHECK(woke <= 4, "the loop woke %lu times in 400 ms with one idle watch", woke);
     gp_cancel(app, t);
     close(p[0]);
