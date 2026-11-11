@@ -1444,7 +1444,7 @@ static void test_weights_and_families(void) {
 
     /* a family with one face: lighter weights use it as is, heavy ones are thickened (600 and up) */
     t = fresh(false);
-    snprintf(path, sizeof path, noto("NotoSans-Regular.ttf"));
+    snprintf(path, sizeof path, "%s", noto("NotoSans-Regular.ttf"));
     gp_text_add_font_file(t, path, 0, 0);
     float w400, w500, w600, w900, w100;
     gp_text_shape(t, 400, 20, "Weight", 6, NULL, 0, &w400);
@@ -1458,10 +1458,10 @@ static void test_weights_and_families(void) {
 
     /* families: registered under the name the font gives itself, or under one the app picks */
     char serif[256], mono[256], regular[256], bold[256];
-    snprintf(serif, sizeof serif, noto("NotoSerif-Regular.ttf"));
-    snprintf(mono, sizeof mono, noto("NotoSansMono-Regular.ttf"));
-    snprintf(regular, sizeof regular, noto("NotoSans-Regular.ttf"));
-    snprintf(bold, sizeof bold, noto("NotoSans-Bold.ttf"));
+    snprintf(serif, sizeof serif, "%s", noto("NotoSerif-Regular.ttf"));
+    snprintf(mono, sizeof mono, "%s", noto("NotoSansMono-Regular.ttf"));
+    snprintf(regular, sizeof regular, "%s", noto("NotoSans-Regular.ttf"));
+    snprintf(bold, sizeof bold, "%s", noto("NotoSans-Bold.ttf"));
 
     t = fresh(false);
     gp_text_add_font_file(t, regular, 0, 0);
@@ -1539,9 +1539,9 @@ static void test_weights_and_families(void) {
     if (exists(noto("NotoSerifHebrew-Light.ttf")) && exists(noto("NotoSerifHebrew-Bold.ttf"))) {
         t = fresh(false);
         gp_text_add_font_file(t, regular, 0, 0);
-        snprintf(path, sizeof path, noto("NotoSerifHebrew-Light.ttf"));
+        snprintf(path, sizeof path, "%s", noto("NotoSerifHebrew-Light.ttf"));
         gp_text_add_font_file(t, path, 0, 0);
-        snprintf(path, sizeof path, noto("NotoSerifHebrew-Bold.ttf"));
+        snprintf(path, sizeof path, "%s", noto("NotoSerifHebrew-Bold.ttf"));
         gp_text_add_font_file(t, path, 0, 0);
         CHECK(strcmp(base_name(font_for(t, "\xd7\x90", 700)), "NotoSerifHebrew-Bold.ttf") == 0, "Hebrew at 700 comes from the bold registered font: %s", base_name(font_for(t, "\xd7\x90", 700)));
         CHECK(strcmp(base_name(font_for(t, "\xd7\x90", 300)), "NotoSerifHebrew-Light.ttf") == 0, "Hebrew at 300 comes from the light one: %s", base_name(font_for(t, "\xd7\x90", 300)));
@@ -1634,7 +1634,7 @@ static void test_italic(void) {
 
     /* bold and italic together, both made up: one variant that is both */
     gp_text_system *t2 = fresh(false);
-    snprintf(path, sizeof path, noto("NotoSerif-Regular.ttf"));
+    snprintf(path, sizeof path, "%s", noto("NotoSerif-Regular.ttf"));
     gp_text_add_font_file(t2, path, 0, 0);
     gp_glyph_pos r2[8], b2[8], i2[8], bi2[8];
     float w_r, w_b, w_i, w_bi;
@@ -1656,7 +1656,7 @@ static void test_italic(void) {
 
     /* only an italic face registered: upright text uses it rather than nothing, and italic does not shear it more */
     t2 = fresh(false);
-    snprintf(path, sizeof path, noto("NotoSerif-Italic.ttf"));
+    snprintf(path, sizeof path, "%s", noto("NotoSerif-Italic.ttf"));
     gp_text_add_font_file(t2, path, 0, 0);
     CHECK(same_path(font_for(t2, "A", 400), path) && same_path(font_for(t2, "A", 400 | ITALIC), path), "an italic-only family draws it for both");
     gp_glyph_pos g1[4], g2[4];
@@ -1669,9 +1669,9 @@ static void test_italic(void) {
     /* a character the family lacks comes from another registered font, the italic one if italic is asked for */
     {
         char serif_r[256], serif_i[256], mono[256];
-        snprintf(serif_r, sizeof serif_r, noto("NotoSerif-Regular.ttf"));
-        snprintf(serif_i, sizeof serif_i, noto("NotoSerif-Italic.ttf"));
-        snprintf(mono, sizeof mono, noto("NotoSansMono-Regular.ttf"));
+        snprintf(serif_r, sizeof serif_r, "%s", noto("NotoSerif-Regular.ttf"));
+        snprintf(serif_i, sizeof serif_i, "%s", noto("NotoSerif-Italic.ttf"));
+        snprintf(mono, sizeof mono, "%s", noto("NotoSansMono-Regular.ttf"));
         uint32_t cp = 0;
         for (uint32_t c = 0x100; c < 0xfd00 && !cp; c++)
             if (has_glyph_in(serif_r, c) && has_glyph_in(serif_i, c) && !has_glyph_in(mono, c)) cp = c;

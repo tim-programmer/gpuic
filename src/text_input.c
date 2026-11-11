@@ -2592,6 +2592,8 @@ gp_entity gp_text_input_new(gp_app *app, const gp_text_input_options *opts) {
     gp_entity e = gp_view_new(app, sizeof init, &init, render, ti_drop);
     TextInput *ti = gp_entity_get(app, e);
     ti->self = e;
+    ensure_cap(ti, 0);   /* the text is never NULL, even empty: `ti->text + offset` on NULL is undefined, even with an offset of 0 (typing into a new field did it) */
+    ti->text[0] = 0;
     if (o->multiline) {   /* (a multi-line field always has its line index: an empty text is one empty line) */
         lines_reserve(ti, 1);
         ti->ls[0] = 0;
