@@ -76,8 +76,14 @@
     { "name": "debug", "inherits": "base", "configurePreset": "debug" },
     { "name": "release", "inherits": "base", "configurePreset": "release" },
     { "name": "release-clang", "inherits": "base", "configurePreset": "release-clang" },
-    { "name": "sanitize", "inherits": "base", "configurePreset": "sanitize" },
-    { "name": "sanitize-clang", "inherits": "base", "configurePreset": "sanitize-clang" },
+    {
+      "name": "sanitize",
+      "inherits": "base",
+      "configurePreset": "sanitize",
+      "description": "Sanitized tests run several times slower, and much slower on a machine with few cores drawing with a software renderer",
+      "execution": { "timeout": 2400 }
+    },
+    { "name": "sanitize-clang", "inherits": "sanitize", "configurePreset": "sanitize-clang" },
     {
       "name": "tsan",
       "inherits": "base",

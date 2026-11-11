@@ -23,7 +23,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.preset }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: ${{ startsWith(matrix.preset, 'sanitize') && 90 || 45 }}   # (a sanitized run of the suite takes about 20 minutes on a runner)
     strategy:
       fail-fast: false
       matrix:
