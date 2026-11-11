@@ -30,7 +30,7 @@ jobs:
         preset: [release, release-clang, sanitize, sanitize-clang]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install packages
         run: |
@@ -57,7 +57,7 @@ jobs:
 
       - name: Upload the test log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-log-${{ matrix.preset }}
           path: out/${{ matrix.preset }}/Testing/Temporary/LastTest.log

@@ -810,6 +810,7 @@ bool gp_frame_caches_enabled(void);
 
 int64_t gp_now_ns(void);
 void gp_debug_clock_skew(int64_t ns);   /* tests: makes every clock here run ns ahead, so time can be jumped */
+int gp_text_debug_family_rank(int which, const char *family);   /* tests: where a family stands as a default face (0 sans-serif, 1 serif, 2 monospace); smaller is better; -1 with fontconfig */
 void gp_debug_anim_clock(int64_t ns);   /* tests: animations see the time ns (0: the clock again), while timers and sleeps go on; two frames then show one moment */
 int64_t gp_anim_now(void);              /* the time animations see */
 enum { GP_WAKE_LAYOUT = 1, GP_WAKE_PAINT = 2 };   /* what a window-bound frame or timer asks the window for */

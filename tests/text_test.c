@@ -66,6 +66,23 @@ static bool contains_ci(const char *hay, const char *needle) {
  * a plain POSIX directory walk) and FreeType directly, never of the code under test: a test that
  * decides what to skip by asking the library would quietly skip exactly the regressions it exists
  * to catch. */
+/* Without fontconfig the scanner picks the default faces by a preference list. A family that is one of its names comes before one that only contains it,
+ * and CJK families come last for Latin text even when their names contain a Latin one: Noto Sans before Noto Sans CJK JP (Ubuntu's layout found the CJK
+ * file first, and it became the face for all text). */
+static void test_family_ranks(void) {
+    if (gp_text_debug_family_rank(0, "Noto Sans") < 0) { printf("SKIP: family ranks are fontconfig's in this build\n"); return; }
+    CHECK(gp_text_debug_family_rank(0, "Noto Sans CJK JP") == gp_text_debug_family_rank(0, "Source Han Sans SC"), "the CJK families rank together");
+    const char *sans[] = { "Noto Sans", "Noto Sans Display", "DejaVu Sans", "Liberation Sans", "Cantarell", "Noto Sans CJK JP", "Some Unknown Face" };
+    for (size_t i = 0; i + 1 < sizeof sans / sizeof *sans; i++)
+        CHECK(gp_text_debug_family_rank(0, sans[i]) < gp_text_debug_family_rank(0, sans[i + 1]), "sans-serif: %s (%d) before %s (%d)", sans[i],
+              gp_text_debug_family_rank(0, sans[i]), sans[i + 1], gp_text_debug_family_rank(0, sans[i + 1]));
+    CHECK(gp_text_debug_family_rank(0, "noto sans") == gp_text_debug_family_rank(0, "Noto Sans"), "case does not matter");
+    CHECK(gp_text_debug_family_rank(1, "Noto Serif") < gp_text_debug_family_rank(1, "DejaVu Serif") &&
+          gp_text_debug_family_rank(1, "DejaVu Serif") < gp_text_debug_family_rank(1, "Noto Serif CJK JP"), "serif: Noto Serif, DejaVu Serif, then Noto Serif CJK");
+    CHECK(gp_text_debug_family_rank(2, "DejaVu Sans Mono") < gp_text_debug_family_rank(2, "Noto Sans Mono") &&
+          gp_text_debug_family_rank(2, "Noto Sans Mono") < gp_text_debug_family_rank(2, "Noto Sans Mono CJK JP"), "monospace: the plain faces before the CJK one");
+}
+
 #ifndef GPUIC_HAVE_FONTCONFIG
 static bool dir_has_font_for(FT_Library lib, const char *dir, uint32_t cp, bool color, int depth) {
     DIR *d = opendir(dir);
@@ -1317,7 +1334,20 @@ static void test_scan_cache(const char *R, const char *C) {
 
 /* ---------------------------------------------------------------- families and weights */
 
-#define NOTO "/usr/share/fonts/noto/"
+/* where the Noto fonts are: Arch's layout, or Debian's and Ubuntu's */
+static const char *noto_dir(void) {
+    static const char *dir;
+    if (!dir) dir = access("/usr/share/fonts/noto/NotoSans-Regular.ttf", R_OK) == 0 ? "/usr/share/fonts/noto/" : "/usr/share/fonts/truetype/noto/";
+    return dir;
+}
+/* the path of a Noto file (a few at once may be in use: a ring of buffers) */
+static const char *noto(const char *file) {
+    static char ring[8][512];
+    static int at;
+    char *p = ring[at++ % 8];
+    snprintf(p, sizeof ring[0], "%s%s", noto_dir(), file);
+    return p;
+}
 static bool exists(const char *path) { return access(path, R_OK) == 0; }
 
 static int sel(gp_text_system *t, const char *family, int weight) { return GP_FONT_SEL(gp_text_family(t, family), weight); }
@@ -1333,15 +1363,15 @@ static void test_weights_and_families(void) {
         { "NotoSans-Thin.ttf", 100 }, { "NotoSans-Light.ttf", 300 }, { "NotoSans-Regular.ttf", 400 },
         { "NotoSans-Medium.ttf", 500 }, { "NotoSans-Bold.ttf", 700 }, { "NotoSans-Black.ttf", 900 },
     };
-    bool have = exists(NOTO "NotoSerif-Regular.ttf") && exists(NOTO "NotoSansMono-Regular.ttf");
+    bool have = exists(noto("NotoSerif-Regular.ttf")) && exists(noto("NotoSansMono-Regular.ttf"));
     for (size_t i = 0; i < sizeof sans / sizeof *sans; i++) {
         char p[256];
-        snprintf(p, sizeof p, NOTO "%s", sans[i].file);
+        snprintf(p, sizeof p, "%s%s", noto_dir(), sans[i].file);
         have &= exists(p);
     }
     if (!have) {
         skips++;
-        printf("SKIP: the Noto Sans weights, Noto Serif and Noto Sans Mono are not in %s\n", NOTO);
+        printf("SKIP: the Noto Sans weights, Noto Serif and Noto Sans Mono are not in %s\n", noto_dir());
         return;
     }
     char path[256];
@@ -1349,7 +1379,7 @@ static void test_weights_and_families(void) {
     /* CSS weight matching over a full set (100 300 400 500 700 900) */
     gp_text_system *t = fresh(false);
     for (size_t i = 0; i < sizeof sans / sizeof *sans; i++) {
-        snprintf(path, sizeof path, NOTO "%s", sans[i].file);
+        snprintf(path, sizeof path, "%s%s", noto_dir(), sans[i].file);
         CHECK(gp_text_add_font_file(t, path, 0, 0), "register %s", path);
     }
     static const struct { int want; const char *file; } full[] = {
@@ -1380,15 +1410,15 @@ static void test_weights_and_families(void) {
     gp_text_system_free(t);
 
     /* italic faces are not chosen: they are listed first and match the weight exactly, and still lose */
-    if (exists(NOTO "NotoSans-Italic.ttf") && exists(NOTO "NotoSans-BoldItalic.ttf")) {
+    if (exists(noto("NotoSans-Italic.ttf")) && exists(noto("NotoSans-BoldItalic.ttf"))) {
         t = fresh(false);
         const char *order[] = { "NotoSans-Italic.ttf", "NotoSans-BoldItalic.ttf", "NotoSans-Regular.ttf", "NotoSans-Bold.ttf" };
-        for (int i = 0; i < 4; i++) { snprintf(path, sizeof path, NOTO "%s", order[i]); gp_text_add_font_file(t, path, 0, 0); }
+        for (int i = 0; i < 4; i++) { snprintf(path, sizeof path, "%s%s", noto_dir(), order[i]); gp_text_add_font_file(t, path, 0, 0); }
         CHECK(strcmp(base_name(font_for(t, "A", 400)), "NotoSans-Regular.ttf") == 0, "roman beats italic at 400: %s", base_name(font_for(t, "A", 400)));
         CHECK(strcmp(base_name(font_for(t, "A", 700)), "NotoSans-Bold.ttf") == 0, "roman beats italic at 700: %s", base_name(font_for(t, "A", 700)));
         gp_text_system_free(t);
         t = fresh(false);   /* only italic ones: better than nothing */
-        for (int i = 0; i < 2; i++) { snprintf(path, sizeof path, NOTO "%s", order[i]); gp_text_add_font_file(t, path, 0, 0); }
+        for (int i = 0; i < 2; i++) { snprintf(path, sizeof path, "%s%s", noto_dir(), order[i]); gp_text_add_font_file(t, path, 0, 0); }
         CHECK(strcmp(base_name(font_for(t, "A", 400)), "NotoSans-Italic.ttf") == 0, "an italic face still draws when it is all there is");
         gp_text_system_free(t);
     }
@@ -1396,7 +1426,7 @@ static void test_weights_and_families(void) {
     /* a set with holes: 300 400 700 */
     t = fresh(false);
     const char *hole[] = { "NotoSans-Light.ttf", "NotoSans-Regular.ttf", "NotoSans-Bold.ttf" };
-    for (int i = 0; i < 3; i++) { snprintf(path, sizeof path, NOTO "%s", hole[i]); gp_text_add_font_file(t, path, 0, 0); }
+    for (int i = 0; i < 3; i++) { snprintf(path, sizeof path, "%s%s", noto_dir(), hole[i]); gp_text_add_font_file(t, path, 0, 0); }
     static const struct { int want; const char *file; } holes[] = {
         { 100, "NotoSans-Light.ttf" },        /* nothing lighter: the nearest above */
         { 450, "NotoSans-Regular.ttf" },      /* 400..500 has only 400: look at 500 first, then below */
@@ -1414,7 +1444,7 @@ static void test_weights_and_families(void) {
 
     /* a family with one face: lighter weights use it as is, heavy ones are thickened (600 and up) */
     t = fresh(false);
-    snprintf(path, sizeof path, NOTO "NotoSans-Regular.ttf");
+    snprintf(path, sizeof path, noto("NotoSans-Regular.ttf"));
     gp_text_add_font_file(t, path, 0, 0);
     float w400, w500, w600, w900, w100;
     gp_text_shape(t, 400, 20, "Weight", 6, NULL, 0, &w400);
@@ -1428,10 +1458,10 @@ static void test_weights_and_families(void) {
 
     /* families: registered under the name the font gives itself, or under one the app picks */
     char serif[256], mono[256], regular[256], bold[256];
-    snprintf(serif, sizeof serif, NOTO "NotoSerif-Regular.ttf");
-    snprintf(mono, sizeof mono, NOTO "NotoSansMono-Regular.ttf");
-    snprintf(regular, sizeof regular, NOTO "NotoSans-Regular.ttf");
-    snprintf(bold, sizeof bold, NOTO "NotoSans-Bold.ttf");
+    snprintf(serif, sizeof serif, noto("NotoSerif-Regular.ttf"));
+    snprintf(mono, sizeof mono, noto("NotoSansMono-Regular.ttf"));
+    snprintf(regular, sizeof regular, noto("NotoSans-Regular.ttf"));
+    snprintf(bold, sizeof bold, noto("NotoSans-Bold.ttf"));
 
     t = fresh(false);
     gp_text_add_font_file(t, regular, 0, 0);
@@ -1506,12 +1536,12 @@ static void test_weights_and_families(void) {
     gp_text_system_free(t);
 
     /* a character no font of the family has comes from another registered font, the one nearest in weight */
-    if (exists(NOTO "NotoSerifHebrew-Light.ttf") && exists(NOTO "NotoSerifHebrew-Bold.ttf")) {
+    if (exists(noto("NotoSerifHebrew-Light.ttf")) && exists(noto("NotoSerifHebrew-Bold.ttf"))) {
         t = fresh(false);
         gp_text_add_font_file(t, regular, 0, 0);
-        snprintf(path, sizeof path, NOTO "NotoSerifHebrew-Light.ttf");
+        snprintf(path, sizeof path, noto("NotoSerifHebrew-Light.ttf"));
         gp_text_add_font_file(t, path, 0, 0);
-        snprintf(path, sizeof path, NOTO "NotoSerifHebrew-Bold.ttf");
+        snprintf(path, sizeof path, noto("NotoSerifHebrew-Bold.ttf"));
         gp_text_add_font_file(t, path, 0, 0);
         CHECK(strcmp(base_name(font_for(t, "\xd7\x90", 700)), "NotoSerifHebrew-Bold.ttf") == 0, "Hebrew at 700 comes from the bold registered font: %s", base_name(font_for(t, "\xd7\x90", 700)));
         CHECK(strcmp(base_name(font_for(t, "\xd7\x90", 300)), "NotoSerifHebrew-Light.ttf") == 0, "Hebrew at 300 comes from the light one: %s", base_name(font_for(t, "\xd7\x90", 300)));
@@ -1564,12 +1594,12 @@ static void test_italic(void) {
                                          "NotoSerif-Regular.ttf" };
     for (size_t i = 0; i < sizeof files / sizeof *files; i++) {
         char p[256];
-        snprintf(p, sizeof p, NOTO "%s", files[i]);
+        snprintf(p, sizeof p, "%s%s", noto_dir(), files[i]);
         if (!exists(p)) { skips++; printf("SKIP: italic tests need %s\n", p); return; }
     }
     char path[256];
     gp_text_system *t = fresh(false);
-    for (int i = 0; i < 7; i++) { snprintf(path, sizeof path, NOTO "%s", files[i]); gp_text_add_font_file(t, path, 0, 0); }
+    for (int i = 0; i < 7; i++) { snprintf(path, sizeof path, "%s%s", noto_dir(), files[i]); gp_text_add_font_file(t, path, 0, 0); }
     static const struct { int weight; const char *file; } real[] = {
         { 400, "NotoSans-Italic.ttf" }, { 300, "NotoSans-LightItalic.ttf" }, { 700, "NotoSans-BoldItalic.ttf" },
         { 500, "NotoSans-Italic.ttf" }, { 900, "NotoSans-BoldItalic.ttf" },
@@ -1604,7 +1634,7 @@ static void test_italic(void) {
 
     /* bold and italic together, both made up: one variant that is both */
     gp_text_system *t2 = fresh(false);
-    snprintf(path, sizeof path, NOTO "NotoSerif-Regular.ttf");
+    snprintf(path, sizeof path, noto("NotoSerif-Regular.ttf"));
     gp_text_add_font_file(t2, path, 0, 0);
     gp_glyph_pos r2[8], b2[8], i2[8], bi2[8];
     float w_r, w_b, w_i, w_bi;
@@ -1626,7 +1656,7 @@ static void test_italic(void) {
 
     /* only an italic face registered: upright text uses it rather than nothing, and italic does not shear it more */
     t2 = fresh(false);
-    snprintf(path, sizeof path, NOTO "NotoSerif-Italic.ttf");
+    snprintf(path, sizeof path, noto("NotoSerif-Italic.ttf"));
     gp_text_add_font_file(t2, path, 0, 0);
     CHECK(same_path(font_for(t2, "A", 400), path) && same_path(font_for(t2, "A", 400 | ITALIC), path), "an italic-only family draws it for both");
     gp_glyph_pos g1[4], g2[4];
@@ -1639,9 +1669,9 @@ static void test_italic(void) {
     /* a character the family lacks comes from another registered font, the italic one if italic is asked for */
     {
         char serif_r[256], serif_i[256], mono[256];
-        snprintf(serif_r, sizeof serif_r, NOTO "NotoSerif-Regular.ttf");
-        snprintf(serif_i, sizeof serif_i, NOTO "NotoSerif-Italic.ttf");
-        snprintf(mono, sizeof mono, NOTO "NotoSansMono-Regular.ttf");
+        snprintf(serif_r, sizeof serif_r, noto("NotoSerif-Regular.ttf"));
+        snprintf(serif_i, sizeof serif_i, noto("NotoSerif-Italic.ttf"));
+        snprintf(mono, sizeof mono, noto("NotoSansMono-Regular.ttf"));
         uint32_t cp = 0;
         for (uint32_t c = 0x100; c < 0xfd00 && !cp; c++)
             if (has_glyph_in(serif_r, c) && has_glyph_in(serif_i, c) && !has_glyph_in(mono, c)) cp = c;
@@ -1692,14 +1722,14 @@ static int shape_feat(gp_text_system *t, const char *features, const char *text,
 }
 
 static void test_features(void) {
-    if (!exists(NOTO "NotoSans-Regular.ttf") || !exists(NOTO "NotoSansMono-Regular.ttf")) {
+    if (!exists(noto("NotoSans-Regular.ttf")) || !exists(noto("NotoSansMono-Regular.ttf"))) {
         skips++;
         printf("SKIP: OpenType feature tests need Noto Sans and Noto Sans Mono\n");
         return;
     }
     gp_text_system *t = fresh(false);
-    gp_text_add_font_file(t, NOTO "NotoSans-Regular.ttf", 0, 0);
-    gp_text_add_font_file(t, NOTO "NotoSansMono-Regular.ttf", 0, 0);
+    gp_text_add_font_file(t, noto("NotoSans-Regular.ttf"), 0, 0);
+    gp_text_add_font_file(t, noto("NotoSansMono-Regular.ttf"), 0, 0);
 
     CHECK(gp_text_features(t, NULL) == 0 && gp_text_features(t, "") == 0 && gp_text_features(t, "normal") == 0 && gp_text_features(t, "None") == 0,
           "no features is id 0");
@@ -2006,8 +2036,8 @@ static void test_lcd(const char *R, const char *E) {
 
 /* The system's own fonts, by family name and weight. Needs the same Noto files; the rest is what the system says. */
 static void test_system_families(void) {
-    if (!exists(NOTO "NotoSans-Light.ttf") || !exists(NOTO "NotoSerif-Regular.ttf") || !exists(NOTO "NotoSansMono-Regular.ttf") ||
-        !exists(NOTO "NotoSans-Black.ttf") || !exists(NOTO "NotoSans-Medium.ttf")) {
+    if (!exists(noto("NotoSans-Light.ttf")) || !exists(noto("NotoSerif-Regular.ttf")) || !exists(noto("NotoSansMono-Regular.ttf")) ||
+        !exists(noto("NotoSans-Black.ttf")) || !exists(noto("NotoSans-Medium.ttf"))) {
         skips++;
         printf("SKIP: system family lookups are shown with the Noto families, which are not installed\n");
         return;
@@ -2031,7 +2061,7 @@ static void test_system_families(void) {
     CHECK(strcmp(base_name(font_for(t, "A", sel(t, "Noto Sans", 350))), "NotoSans-Light.ttf") == 0, "system: weight 350 draws the face below it, not the nearest");
     CHECK(strcmp(base_name(font_for(t, "A", sel(t, "Noto Sans", 450))), "NotoSans-Medium.ttf") == 0, "system: weight 450 draws the medium face");
     CHECK(strcmp(base_name(font_for(t, "A", sel(t, "Noto Sans", 5000))), "NotoSans-Black.ttf") == 0, "system: weights above 1000 are the heaviest");
-    if (exists(NOTO "NotoSerifHebrew-Regular.ttf") && exists(NOTO "NotoSansHebrew-Regular.ttf")) {
+    if (exists(noto("NotoSerifHebrew-Regular.ttf")) && exists(noto("NotoSansHebrew-Regular.ttf"))) {
         /* a character the family lacks is looked for in the list's generic family: a serif stays serif */
         CHECK(strstr(base_name(font_for(t, "\xd7\x90", sel(t, "serif", 400))), "Serif") != NULL, "system: Hebrew in \"serif\" comes from a serif font (%s)", base_name(font_for(t, "\xd7\x90", sel(t, "serif", 400))));
         CHECK(strstr(base_name(font_for(t, "\xd7\x90", sel(t, "Noto Serif, serif", 400))), "Serif") != NULL, "system: and in \"Noto Serif, serif\" (%s)", base_name(font_for(t, "\xd7\x90", sel(t, "Noto Serif, serif", 400))));
@@ -2281,6 +2311,7 @@ int main(void) {
            have_emoji ? path_of(&g[2]) : "(none)");
     printf("system has: CJK font=%s, color emoji font=%s\n", have_cjk ? "yes" : "no", have_emoji ? "yes" : "no");
 
+    test_family_ranks();
     test_latin();
     if (have_cjk) { test_cjk(); test_wrapping(); } else { skips++; printf("SKIP: no CJK font installed\n"); }
     if (have_emoji) test_emoji(); else { skips++; printf("SKIP: no color emoji font installed\n"); }

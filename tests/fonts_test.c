@@ -240,9 +240,17 @@ static void run(void) {
               texts[20]->ts.features == 0,
           "features inherit, \"normal\" clears them, a bold box keeps them");
 
-    bool noto = access("/usr/share/fonts/noto/NotoSerif-Regular.ttf", R_OK) == 0 &&
-                access("/usr/share/fonts/noto/NotoSansMono-Regular.ttf", R_OK) == 0 &&
-                access("/usr/share/fonts/noto/NotoSans-Black.ttf", R_OK) == 0 && access("/usr/share/fonts/noto/NotoSans-Light.ttf", R_OK) == 0;
+    bool noto = false;
+    for (int d = 0; d < 2 && !noto; d++) {   /* (Arch's layout, or Debian's and Ubuntu's) */
+        const char *dir = d ? "/usr/share/fonts/truetype/noto/" : "/usr/share/fonts/noto/";
+        const char *need[] = { "NotoSerif-Regular.ttf", "NotoSansMono-Regular.ttf", "NotoSans-Black.ttf", "NotoSans-Light.ttf" };
+        noto = true;
+        for (int i = 0; i < 4; i++) {
+            char path[256];
+            snprintf(path, sizeof path, "%s%s", dir, need[i]);
+            noto = noto && access(path, R_OK) == 0;
+        }
+    }
     if (!noto) {
         skips++;
         printf("SKIP: the Noto families are not installed, so widths can't be compared\n");

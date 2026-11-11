@@ -595,12 +595,23 @@ static void lower_into(char *low, size_t cap, const char *family) {
     low[n] = 0;
 }
 
-static int family_rank(const char *family) {
+/* Where `family` stands in a preference list (smaller is better): a family that is one of the names comes before one that only contains it (Noto Sans
+ * before Noto Sans Display), and a CJK family that contains a Latin name ("Noto Sans CJK JP" contains "noto sans") goes with the list's CJK names,
+ * which start at `cjk`. Without that, which of Noto Sans and Noto Sans CJK became the default face depended on the order the files were found in. */
+static int list_rank(const char *const *list, size_t n, size_t cjk, const char *family) {
     char low[128];
     lower_into(low, sizeof low, family);
-    for (size_t i = 0; i < sizeof preferred_families / sizeof *preferred_families; i++)
-        if (strstr(low, preferred_families[i])) return (int)i;
+    for (size_t i = 0; i < n; i++)
+        if (strcmp(low, list[i]) == 0) return (int)(2 * i);
+    for (size_t i = 0; i < n; i++)
+        if (strstr(low, list[i])) return (int)(2 * (strstr(low, "cjk") && i < cjk ? cjk : i) + 1);
     return RANK_UNKNOWN;
+}
+
+static int family_rank(const char *family) {
+    size_t n = sizeof preferred_families / sizeof *preferred_families, cjk = 0;
+    while (cjk < n && strcmp(preferred_families[cjk], "source han sans") != 0) cjk++;
+    return list_rank(preferred_families, n, cjk, family);
 }
 
 static bool looks_monospaced(const char *family) {
@@ -957,25 +968,30 @@ static int cand_cmp(const void *a, const void *b) {
 }
 
 static int family_rank_in(const char *const *list, size_t n, const char *family) {
-    char low[128];
-    lower_into(low, sizeof low, family);
-    for (size_t i = 0; i < n; i++)
-        if (strstr(low, list[i])) return (int)i;
-    return RANK_UNKNOWN;
+    size_t cjk = 0;   /* (the CJK names: from the first "source han" on, if the list has them) */
+    while (cjk < n && strncmp(list[cjk], "source han", 10) != 0) cjk++;
+    return list_rank(list, n, cjk, family);
 }
 
 /* How well a scanned face stands for a generic family; smaller is better. */
+static const char *const serifs[] = {
+    "noto serif", "dejavu serif", "liberation serif", "times new roman", "tinos", "georgia", "source serif",
+    "cambria", "palatino", "garamond", "times", "source han serif", "songti", "mincho", "ming",
+};
+static const char *const monos[] = {
+    "dejavu sans mono", "noto sans mono", "liberation mono", "jetbrains mono", "fira mono", "fira code",
+    "source code", "consolas", "menlo", "sf mono", "cascadia", "ubuntu mono", "roboto mono", "inconsolata",
+    "cousine", "courier new", "courier", "hack",
+};
+
+int gp_text_debug_family_rank(int which, const char *family) {
+    if (which == 1) return family_rank_in(serifs, sizeof serifs / sizeof *serifs, family);
+    if (which == 2) return family_rank_in(monos, sizeof monos / sizeof *monos, family);
+    return family_rank(family);
+}
+
 static int generic_rank(int generic, const scanned_font *f, bool italic) {
     if (generic == GEN_SANS) return f->rank + (f->italic != italic ? 2 * RANK_PENALTY : 0);
-    static const char *const serifs[] = {
-        "noto serif", "dejavu serif", "liberation serif", "times new roman", "tinos", "georgia", "source serif",
-        "cambria", "palatino", "garamond", "times", "source han serif", "songti", "mincho", "ming",
-    };
-    static const char *const monos[] = {
-        "dejavu sans mono", "noto sans mono", "liberation mono", "jetbrains mono", "fira mono", "fira code",
-        "source code", "consolas", "menlo", "sf mono", "cascadia", "ubuntu mono", "roboto mono", "inconsolata",
-        "cousine", "courier new", "courier", "hack",
-    };
     bool mono = f->fixed || looks_monospaced(f->family);
     int r = generic == GEN_SERIF ? family_rank_in(serifs, sizeof serifs / sizeof *serifs, f->family)
                                  : family_rank_in(monos, sizeof monos / sizeof *monos, f->family);
@@ -1022,6 +1038,9 @@ static int fc_find(gp_text_system *ts, const char *name, int generic, int req, u
     free(c);
     return best >= 0 ? font_add(ts, ts->scan[best].path, ts->scan[best].index) : -1;
 }
+#endif
+#ifdef GPUIC_HAVE_FONTCONFIG
+int gp_text_debug_family_rank(int which, const char *family) { (void)which; (void)family; return -1; }   /* (fontconfig ranks; the scanner's lists are not built) */
 #endif
 
 static bool has_glyph(const gp_text_system *ts, int font, uint32_t cp) {
