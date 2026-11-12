@@ -903,12 +903,28 @@ translate; nested ones compose. They are made for `gp_with_animation` (which cou
   is not LCD antialiased (its stripes are not the screen's).
 * **The pointer follows:** a click, a hover, a cursor and a mouse-down land on what is seen where the pointer is, not where the box would have been, and the event's `local` position is in
   the element's own coordinates (through the inverse of the matrix; a drag after a press keeps the offsets it started with). `gp_hit` has the point in the element's coordinates for it.
-* **Text under a transform** that does more than move it is sampled between the glyph bitmap's texels (bilinear, with texels outside the glyph's own
-  rectangle in the atlas counted as empty) and its quad grows by a pixel, so a turned or scaled glyph fades out at its edges instead of being cut along its quad
-  (where a pixel whose centre lay on that edge was in or out by rounding). Upright text that is only moved is drawn texel for pixel, as before.
+* **Text under a transform** is made of glyphs rasterized for the size it has on the screen: the font size times the window's scale times what the transform
+  magnifies by (for `gp_scale_xy(sx, sy)` the geometric mean, the root of the determinant in general). The layout does not know: text is measured, wrapped and shaped
+  at its own font size, so a label takes the same room at every zoom and nothing reflows while zooming; only the bitmaps and where they go change.
+  * Under a **zoom and a move** (the transform keeps the axes and scales both alike: `gp_scale`, `gp_translate`, nested) each glyph's origin is taken through the
+    transform, snapped to the screen's pixel grid there (the same sub-pixel steps as any text) and drawn texel for pixel with no transform of its own: zoomed text is
+    as sharp as text of that size, hinted for it, and LCD antialiasing stays on if it is on. The advances are the layout's, scaled (not those of the text shaped again
+    at the big size), so a line is as long as its box says.
+  * **Turned, skewed or stretched** (`sx != sy`) text still goes through the transform, sampled between the bitmap's texels (bilinear, texels outside the glyph's own
+    rectangle in the atlas counted as empty, its quad grown by a pixel so that it fades out at its edges), in grayscale; but the bitmap is the one for the size on the
+    screen, so a texel is about a pixel there too. Text along a curve (`gp_path_text`) likewise. In perspective the size is the layout's, as before.
+  * **Sizes:** the glyph cache keeps sizes to a quarter of a pixel, and the size asked for under a transform is rounded to that, so a zoom in steps makes a few dozen
+    sizes at most. Nothing is evicted one by one: an atlas that fills up is emptied and the frame painted again (as it always was), which is what bounds a zoom
+    that is animated through every size. Above 256 px a transform does not make bitmaps bigger (one glyph must fit an atlas): they are stretched the rest of the way.
+  * A scale that is **animated** therefore draws its text on the pixel grid in every frame (it steps by a pixel now and then, as in a browser) rather than gliding as a
+    stretched picture; text inputs, being made of text elements, get all of this (their caret and selection are boxes under the transform, within a pixel of the glyphs).
+  * Not done: an SVG drawing (`gp_svg`) is still rasterized for the window's scale only and stretched by a transform above it.
+  `tests/textscale_test.c`: a text under scales of 1, 2, 0.5, 1.3 and 2.5 against the same text set at that size where the first is seen (the same layout box at every
+  scale, the scene's glyphs are the cache's for the size on the screen at the transformed origins, and the frame's ink is the reference's: under 3 % of the inked pixels
+  differ, against 35 % and more for stretched bitmaps), turned text, and a cached view whose scale changes (5 mutants, all caught).
 * **Clips:** an `overflow: hidden` box (and a scroller) inside a transformed element is cut to the box as it is seen when the transform keeps the axes (a scale, a move, a quarter turn); at any
   other angle there is no clip (a clip is an axis-aligned rectangle in screen space). A clip *above* a transformed element applies to it as usual.
-* **Cached views:** a cached view painted under a transform is repainted when the matrix above it changes (the matrix is in the painted copy's signature) and is never just moved
+* **Cached views:** a cached view painted under a transform is repainted when the matrix above it changes (the matrix is in the painted copy's signature; so a new zoom gives it glyphs of the new size without its render function being called) and is never just moved
   (`tests/paintshift_test.c`'s shifting is for views with no transform above or below). `tests/transform_test.c` compares frames: a quarter turn exactly, 45 degrees against a supersampled box,
   scales, moves, origins, nested, turned text (same ink, width and height swapped, no color fringes with LCD on), clicks (position included) and hover on a turned box and not where it was, clipping,
   a cached view under a turn by an animation against a full paint (the animations' clock held still between the two frames: `gp_debug_anim_clock`), and an animation of a rotation (with the clock jumped), and about 20 mutants.

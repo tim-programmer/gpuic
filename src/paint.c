@@ -427,6 +427,40 @@ static void push(paint_ctx *pc, gp_instance *inst) {
     scene_add(pc, inst);
 }
 
+/* an instance that is already where it is on the screen: put in the scene with no transform, whatever is being painted under */
+static void push_placed(paint_ctx *pc, gp_instance *inst) { scene_add(pc, inst); }
+
+/* How text of a font size is rasterized under the transform it is painted in. Glyphs are made for the size they have on the screen: the font size times the window's
+ * scale times what the transform magnifies by (the root of its determinant: for sx, sy the geometric mean), to the quarter pixel the glyph cache keeps sizes by and no
+ * more than GP_TEXT_MAX_RASTER_PX when the transform is what makes them big (one glyph must fit an atlas; beyond that the bitmap is stretched the rest of the way).
+ *   px      the size to ask the glyph cache for
+ *   k       px over the size without the transform: a bitmap is drawn at 1 / k of its size in the layout, and the transform makes up the rest
+ *   placed  the transform keeps the axes and scales both alike (a zoom and a move), and px is the size on the screen: each glyph's origin is taken through the transform,
+ *           snapped to the pixel grid there and drawn as it is, exactly as text under no transform is (hinted for its size, sub-pixel positions, LCD if that is on).
+ * Otherwise (turned, skewed, sx != sy, capped) the bitmaps go through the transform, sampled between texels. In perspective nothing changes: the size is the layout's. */
+#define GP_TEXT_MAX_RASTER_PX 256.f
+typedef struct { float px, k; bool placed; } text_raster;
+static text_raster text_raster_for(const paint_ctx *pc, float size) {
+    text_raster r = { size * pc->scale, 1.f, false };
+    if (!pc->has_xf || !(r.px > 0.f)) return r;
+    const gp_affine *m = &pc->xf;
+    if (m->g != 0.f || m->h != 0.f || m->w1 != 0.f) return r;
+    float mag = sqrtf(fabsf(m->a * m->d - m->b * m->c));
+    if (!(mag > 1e-3f)) return r;
+    bool axes = fabsf(m->b) <= 1e-4f * mag && fabsf(m->c) <= 1e-4f * mag && m->a > 0.f && m->d > 0.f && fabsf(m->a - m->d) <= 1e-3f * mag;
+    if (fabsf(mag - 1.f) < 1e-4f) {   /* nothing to make up for: the size it has anyway */
+        r.placed = axes;
+        return r;
+    }
+    float want = r.px * mag, q = floorf(want * 4.f + 0.5f) * 0.25f;
+    if (q < 0.25f) q = 0.25f;
+    if (q > GP_TEXT_MAX_RASTER_PX && mag > 1.f) q = fmaxf(GP_TEXT_MAX_RASTER_PX, floorf(r.px * 4.f + 0.5f) * 0.25f);
+    r.k = q / r.px;
+    r.px = q;
+    r.placed = axes && fabsf(q - want) <= 0.126f;
+    return r;
+}
+
 /* ---------------------------------------------------------------- stroked curves */
 
 /* How a stroke is colored: a color, or a gradient along its whole length (ramp row `row`, `total` the length). */
@@ -559,7 +593,8 @@ static void paint_path_text(paint_ctx *pc, gp_el *n, const gp_point *p, const fl
     float total = arc[m - 1], start = 0.f;
     if (n->ts.align == GP_TEXT_ALIGN_CENTER) start = (total - lw) * 0.5f;
     else if (n->ts.align == GP_TEXT_ALIGN_END || n->ts.align == GP_TEXT_ALIGN_RIGHT) start = total - lw;
-    const float scale = pc->scale, px_size = n->ts.size * scale, inv_alpha = 1.f / (float)GP_ATLAS_SIZE, inv_color = 1.f / (float)GP_COLOR_ATLAS_SIZE;
+    const text_raster tr = text_raster_for(pc, n->ts.size);   /* (for what the curve is under: each glyph is turned as well, so none is placed) */
+    const float scale = pc->scale * tr.k, px_size = tr.px, inv_alpha = 1.f / (float)GP_ATLAS_SIZE, inv_color = 1.f / (float)GP_COLOR_ATLAS_SIZE;
     const bool had = pc->has_xf;
     const gp_affine outer = had ? pc->xf : gp_aff_identity();
     for (int i = 0; i < ng; i++) {
@@ -713,11 +748,14 @@ static void paint_text(paint_ctx *pc, gp_el *n, float x, float y, rect clip, flo
     float asc, desc;
     gp_text_metrics(pc->ts, GP_TEXT_SEL(n->ts), n->ts.size, &asc, &desc);
     float lh = n->ts.size * GP_LINE_HEIGHT;
-    float scale = pc->scale;
-    float px_size = n->ts.size * scale;
+    /* Measured, wrapped and shaped at the font's own size whatever it is painted under (a zoom reflows nothing); only the bitmaps are made for the size on the screen. */
+    const text_raster tr = text_raster_for(pc, n->ts.size);
+    const bool placed = pc->has_xf && tr.placed;   /* under a zoom and a move: each glyph goes to its place on the screen's own pixel grid */
+    float scale = placed ? pc->scale : pc->scale * tr.k;   /* layout units to the pixels the bitmaps are made of */
+    float px_size = tr.px;
     const float inv_alpha = 1.f / (float)GP_ATLAS_SIZE, inv_color = 1.f / (float)GP_COLOR_ATLAS_SIZE, inv_lcd = 1.f / (float)GP_LCD_ATLAS_SIZE;
-    int lcd = pc->has_xf || pc->depth > 0 ? 0 : gp_text_lcd_order(pc->ts, scale);   /* (the stripes of a rotated or scaled glyph are not the screen's; in a layer
-                                                                                      * there is nothing under the text to blend each channel with) */
+    /* (the stripes of a turned or stretched glyph are not the screen's; in a layer there is nothing under the text to blend each channel with) */
+    int lcd = (pc->has_xf && !placed) || pc->depth > 0 ? 0 : gp_text_lcd_order(pc->ts, pc->scale);
 
     for (int li = 0; li < nlines; li++) {
         const gp_text_line *ln = &lines[li];
@@ -755,11 +793,17 @@ static void paint_text(paint_ctx *pc, gp_el *n, float x, float y, rect clip, flo
 
         for (int gi = 0; gi < ng; gi++) {
             int pixel, bin;
-            gp_text_snap_x(pc->ts, glyphs[gi].font, px_size, (line_x + glyphs[gi].x) * scale, &pixel, &bin);
+            float ox = line_x + glyphs[gi].x, oy = baseline + glyphs[gi].y;   /* the glyph's origin in the layout */
+            if (placed) {   /* and where the transform puts it */
+                float tx = pc->xf.a * ox + pc->xf.c * oy + pc->xf.tx, ty = pc->xf.b * ox + pc->xf.d * oy + pc->xf.ty;
+                ox = tx;
+                oy = ty;
+            }
+            gp_text_snap_x(pc->ts, glyphs[gi].font, px_size, ox * scale, &pixel, &bin);
             gp_glyph_entry e = gp_text_glyph_lcd(pc->ts, glyphs[gi].font, glyphs[gi].glyph, px_size, bin, lcd);
             if (e.w == 0) continue;
             float gx = (float)pixel + e.left;
-            float gy = roundf((baseline + glyphs[gi].y) * scale) - e.top;
+            float gy = roundf(oy * scale) - e.top;
             gp_instance inst = { 0 };
             set4(inst.bounds, gx / scale, gy / scale, e.w / scale, e.h / scale);
             set_clip(&inst, clip);
@@ -772,7 +816,8 @@ static void paint_text(paint_ctx *pc, gp_el *n, float x, float y, rect clip, flo
                 set_color(inst.color, n->ts.color, opacity);
                 inst.kind = e.lcd ? GP_PRIM_LCD_GLYPH : GP_PRIM_GLYPH;
             }
-            push(pc, &inst);
+            if (placed) push_placed(pc, &inst);
+            else push(pc, &inst);
         }
     }
 }

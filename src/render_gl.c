@@ -104,7 +104,7 @@ static const char *vs_src =
     /* a glyph under a transform that is more than a move: a pixel of the window spans parts of several texels, so it is sampled between them (fs: glyph_texel), and its
      * quad grows by a pixel so that the ink fades out at the bitmap's edge instead of being cut by the quad's (where a pixel's centre on that edge decides) */
     "  bool turned_glyph = (kind == 2.0 || kind == 3.0 || kind == 4.0) && (a_xf0 != vec4(0.0) || a_xf1.z != 0.0 || a_xf1.w != 0.0 || a_xf2.x != 0.0);\n"
-    "  if (turned_glyph) pad = 1.0 / u_scale;\n"
+    "  if (turned_glyph) pad = max(1.0, 1.0 / max(sqrt(abs((1.0 + a_xf0.x) * (1.0 + a_xf0.w) - a_xf0.y * a_xf0.z)), 0.01)) / u_scale;\n"   /* (a pixel where it is seen) */
     "  vec2 size = a_bounds.zw + 2.0 * pad;\n"
     "  vec2 pos0 = a_bounds.xy - pad + corner * size;\n"   /* where it is in the layout, before the transform */
     "  vec2 pos = pos0 + vec2(a_xf0.x * pos0.x + a_xf0.z * pos0.y + a_xf1.x, a_xf0.y * pos0.x + a_xf0.w * pos0.y + a_xf1.y);\n"
