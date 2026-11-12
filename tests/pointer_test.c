@@ -1,6 +1,8 @@
 /*
  * The pointer, in three parts. Needs a display.
  *  - A drag's events carry the modifiers held at that moment (each move, and the release), not those of the press.
+ *  - Every button drags and is released (left, middle, right), each with its own capture: two held at once, on different elements, each get
+ *    their moves and their own release; a click is still the left button's.
  *  - A drag stays with the element pressed: three boxes, the pressed one raised to the end of its siblings (as a rack raises the panel being dragged),
  *    then two moves and a release, each followed by a rebuild. The handlers' data is in the frame's arena (as a C++ lambda's captures are), so the
  *    drag must keep that frame's data too. Without keys and with them; and once more with the pressed box gone from the tree while it is dragged.
@@ -29,7 +31,7 @@ static gp_app *app;
 static gp_co *co_;
 static gp_entity g_root;
 
-enum { MODE_MODS, MODE_RAISE, MODE_HOVER };
+enum { MODE_MODS, MODE_BUTTONS, MODE_RAISE, MODE_HOVER };
 static int g_mode;
 
 /* ---- modifiers */
@@ -41,6 +43,23 @@ static void mods_drag(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *da
     if (g_ndrag_mods < 8) g_drag_mods[g_ndrag_mods++] = ev->mods;
 }
 static void mods_up(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *data) { g_up_mods = ev->mods; }
+
+/* ---- buttons */
+static char g_blog[512];
+
+static void blog(char what, const gp_mouse_event *ev, void *data) {
+    size_t n = strlen(g_blog);
+    snprintf(g_blog + n, sizeof g_blog - n, "%s%s%c%d", n ? " " : "", (const char *)data, what, ev->button);
+}
+static void b_down(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *data) { blog('d', ev, data); }
+static void b_drag(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *data) { blog('m', ev, data); gp_notify(cx); }
+static void b_up(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *data) { blog('u', ev, data); }
+static void b_click(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *data) { blog('c', ev, data); }
+
+static gp_node *button_box(const char *name, float left) {
+    return gp_div(gp_absolute(), gp_left(left), gp_top(20), gp_w(100), gp_h(100), gp_bg(gp_rgb(0x445566)), gp_on_mouse_down_data(b_down, (void *)name),
+                  gp_on_drag_data(b_drag, (void *)name), gp_on_mouse_up_data(b_up, (void *)name), gp_on_click_data(b_click, (void *)name));
+}
 
 /* ---- raise */
 static int g_order[3] = { 0, 1, 2 };
@@ -123,6 +142,7 @@ static gp_node *root(void *self, gp_ctx *cx) {
     case MODE_MODS:
         return gp_div(gp_size_full(), gp_div(gp_absolute(), gp_left(20), gp_top(20), gp_w(100), gp_h(100), gp_bg(gp_rgb(0x445566)),
                                              gp_on_mouse_down(mods_down), gp_on_drag(mods_drag), gp_on_mouse_up(mods_up)));
+    case MODE_BUTTONS: return gp_div(gp_size_full(), button_box("A", 20), button_box("B", 150));
     case MODE_RAISE: {
         gp_node *kids[3];
         for (int i = 0; i < 3; i++) kids[i] = raise_box(g_order[i]);
@@ -170,6 +190,52 @@ static void test_mods(void) {
     uint32_t want[4] = { 0, GP_MOD_SHIFT, GP_MOD_CTRL | GP_MOD_SHIFT, GP_MOD_ALT };
     for (int i = 0; i < 4 && i < g_ndrag_mods; i++) CHECK(g_drag_mods[i] == want[i], "drag %d: mods %#x, want %#x", i, g_drag_mods[i], want[i]);
     CHECK(g_up_mods == GP_MOD_CTRL, "the release sees ctrl: %#x", g_up_mods);
+}
+
+static void simb(int kind, float x, float y, int button) {
+    gp_simulate_mouse_button(app, kind, x, y, button, 1, 0);
+    wait_draws(3);
+}
+
+static void expect_buttons(const char *want, const char *what) {
+    CHECK(strcmp(g_blog, want) == 0, "%s: '%s', want '%s'", what, g_blog, want);
+    g_blog[0] = 0;
+}
+
+static void test_buttons(void) {
+    set_mode(MODE_BUTTONS);
+    g_blog[0] = 0;
+    /* A is at 20..120, B at 150..250 (y 20..120) */
+    static const char *const alone[4] = { 0, "Ad1 Am1 Am1 Au1 Ac1", "Ad2 Am2 Am2 Au2", "Ad3 Am3 Am3 Au3" };
+    for (int b = GP_MOUSE_LEFT; b <= GP_MOUSE_RIGHT; b++) {
+        simb(GP_SIM_MOVE, 50, 50, 0);
+        simb(GP_SIM_DOWN, 50, 50, b);
+        simb(GP_SIM_MOVE, 60, 60, 0);
+        simb(GP_SIM_MOVE, 300, 250, 0);   /* (outside the element: still its drag) */
+        simb(GP_SIM_MOVE, 60, 60, 0);     /* (back, so that the left button's release is a click) */
+        g_blog[strlen(g_blog) - 4] = 0;   /* (that third move is not looked at) */
+        simb(GP_SIM_UP, 60, 60, b);
+        expect_buttons(alone[b], b == 1 ? "left alone" : b == 2 ? "middle alone" : "right alone");
+        simb(GP_SIM_MOVE, 70, 70, 0);
+        expect_buttons("", "no drag after the release");
+    }
+    /* two at once: left on A, then right on B */
+    simb(GP_SIM_DOWN, 50, 50, GP_MOUSE_LEFT);
+    simb(GP_SIM_DOWN, 200, 50, GP_MOUSE_RIGHT);
+    simb(GP_SIM_MOVE, 210, 60, 0);
+    expect_buttons("Ad1 Bd3 Am1 Bm3", "left held on A, right on B: a move drags both");
+    simb(GP_SIM_UP, 210, 60, GP_MOUSE_LEFT);
+    simb(GP_SIM_MOVE, 220, 60, 0);
+    expect_buttons("Au1 Bm3", "left released (on B: no click): the right button's drag goes on");
+    simb(GP_SIM_UP, 50, 50, GP_MOUSE_RIGHT);
+    simb(GP_SIM_MOVE, 60, 60, 0);
+    expect_buttons("Bu3", "right released over A: B's release, and nothing after");
+    /* the same button pressed twice without a release between (one lost outside the window): the second press takes over */
+    simb(GP_SIM_DOWN, 50, 50, GP_MOUSE_RIGHT);
+    simb(GP_SIM_DOWN, 200, 50, GP_MOUSE_RIGHT);
+    simb(GP_SIM_MOVE, 210, 60, 0);
+    simb(GP_SIM_UP, 210, 60, GP_MOUSE_RIGHT);
+    expect_buttons("Ad3 Bd3 Bm3 Bu3", "a press without the release of the last one");
 }
 
 static void test_raise(bool keys, bool hide) {
@@ -245,6 +311,7 @@ static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     co_ = co;
     wait_draws(3);
     test_mods();
+    test_buttons();
     test_raise(false, false);
     test_raise(true, false);
     test_raise(false, true);

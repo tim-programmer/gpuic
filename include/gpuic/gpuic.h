@@ -1284,7 +1284,12 @@ gp_node *gp_on_mouse_down_data(gp_mouse_fn fn, void *data);
  * the mouse until release: every move goes to on_drag and the release to on_mouse_up, with
  * `local` relative to the element, even outside it, and `mods` the modifiers held at that moment.
  * The capture keeps the handlers (and their data) of the element pressed until the release, however
- * the tree changes meanwhile: rebuilt, moved among its siblings, or gone. */
+ * the tree changes meanwhile: rebuilt, moved among its siblings, or gone.
+ * Any button does this (left, middle, right), and `button` says which: in on_mouse_down the one pressed, in on_drag the one
+ * held, in on_mouse_up the one released. Each button has its own capture, so two can be held at once, on the same element or
+ * on different ones: a move is then one on_drag for each, and each release goes to the element that button pressed. A handler
+ * that is only about the left button checks `ev->button == GP_MOUSE_LEFT`. (gp_on_click, the pressed style and focus on
+ * press remain the left button's.) */
 gp_node *gp_on_drag(gp_mouse_fn fn);
 gp_node *gp_on_drag_data(gp_mouse_fn fn, void *data);
 gp_node *gp_on_mouse_up(gp_mouse_fn fn);

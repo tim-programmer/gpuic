@@ -2291,6 +2291,7 @@ static void on_mouse_down(void *self, gp_ctx *cx, const gp_mouse_event *ev, void
 
 static void on_drag(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *data) {
     TextInput *ti = self;
+    if (ev->button != GP_MOUSE_LEFT) return;   /* (the middle and right buttons drag too; only the left one selects) */
     gp_arena tmp = { .chunk_size = 16384 };
     gp_point c = to_content(ti, cx, ev->local);
     bool up;

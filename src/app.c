@@ -187,7 +187,7 @@ static void renderer_release(gp_app *app, gp_window *current) {
 
 static void window_destroy(gp_app *app, gp_window *w) {
     gp_platform_close_window(app, w);
-    gp_arena_release(w->capture.hold);
+    for (int b = 0; b < 3; b++) gp_arena_release(w->capture[b].hold);
     gp_arena_release(w->hover_hold);
     free(w->hovers.items);
     free(w->hovers_new.items);
@@ -227,10 +227,10 @@ void gp_window_on_mouse_leave(gp_window *w) {
 
 /* ---------------------------------------------------------------- input */
 
-static void capture_end(gp_window *w) {
-    w->capture.active = false;
-    gp_arena_release(w->capture.hold);
-    w->capture.hold = 0;
+static void capture_end(gp_window *w, int button) {
+    w->capture[button - 1].active = false;
+    gp_arena_release(w->capture[button - 1].hold);
+    w->capture[button - 1].hold = 0;
 }
 
 /* `origin` is the absolute position of the element the handler belongs to, for `local`. */
@@ -298,8 +298,8 @@ void gp_window_on_mouse_move(gp_window *w, float x, float y, uint32_t mods) {
     w->mouse_in = true;
     w->dirty_paint = true;
     if (w->drag_key) gp_scroll_drag_to(w, w->mouse);
-    if (w->capture.active) /* a press is held on an element with gp_on_drag */
-        fire(w, &w->capture.move, w->mouse, w->capture.origin, GP_MOUSE_LEFT, 0, mods);
+    for (int b = GP_MOUSE_LEFT; b <= GP_MOUSE_RIGHT; b++)   /* each button held on an element with gp_on_drag: its own drag */
+        if (w->capture[b - 1].active) fire(w, &w->capture[b - 1].move, w->mouse, w->capture[b - 1].origin, b, 0, mods);
     update_cursor(w);
 }
 
@@ -329,6 +329,7 @@ void gp_window_on_scroll(gp_window *w, float x, float y, float dx, float dy, uin
 
 void gp_window_on_mouse_button(gp_window *w, float x, float y, int button, bool down, int clicks,
                                uint32_t mods) {
+    if (button < GP_MOUSE_LEFT || button > GP_MOUSE_RIGHT) return;
     gp_point p = { x, y };
     w->mouse = p;
     w->mouse_in = true;
@@ -347,30 +348,33 @@ void gp_window_on_mouse_button(gp_window *w, float x, float y, int button, bool 
         if (gp_hit_test(w->tree, p, GP_HIT_MOUSE_DOWN, &hit)) {
             gp_point origin = { p.x - (hit.qx - hit.ox), p.y - (hit.qy - hit.oy) };   /* (so that p - origin is where it is in the element, through a transform too) */
             fire(w, &hit.el->on_mouse_down, p, origin, button, clicks, mods);
-            if (button == GP_MOUSE_LEFT && (hit.el->on_drag.fn || hit.el->on_mouse_up.fn)) {
+            if (hit.el->on_drag.fn || hit.el->on_mouse_up.fn) {
                 /* the drag stays with this element's handlers until the release, however the tree changes meanwhile (the element may be rebuilt, moved
                  * among its siblings, or gone). Their data may be in the arena of the frame that built them (a C++ lambda's captures are): a hold keeps
-                 * that until the release. */
-                capture_end(w);
-                w->capture.active = true;
-                w->capture.move = hit.el->on_drag;
-                w->capture.up = hit.el->on_mouse_up;
-                w->capture.origin = origin;
-                w->capture.hold = gp_arena_hold();
+                 * that until the release. Each button has its own: the one pressed drags and is released, whatever the others do meanwhile. */
+                capture_end(w, button);
+                w->capture[button - 1].active = true;
+                w->capture[button - 1].move = hit.el->on_drag;
+                w->capture[button - 1].up = hit.el->on_mouse_up;
+                w->capture[button - 1].origin = origin;
+                w->capture[button - 1].hold = gp_arena_hold();
             }
         }
-    } else if (button == GP_MOUSE_LEFT) {
-        gp_scroll_stop_repeat(w);
-        if (w->drag_key) {
-            w->drag_key = 0;
-            return;
+    } else {
+        if (button == GP_MOUSE_LEFT) {
+            gp_scroll_stop_repeat(w);
+            if (w->drag_key) {
+                w->drag_key = 0;
+                return;
+            }
+            w->pressed = false;
         }
-        w->pressed = false;
-        if (w->capture.active) {
-            w->capture.active = false;
-            fire(w, &w->capture.up, p, w->capture.origin, button, clicks, mods);
-            capture_end(w);
+        if (w->capture[button - 1].active) {
+            w->capture[button - 1].active = false;
+            fire(w, &w->capture[button - 1].up, p, w->capture[button - 1].origin, button, clicks, mods);
+            capture_end(w, button);
         }
+        if (button != GP_MOUSE_LEFT) return;
         /* A click needs press and release on the same element. */
         if (w->down_path && gp_hit_test(w->tree, p, GP_HIT_CLICK, &hit) &&
             hit.path == w->down_path)

@@ -1413,7 +1413,9 @@ These are general, and available to your own elements:
   pressed, and their data, until the release, however the tree changes meanwhile: the element rebuilt, moved among its siblings (a rack raising the
   panel being dragged), or gone. Their data may live in the arena of the frame that built them (a C++ lambda's captures do, and so does whatever
   `gp_frame_alloc` gave): a *hold* on the arenas (`gp_arena_hold` in `src/arena.c`) keeps what they held at the press until the release; an arena
-  reset meanwhile sets its chunks aside and starts on others, which go back to a small pool once the hold is let go. `tests/pointer_test.c`.
+  reset meanwhile sets its chunks aside and starts on others, which go back to a small pool once the hold is let go. Every button drags and is released (left, middle, right; `ev->button` says
+  which), each with its own capture, so two can be held at once, on one element or on two: a handler that is only about the left button checks
+  `ev->button == GP_MOUSE_LEFT`. `tests/pointer_test.c`.
 * `gp_clipboard_get / _set`, `gp_cursor_text()` (I-beam), `gp_mods(array, n)` (a runtime-sized list of
   modifiers), `gp_scroll_viewport`, `gp_on_ime` + `gp_ime_rect`, `gp_on_layout` (see Soft wrap), and **`gp_on_scroll(fn)`**: called with a
   scroller's offset whenever it moves (wheel, thumb, track click, scroll-into-view, smooth steps) and after every layout (where

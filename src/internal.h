@@ -1002,7 +1002,7 @@ struct gp_window {
     gp_anim_table anims;
     gp_hover_set hovers, hovers_new;   /* gp_on_hover: the elements the pointer is in, as last told; and a buffer */
     uint32_t hover_hold;   /* keeps the data of the handlers in `hovers` (gp_arena_hold) */
-    struct { bool active; gp_handler move, up; gp_point origin; uint32_t hold; } capture; /* gp_on_drag: the pressed element's handlers, their frame held until the release */
+    struct { bool active; gp_handler move, up; gp_point origin; uint32_t hold; } capture[3]; /* gp_on_drag: for each button (GP_MOUSE_* - 1), the pressed element's handlers, their frame held until the release */
     uint64_t drag_key;     /* scroll key whose thumb is being dragged, 0 = none */
     uint64_t page_key;     /* scroll key whose track the button is held on (it pages again and again), 0 = none */
     int page_axis;
