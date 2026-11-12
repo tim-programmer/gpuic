@@ -16,7 +16,7 @@ find_package(PkgConfig QUIET)
 
 # (The installed gpuicConfig.cmake sets both as plain variables first.)
 if(NOT DEFINED GPUIC_DEPENDENCIES)
-  set(GPUIC_DEPENDENCIES "AUTO" CACHE STRING "Where gpuic gets SDL3, FreeType, HarfBuzz and FriBidi: AUTO, SYSTEM or FETCH")
+  set(GPUIC_DEPENDENCIES "FETCH" CACHE STRING "Where gpuic gets SDL3, FreeType, HarfBuzz and FriBidi: AUTO, SYSTEM or FETCH")
   set_property(CACHE GPUIC_DEPENDENCIES PROPERTY STRINGS AUTO SYSTEM FETCH)
 endif()
 if(NOT DEFINED GPUIC_FONTCONFIG)
