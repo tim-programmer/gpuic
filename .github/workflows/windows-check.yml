@@ -59,10 +59,11 @@ jobs:
         uses: ssciwr/setup-mesa-dist-win@v3
 
       # Window tests need a desktop. The windows-latest runner has one, so unlike
-      # the Linux job we do not need xvfb. A hung test is ended by ctest after 10 minutes.
+      # the Linux job we do not need xvfb. A crashing test prints what happened and exits (tests/win_crash.c);
+      # a hung one is ended by ctest after 5 minutes (the slowest tests take about one).
       - name: Test
         shell: pwsh
-        run: ctest --test-dir out/windows --output-on-failure -j 2 --timeout 600
+        run: ctest --test-dir out/windows --output-on-failure -j 2 --timeout 300
 
       - name: Upload the test log
         if: failure()
