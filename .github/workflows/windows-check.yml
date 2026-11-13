@@ -42,12 +42,16 @@ jobs:
       # gpuic's FETCH mode downloads and builds SDL3, FreeType, HarfBuzz, FriBidi.
       # This is the slowest step (~10-15 min on a cold runner) and the one most
       # likely to fail on MSVC (HarfBuzz enables C++, FriBidi has a custom CMake).
+      # (Release's flags with debug info: a crashing test prints its stack with names and lines, tests/win_crash.c)
       - name: Configure
         shell: pwsh
         run: |
           cmake -S . -B out/windows -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DGPUIC_DEPENDENCIES=FETCH
+            -DGPUIC_DEPENDENCIES=FETCH `
+            "-DCMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /Z7" `
+            "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /Z7" `
+            "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/DEBUG /OPT:REF /OPT:ICF"
 
       - name: Build
         shell: pwsh
