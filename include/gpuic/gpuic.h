@@ -20,8 +20,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+/* Watching file descriptors (gp_watch_fd, gp_await_fd, gp_co_read and the rest) is built on poll(2): where GP_HAS_FD
+ * is not defined, which today means Windows, those calls do not exist. */
+#ifndef _WIN32
+#define GP_HAS_FD 1
 #include <sys/socket.h>
 #include <sys/types.h>
+#endif
+
+/* Lets the compiler check a printf-style call's arguments against its format (GCC and clang). */
+#if defined(__GNUC__)
+#define GP_PRINTF(fmt_index, first_arg) __attribute__((format(printf, fmt_index, first_arg)))
+#else
+#define GP_PRINTF(fmt_index, first_arg)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -555,7 +567,9 @@ void gp_post(gp_app *app, gp_entity entity, gp_task_fn fn, void *data);
 
 /* ---- file descriptors ------------------------------------------------------------------- */
 
-/* Pipes, sockets, eventfds, inotify, a child's stdout: anything poll(2) understands. The event loop
+/* Not on Windows (see GP_HAS_FD at the top).
+ *
+ * Pipes, sockets, eventfds, inotify, a child's stdout: anything poll(2) understands. The event loop
  * wakes when a watched descriptor is ready (and only then: nothing is polled on a timer), and the
  * callback runs on the main thread like every other one here.
  *
@@ -574,8 +588,10 @@ void gp_post(gp_app *app, gp_entity entity, gp_task_fn fn, void *data);
 enum { GP_FD_READ = 1, GP_FD_WRITE = 2, GP_FD_ERROR = 4, GP_FD_HUP = 8, GP_FD_INVALID = 16 };
 typedef void (*gp_fd_fn)(void *self, gp_ctx *cx, int fd, int events, void *data);
 
+#ifdef GP_HAS_FD
 gp_task gp_watch_fd(gp_ctx *cx, int fd, int events, gp_fd_fn fn, void *data);
 bool gp_fd_set_nonblocking(int fd);
+#endif
 
 /* ---- coroutines: async/await for C ------------------------------------------------------ */
 
@@ -610,11 +626,13 @@ bool gp_co_cancelled(const gp_co *co);
  * happened, 0 if it timed out. The rest are the usual calls for a non-blocking descriptor
  * (gp_fd_set_nonblocking) that wait instead of failing with EAGAIN; they return false / -1 with
  * errno == ECANCELED if the coroutine is cancelled. */
+#ifdef GP_HAS_FD
 bool gp_await_fd(gp_co *co, int fd, int events, double timeout, int *revents);
 ssize_t gp_co_read(gp_co *co, int fd, void *buf, size_t len);          /* >= 1 bytes, 0 at end of file, -1 on error */
 ssize_t gp_co_write(gp_co *co, int fd, const void *buf, size_t len);   /* all of it, or -1 */
 int gp_co_accept(gp_co *co, int listen_fd);                            /* a non-blocking socket, or -1 */
 int gp_co_connect(gp_co *co, int fd, const struct sockaddr *addr, socklen_t addrlen);   /* 0 or -1 */
+#endif
 
 /* ---------------------------------------------------------------- text input widget */
 
@@ -682,7 +700,7 @@ bool gp_text_input_row_rtl(gp_app *app, gp_entity input, size_t row); /* does th
 /* Valid until the next time the window's view tree is rebuilt. Call only while
  * building elements (inside a gp_render_fn). */
 void *gp_frame_alloc(size_t size);
-const char *gp_fmt(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+const char *gp_fmt(const char *fmt, ...) GP_PRINTF(1, 2);
 
 /* ---------------------------------------------------------------- elements */
 

@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include "compat.h"
 
 static int failures;
 #define CHECK(cond, ...)                                                               \
@@ -150,7 +150,7 @@ static void ready(gp_app *a, void *userdata) {
 }
 
 int main(void) {
-    if (access("/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf", R_OK) != 0) {
+    if (!test_file_exists("/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf")) {
         printf("variations_test: skipped, Adwaita Sans is not installed\n");
         return 0;
     }

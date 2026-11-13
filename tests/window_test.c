@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include "compat.h"
 
 static int failures;
 #define CHECK(cond, ...)                                                               \
@@ -80,12 +80,14 @@ static void bg_waiter(gp_co *co, void *self, gp_ctx *cx, void *data) {
     c->unwound = !ok;
     c->window_in_cleanup = cx->window;
 }
+#ifdef GP_HAS_FD
 static void on_fd(void *self, gp_ctx *cx, int fd, int events, void *data) {
     Count *c = data;
     c->calls++;
     char b[8];
     while (read(fd, b, sizeof b) > 0) {}
 }
+#endif
 
 static void driver(gp_co *co, void *self, gp_ctx *appcx, void *data) {
     gp_ctx cx_a = gp_ctx_for_window(app, win_a, GP_ENTITY_NULL);
@@ -105,11 +107,15 @@ static void driver(gp_co *co, void *self, gp_ctx *appcx, void *data) {
     gp_next_frame(&cx_b, frame_loop, &frames_b);
     gp_task an_a = gp_animate(&cx_a, 30, GP_EASE_LINEAR, anim_cb, &ca);
     gp_animate(&cx_b, 0.15, GP_EASE_LINEAR, anim_cb, &cb);
+    static Count fd_a;
+#ifdef GP_HAS_FD
     int pipe_fd[2];
     CHECK(pipe(pipe_fd) == 0, "pipe");
     gp_fd_set_nonblocking(pipe_fd[0]);
-    static Count fd_a;
     gp_task w_a = gp_watch_fd(&cx_a, pipe_fd[0], GP_FD_READ, on_fd, &fd_a);
+#else   /* no descriptor watches here: a task that is over stands in, so the checks below hold as they are */
+    gp_task w_a = { 0 };
+#endif
     gp_task c_sleep = gp_spawn(&cx_a, sleeper, &co_sleep);
     gp_task c_bg = gp_spawn(&cx_a, bg_waiter, &co_bg);
 
@@ -123,9 +129,11 @@ static void driver(gp_co *co, void *self, gp_ctx *appcx, void *data) {
     CHECK(from_layout.seen == win_b, "a timer from an event handler's ctx belongs to that window (%p, want %p)", (void *)from_layout.seen, (void *)win_b);
     CHECK(an_a.id && gp_task_active(app, an_a) && ca.anim_calls >= 5, "A's animation runs");
     CHECK(gp_task_active(app, c_sleep) && gp_task_active(app, c_bg), "A's coroutines run");
+#ifdef GP_HAS_FD
     CHECK(write(pipe_fd[1], "x", 1) == 1, "write");
     gp_sleep(co, 0.1);
     CHECK(fd_a.calls == 1, "A's descriptor watch called %d times", fd_a.calls);
+#endif
 
     /* A closes */
     gp_window_close(win_a);
@@ -140,7 +148,9 @@ static void driver(gp_co *co, void *self, gp_ctx *appcx, void *data) {
 
     int a_calls = ca.calls, a_anim = ca.anim_calls, a_frames = frames_a.calls, fdc = fd_a.calls;
     int b_calls = cb.calls, app_calls = capp.calls, b_frames = frames_b.calls;
+#ifdef GP_HAS_FD
     CHECK(write(pipe_fd[1], "y", 1) == 1, "write");
+#endif
     gp_sleep(co, 0.2);
     CHECK(ca.calls == a_calls, "A's timer ticked after the window closed (%d -> %d)", a_calls, ca.calls);
     CHECK(ca.anim_calls == a_anim && !ca.anim_finished, "A's animation went on (%d -> %d calls, finished %d)", a_anim, ca.anim_calls, ca.anim_finished);
@@ -160,8 +170,10 @@ static void driver(gp_co *co, void *self, gp_ctx *appcx, void *data) {
     CHECK(win_c != NULL, "could not open a third window");
     gp_sleep(co, 0.15);
     CHECK(ca.calls == a_calls, "A's timer ticked after a new window took its place");
+#ifdef GP_HAS_FD
     close(pipe_fd[0]);
     close(pipe_fd[1]);
+#endif
 
     /* the last two windows close: the app ends, with B's and the app's timers still running (shutdown clears them) */
     gp_window_close(win_b);

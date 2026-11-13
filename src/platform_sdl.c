@@ -18,6 +18,7 @@ typedef struct {
 } sdl_window;
 
 static bool g_ignore_real_mouse;   /* GPUIC_IGNORE_REAL_MOUSE, see real_mouse() */
+static bool g_ignore_real_keys;    /* GPUIC_IGNORE_REAL_KEYS, see real_key() */
 static Uint32 g_wake_event; /* custom event used to wake the loop from other threads */
 
 static sdl_platform *plat(gp_app *app) { return app->platform; }
@@ -31,6 +32,7 @@ bool gp_platform_init(gp_app *app) {
     g_wake_event = SDL_RegisterEvents(1);
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");   /* a finger is not a mouse: it scrolls (gp_scroll_touch) and a tap is made a click there */
     g_ignore_real_mouse = getenv("GPUIC_IGNORE_REAL_MOUSE") != NULL;
+    g_ignore_real_keys = getenv("GPUIC_IGNORE_REAL_KEYS") != NULL;
     sdl_platform *p = calloc(1, sizeof *p);
     p->cursors[GP_CURSOR_DEFAULT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     p->cursors[GP_CURSOR_POINTER] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
@@ -233,6 +235,11 @@ static uint32_t map_mods(SDL_Keymod m) {
            ((m & SDL_KMOD_SHIFT) ? GP_MOD_SHIFT : 0) | ((m & SDL_KMOD_GUI) ? GP_MOD_SUPER : 0);
 }
 
+/* GPUIC_IGNORE_REAL_KEYS=1 (test runs): drop what the physical keyboard does, keep the keys and text the tests inject.
+ * Injected keys carry SYNTH_MOUSE_ID in `which`; injected text is told by where it is stored (inject_text_slot). */
+static bool real_key(Uint32 which) { return g_ignore_real_keys && which != SYNTH_MOUSE_ID; }
+static bool injected_text(const char *text);
+
 static void dispatch(gp_app *app, const SDL_Event *e) {
     gp_window *w;
     switch (e->type) {
@@ -295,6 +302,7 @@ static void dispatch(gp_app *app, const SDL_Event *e) {
         break;
     }
     case SDL_EVENT_KEY_DOWN: {
+        if (real_key(e->key.which)) break;
         char buf[8];
         const char *name = key_name(e->key.key, buf);
         if (name && (w = gp_app_window_by_id(app, e->key.windowID)))
@@ -302,6 +310,7 @@ static void dispatch(gp_app *app, const SDL_Event *e) {
         break;
     }
     case SDL_EVENT_KEY_UP: {
+        if (real_key(e->key.which)) break;
         char buf[8];
         const char *name = key_name(e->key.key, buf);
         if (name && (w = gp_app_window_by_id(app, e->key.windowID))) gp_window_on_key_up(w, name, map_mods(e->key.mod));
@@ -311,6 +320,7 @@ static void dispatch(gp_app *app, const SDL_Event *e) {
         if (!app->debug_ignore_platform_ime && (w = gp_app_window_by_id(app, e->edit.windowID))) gp_window_on_ime(w, e->edit.text, e->edit.start);
         break;
     case SDL_EVENT_TEXT_INPUT:
+        if (g_ignore_real_keys && !injected_text(e->text.text)) break;
         if ((w = gp_app_window_by_id(app, e->text.windowID))) gp_window_on_text(w, e->text.text);
         break;
     default:
@@ -321,13 +331,18 @@ static void dispatch(gp_app *app, const SDL_Event *e) {
 /* SDL keeps the `text` pointer of TEXT_INPUT / TEXT_EDITING events it is given instead of
  * copying it, so injected text needs storage that outlives the queue: a ring of buffers
  * (large enough that an event is long handled before its slot is reused). */
+enum { INJECT_SLOTS = 1024, INJECT_SIZE = 256 };
+static char g_inject_ring[INJECT_SLOTS][INJECT_SIZE];
+
 static char *inject_text_slot(const char *s) {
-    enum { SLOTS = 1024, SIZE = 256 };
-    static char ring[SLOTS][SIZE];
     static unsigned next;
-    char *buf = ring[next++ % SLOTS];
-    snprintf(buf, SIZE, "%s", s);
+    char *buf = g_inject_ring[next++ % INJECT_SLOTS];
+    snprintf(buf, INJECT_SIZE, "%s", s);
     return buf;
+}
+
+static bool injected_text(const char *text) {
+    return (uintptr_t)text >= (uintptr_t)g_inject_ring && (uintptr_t)text < (uintptr_t)g_inject_ring + sizeof g_inject_ring;
 }
 
 /* Test hook: queue a real SDL key-down (plus the text event SDL would add when text
@@ -343,6 +358,7 @@ void gp_platform_inject_key(gp_window *w, const char *key, uint32_t mods) {
     memset(&e, 0, sizeof e); /* `= { 0 }` would only initialize the union's first member */
     e.type = SDL_EVENT_KEY_DOWN;
     e.key.windowID = w->id;
+    e.key.which = SYNTH_MOUSE_ID;
     e.key.key = k;
     e.key.down = true;
     e.key.mod = ((mods & GP_MOD_CTRL) ? SDL_KMOD_LCTRL : 0) | ((mods & GP_MOD_ALT) ? SDL_KMOD_LALT : 0) |
@@ -373,6 +389,7 @@ void gp_platform_inject_key_up(gp_window *w, const char *key, uint32_t mods) {
     memset(&e, 0, sizeof e);
     e.type = SDL_EVENT_KEY_UP;
     e.key.windowID = w->id;
+    e.key.which = SYNTH_MOUSE_ID;
     e.key.key = k;
     e.key.down = false;
     e.key.mod = ((mods & GP_MOD_CTRL) ? SDL_KMOD_LCTRL : 0) | ((mods & GP_MOD_ALT) ? SDL_KMOD_LALT : 0) |

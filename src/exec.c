@@ -12,12 +12,15 @@
  */
 #include "internal.h"
 
+#include "threads.h"
+
 #include <errno.h>
-#include <poll.h>
-#include <pthread.h>
-#include <sys/eventfd.h>
 #include <time.h>
+#ifdef GP_HAS_FD
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
+#endif
 
 enum { JOB_TIMER = 1, JOB_FRAME, JOB_ANIM, JOB_BG, JOB_CORO, JOB_FD };
 
@@ -67,15 +70,15 @@ struct gp_exec {
     uint64_t next_id;
     int64_t last_frame_ns;
 
-    pthread_mutex_t lock;   /* guards everything below */
-    pthread_cond_t cond;
+    gp_mutex lock;   /* guards everything below */
+    gp_cond cond;
     post_item *posts;
     size_t nposts, cap_posts;
     work_item *queue;
     size_t nqueue, cap_queue;
     uint64_t *completed;
     size_t ncompleted, cap_completed;
-    pthread_t *threads;
+    gp_thread *threads;
     int nthreads;
     bool shutdown;
 
@@ -84,7 +87,7 @@ struct gp_exec {
     fd_ready *fd_ready_list;
     size_t nfd_ready, cap_fd_ready;
     int wake_fd;            /* eventfd the poller also waits on: "the watch table changed" */
-    pthread_t poller;
+    gp_thread poller;
     bool poller_started;
 };
 typedef struct gp_exec gp_exec;
@@ -105,9 +108,18 @@ static int64_t g_skew_ns;
 void gp_debug_clock_skew(int64_t ns) { g_skew_ns = ns; }
 
 int64_t gp_now_ns(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER t;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t);
+    /* (whole seconds and the rest apart: ticks * 1e9 overflows 64 bits after a few hours of uptime) */
+    return (t.QuadPart / freq.QuadPart) * 1000000000ll + (t.QuadPart % freq.QuadPart) * 1000000000ll / freq.QuadPart + g_skew_ns;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000000ll + ts.tv_nsec + g_skew_ns;
+#endif
 }
 
 double gp_time(void) { return (double)gp_now_ns() / 1e9; }
@@ -129,8 +141,8 @@ gp_ctx gp_ctx_for_window(gp_app *app, gp_window *window, gp_entity entity) {
 void gp_exec_init(gp_app *app) {
     gp_exec *ex = calloc(1, sizeof *ex);
     ex->app = app;
-    pthread_mutex_init(&ex->lock, NULL);
-    pthread_cond_init(&ex->cond, NULL);
+    gp_mutex_init(&ex->lock);
+    gp_cond_init(&ex->cond);
     app->exec = ex;
 }
 
@@ -449,38 +461,38 @@ uint64_t gp_exec_wake_frame(gp_app *app, uint64_t co_job, double *time_out) {
 static void *worker(void *arg) {
     gp_exec *ex = arg;
     for (;;) {
-        pthread_mutex_lock(&ex->lock);
-        while (ex->nqueue == 0 && !ex->shutdown) pthread_cond_wait(&ex->cond, &ex->lock);
+        gp_mutex_lock(&ex->lock);
+        while (ex->nqueue == 0 && !ex->shutdown) gp_cond_wait(&ex->cond, &ex->lock);
         if (ex->shutdown) {
-            pthread_mutex_unlock(&ex->lock);
+            gp_mutex_unlock(&ex->lock);
             return NULL; /* anything still queued is reclaimed by gp_exec_shutdown */
         }
         work_item it = ex->queue[0];
         memmove(ex->queue, ex->queue + 1, (--ex->nqueue) * sizeof *ex->queue);
-        pthread_mutex_unlock(&ex->lock);
+        gp_mutex_unlock(&ex->lock);
 
         it.work(it.data);
 
-        pthread_mutex_lock(&ex->lock);
+        gp_mutex_lock(&ex->lock);
         VEC_PUSH(ex->completed, ex->ncompleted, ex->cap_completed, it.job_id);
-        pthread_mutex_unlock(&ex->lock);
+        gp_mutex_unlock(&ex->lock);
         gp_platform_wake(ex->app);
     }
 }
 
 static void submit_work(gp_exec *ex, gp_job *j, gp_work_fn work, void *data) {
     if (!ex->nthreads) {
-        long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-        int n = cpus < 2 ? 2 : cpus > 8 ? 8 : (int)cpus;
+        int cpus = gp_cpu_count();
+        int n = cpus < 2 ? 2 : cpus > 8 ? 8 : cpus;
         ex->threads = calloc((size_t)n, sizeof *ex->threads);
         for (int i = 0; i < n; i++)
-            if (pthread_create(&ex->threads[ex->nthreads], NULL, worker, ex) == 0) ex->nthreads++;
+            if (gp_thread_create(&ex->threads[ex->nthreads], worker, ex)) ex->nthreads++;
     }
     j->bg_running = true;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     VEC_PUSH(ex->queue, ex->nqueue, ex->cap_queue, ((work_item){ j->id, work, data }));
-    pthread_cond_signal(&ex->cond);
-    pthread_mutex_unlock(&ex->lock);
+    gp_cond_signal(&ex->cond);
+    gp_mutex_unlock(&ex->lock);
 }
 
 gp_task gp_background(gp_ctx *cx, gp_work_fn work, gp_task_fn done, void *data,
@@ -502,13 +514,15 @@ uint64_t gp_exec_wake_background(gp_app *app, uint64_t co_job, gp_work_fn work, 
 
 void gp_post(gp_app *app, gp_entity entity, gp_task_fn fn, void *data) {
     gp_exec *ex = app->exec;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     VEC_PUSH(ex->posts, ex->nposts, ex->cap_posts, ((post_item){ entity, fn, data }));
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
     gp_platform_wake(app);
 }
 
 /* ---------------------------------------------------------------- file descriptors */
+
+#ifdef GP_HAS_FD
 
 /* A thread that does nothing but poll(2) the armed descriptors and the control eventfd. When one is ready it
  * is disarmed, queued for the main thread, and the event loop is woken; the main thread owns jobs, runs the
@@ -542,9 +556,9 @@ static void *poller_main(void *arg) {
     uint64_t *ids = NULL;
     size_t cap = 0;
     for (;;) {
-        pthread_mutex_lock(&ex->lock);
+        gp_mutex_lock(&ex->lock);
         if (ex->shutdown) {
-            pthread_mutex_unlock(&ex->lock);
+            gp_mutex_unlock(&ex->lock);
             break;
         }
         if (cap < ex->nwatches + 1) {
@@ -561,7 +575,7 @@ static void *poller_main(void *arg) {
             pfds[n] = (struct pollfd){ ex->watches[i].fd, ex->watches[i].events, 0 };
             ids[n++] = ex->watches[i].job_id;
         }
-        pthread_mutex_unlock(&ex->lock);
+        gp_mutex_unlock(&ex->lock);
 
         int r = poll(pfds, (nfds_t)n, -1);
         if (r < 0) continue;   /* EINTR */
@@ -571,7 +585,7 @@ static void *poller_main(void *arg) {
             (void)rr;
         }
         bool any = false;
-        pthread_mutex_lock(&ex->lock);
+        gp_mutex_lock(&ex->lock);
         for (size_t k = 1; k < n; k++) {
             if (!pfds[k].revents) continue;
             for (size_t i = 0; i < ex->nwatches; i++) {   /* the table may have changed while polling */
@@ -583,7 +597,7 @@ static void *poller_main(void *arg) {
                 break;
             }
         }
-        pthread_mutex_unlock(&ex->lock);
+        gp_mutex_unlock(&ex->lock);
         if (any) gp_platform_wake(ex->app);
     }
     free(pfds);
@@ -598,7 +612,7 @@ static void poller_start(gp_exec *ex) {
         fprintf(stderr, "gpuic: eventfd failed: %s\n", strerror(errno));
         return;
     }
-    if (pthread_create(&ex->poller, NULL, poller_main, ex) != 0) {
+    if (!gp_thread_create(&ex->poller, poller_main, ex)) {
         close(ex->wake_fd);
         return;
     }
@@ -608,32 +622,32 @@ static void poller_start(gp_exec *ex) {
 static void watch_add(gp_exec *ex, const gp_job *j) {
     poller_start(ex);
     if (!ex->poller_started) return;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     VEC_PUSH(ex->watches, ex->nwatches, ex->cap_watches, ((fd_watch){ j->id, j->fd, to_poll(j->fd_events), true }));
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
     poke(ex);
 }
 
 static void watch_remove(gp_exec *ex, uint64_t job_id) {
     if (!ex->poller_started) return;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     for (size_t i = 0; i < ex->nwatches; i++)
         if (ex->watches[i].job_id == job_id) {
             ex->watches[i] = ex->watches[--ex->nwatches];
             break;
         }
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
     poke(ex);   /* it may be polling a descriptor the caller is about to close */
 }
 
 static void watch_rearm(gp_exec *ex, uint64_t job_id) {
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     for (size_t i = 0; i < ex->nwatches; i++)
         if (ex->watches[i].job_id == job_id) {
             ex->watches[i].armed = true;
             break;
         }
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
     poke(ex);
 }
 
@@ -659,6 +673,8 @@ uint64_t gp_exec_wake_fd(gp_app *app, uint64_t co_job, int fd, int events, int64
     return j->id;
 }
 
+#endif   /* GP_HAS_FD */
+
 /* ---------------------------------------------------------------- running */
 
 static void wake_co(gp_app *app, uint64_t co_job) {
@@ -668,12 +684,12 @@ static void wake_co(gp_app *app, uint64_t co_job) {
 
 static void run_posts(gp_app *app) {
     gp_exec *ex = app->exec;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     post_item *items = ex->posts;
     size_t n = ex->nposts;
     ex->posts = NULL;
     ex->nposts = ex->cap_posts = 0;
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
 
     for (size_t i = 0; i < n; i++) {
         void *self = ent_null(items[i].entity) ? NULL : gp_entity_get(app, items[i].entity);
@@ -687,12 +703,12 @@ static void run_posts(gp_app *app) {
 
 static void drain_completed(gp_app *app) {
     gp_exec *ex = app->exec;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     uint64_t *ids = ex->completed;
     size_t n = ex->ncompleted;
     ex->completed = NULL;
     ex->ncompleted = ex->cap_completed = 0;
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
 
     for (size_t i = 0; i < n; i++) {
         gp_job *j = find_job(ex, ids[i]);
@@ -713,6 +729,7 @@ static void drain_completed(gp_app *app) {
     free(ids);
 }
 
+#ifdef GP_HAS_FD
 /* Hands a ready (or timed out) watch to its callback or coroutine. events == 0 means the await timed out. */
 static void deliver_fd(gp_app *app, gp_job *j, int events) {
     gp_exec *ex = app->exec;
@@ -733,12 +750,12 @@ static void deliver_fd(gp_app *app, gp_job *j, int events) {
 
 static void drain_fds(gp_app *app) {
     gp_exec *ex = app->exec;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     fd_ready *items = ex->fd_ready_list;
     size_t n = ex->nfd_ready;
     ex->fd_ready_list = NULL;
     ex->nfd_ready = ex->cap_fd_ready = 0;
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
 
     for (size_t i = 0; i < n; i++) {
         gp_job *j = find_job(ex, items[i].job_id);
@@ -765,6 +782,7 @@ static void drain_fds(gp_app *app) {
     }
     free(ids);
 }
+#endif   /* GP_HAS_FD */
 
 static void run_timers(gp_app *app) {
     gp_exec *ex = app->exec;
@@ -888,7 +906,9 @@ static void sweep(gp_exec *ex) {
     for (size_t i = 0; i < ex->njobs; i++) {
         gp_job *j = ex->jobs[i];
         if (removable(j)) {
+#ifdef GP_HAS_FD
             if (j->kind == JOB_FD) watch_remove(ex, j->id);
+#endif
             if (j->co) gp_co_free(j->co);
             if (j->drop) VEC_PUSH(drops, ndrops, cap_drops, ((pending_drop){ j->drop, j->drop_data }));
             free(j);
@@ -910,7 +930,9 @@ void gp_task_on_drop(gp_app *app, gp_task t, gp_drop_fn drop, void *data) {
 void gp_exec_run(gp_app *app) {
     run_posts(app);
     drain_completed(app);
+#ifdef GP_HAS_FD
     drain_fds(app);
+#endif
     run_timers(app);
     run_frames(app);
     sweep(app->exec);
@@ -918,9 +940,9 @@ void gp_exec_run(gp_app *app) {
 
 int gp_exec_timeout_ms(gp_app *app) {
     gp_exec *ex = app->exec;
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     bool pending = ex->nposts || ex->ncompleted || ex->nfd_ready;
-    pthread_mutex_unlock(&ex->lock);
+    gp_mutex_unlock(&ex->lock);
     if (pending) return 0;
 
     int64_t now = gp_now_ns(), best = INT64_MAX;
@@ -968,17 +990,19 @@ void gp_exec_shutdown(gp_app *app) {
 
     /* 2. stop the pool; running work finishes, queued work is reclaimed as "completed" so
      *    its free_data / coroutine gets its turn. */
-    pthread_mutex_lock(&ex->lock);
+    gp_mutex_lock(&ex->lock);
     ex->shutdown = true;
-    pthread_cond_broadcast(&ex->cond);
-    pthread_mutex_unlock(&ex->lock);
-    for (int i = 0; i < ex->nthreads; i++) pthread_join(ex->threads[i], NULL);
+    gp_cond_broadcast(&ex->cond);
+    gp_mutex_unlock(&ex->lock);
+    for (int i = 0; i < ex->nthreads; i++) gp_thread_join(ex->threads[i]);
+#ifdef GP_HAS_FD
     if (ex->poller_started) {
         poke(ex);
-        pthread_join(ex->poller, NULL);
+        gp_thread_join(ex->poller);
         close(ex->wake_fd);
         ex->poller_started = false;
     }
+#endif
     for (size_t i = 0; i < ex->nqueue; i++)
         VEC_PUSH(ex->completed, ex->ncompleted, ex->cap_completed, ex->queue[i].job_id);
     ex->nqueue = 0;
@@ -1011,8 +1035,8 @@ void gp_exec_shutdown(gp_app *app) {
     ex->jobs = NULL;
     ex->njobs = 0;
     run_drops(drops, ndrops);
-    pthread_mutex_destroy(&ex->lock);
-    pthread_cond_destroy(&ex->cond);
+    gp_mutex_destroy(&ex->lock);
+    gp_cond_destroy(&ex->cond);
     free(ex);
     app->exec = NULL;
 }

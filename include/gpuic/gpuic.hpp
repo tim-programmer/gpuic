@@ -61,8 +61,6 @@
 #include <type_traits>
 #include <utility>
 
-#include <sys/socket.h>
-
 namespace gpuic {
 
 class App;
@@ -326,12 +324,14 @@ public:
             return std::move(slot.result);
         }
     }
+#ifdef GP_HAS_FD
     /** Waits for `events` (GP_FD_*) on `fd`, at most `timeout` seconds (negative: no limit); `revents` gets what happened. */
     bool fd(int fd, int events, double timeout = -1, int* revents = nullptr) const { return gp_await_fd(c_, fd, events, timeout, revents); }
     ssize_t read(int fd, void* buf, std::size_t len) const { return gp_co_read(c_, fd, buf, len); }
     ssize_t write(int fd, const void* buf, std::size_t len) const { return gp_co_write(c_, fd, buf, len); }
     int accept(int listen_fd) const { return gp_co_accept(c_, listen_fd); }
     int connect(int fd, const sockaddr* addr, socklen_t len) const { return gp_co_connect(c_, fd, addr, len); }
+#endif
 
 private:
     gp_co* c_;
@@ -425,8 +425,10 @@ public:
     template <class W, class D> Task background(W&& work, D&& done) const;
     /** A coroutine: `f(Co&, Self&, Ctx)` runs on the main thread and may await (Co::sleep ...) in between. */
     template <class F> Task spawn(F&& f) const;
-    /** `f(Self&, Ctx, FdEvent)` while `fd` is ready for `events` (GP_FD_*); level-triggered, as poll(2). */
+#ifdef GP_HAS_FD
+    /** `f(Self&, Ctx, FdEvent)` while `fd` is ready for `events` (GP_FD_*); level-triggered, as poll(2). Not on Windows. */
     template <class F> Task watch_fd(int fd, int events, F&& f) const;
+#endif
     /** Decodes on a pool thread; `f(Self&, Ctx, gp_image)` gets GP_IMAGE_NULL if it failed. */
     template <class F> Task load_image(const char* path, F&& f) const;
 
@@ -1142,6 +1144,7 @@ template <class F> Task Ctx::spawn(F&& f) const {
     gp_task_on_drop(c_->app, t.raw(), &detail::drop_box<D>, d);
     return t;
 }
+#ifdef GP_HAS_FD
 template <class F> Task Ctx::watch_fd(int fd, int events, F&& f) const {
     using D = std::decay_t<F>;
     D* d = detail::own<D>(std::forward<F>(f));
@@ -1149,6 +1152,7 @@ template <class F> Task Ctx::watch_fd(int fd, int events, F&& f) const {
     gp_task_on_drop(c_->app, t.raw(), &detail::drop_box<D>, d);
     return t;
 }
+#endif
 template <class F> Task Ctx::load_image(const char* path, F&& f) const {
     using D = std::decay_t<F>;
     D* d = detail::own<D>(std::forward<F>(f));

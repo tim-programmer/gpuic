@@ -47,19 +47,22 @@ jobs:
         run: |
           cmake -S . -B out/windows -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DPULSERACK_GPUIC_DEPENDENCIES=FETCH `
-            -DPULSERACK_MIDI=ON `
-            -DPULSERACK_BUILD_TESTS=ON
+            -DGPUIC_DEPENDENCIES=FETCH
 
       - name: Build
         shell: pwsh
         run: cmake --build out/windows --parallel
 
+      # The tests draw with OpenGL 3.3 and the runner has no GPU (Windows' own software OpenGL is 1.1): Mesa's
+      # llvmpipe is installed system-wide, the counterpart of LIBGL_ALWAYS_SOFTWARE on the Linux job.
+      - name: Install Mesa (software OpenGL)
+        uses: ssciwr/setup-mesa-dist-win@v3
+
       # Window tests need a desktop. The windows-latest runner has one, so unlike
-      # the Linux job we do not need xvfb. If a test hangs, timeout-minutes ends it.
+      # the Linux job we do not need xvfb. A hung test is ended by ctest after 10 minutes.
       - name: Test
         shell: pwsh
-        run: ctest --test-dir out/windows --output-on-failure -j 2
+        run: ctest --test-dir out/windows --output-on-failure -j 2 --timeout 600
 
       - name: Upload the test log
         if: failure()

@@ -59,7 +59,7 @@ static int vs_direct(const uint8_t *px, const char *reference_doc, int tol) {
     return bad;
 }
 
-static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec + (double)t.tv_nsec * 1e-9; }
+static double now(void) { return (double)gp_now_ns() * 1e-9; }
 
 static void test_use(void) {
     uint8_t *px = draw(HEAD "<defs><rect id='r' width='10' height='10' fill='#f00'/></defs><use href='#r' x='5' y='3'/>" TAIL);

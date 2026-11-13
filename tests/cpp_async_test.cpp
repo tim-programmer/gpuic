@@ -6,8 +6,11 @@
  */
 #include <gpuic/gpuic.hpp>
 
+#ifdef GP_HAS_FD
 #include <unistd.h>
+#endif
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -142,14 +145,14 @@ static void test_background(Co& co, Ctx cx) {
         CHECK(got.size() > 30 && ran, "string result and void work (%zu, %d)", got.size(), ran);
         Tok tok = make_tok();
         bool done = false;
-        Task t = mc.background([tok] { usleep(30000); }, [&done, tok] { done = true; });
+        Task t = mc.background([tok] { std::this_thread::sleep_for(std::chrono::milliseconds(30)); }, [&done, tok] { done = true; });
         t.cancel();
         co.sleep(0.25);
         CHECK(!done && tok.use_count() == 1, "cancelled background: done did not run and the closures are destroyed (use_count %ld)", tok.use_count());
         auto m2 = app.new_entity<Model>();
         Tok tok2 = make_tok();
         bool done2 = false;
-        app.ctx(m2.id).background([tok2] { usleep(30000); }, [&done2, tok2](Model&) { done2 = true; });
+        app.ctx(m2.id).background([tok2] { std::this_thread::sleep_for(std::chrono::milliseconds(30)); }, [&done2, tok2](Model&) { done2 = true; });
         app.release(m2.id);
         co.sleep(0.25);
         CHECK(!done2 && tok2.use_count() == 1, "released owner: done did not run, closures destroyed (use_count %ld)", tok2.use_count());
@@ -207,6 +210,7 @@ static void test_coroutines(Co& co, Ctx cx) {
         co.sleep(0.1);
         CHECK(saw_cancel && tok.use_count() == 1, "a coroutine of a released entity unwinds and is destroyed (%d, use_count %ld)", saw_cancel, tok.use_count());
     }
+#ifdef GP_HAS_FD
     {   // I/O: a pipe, read in a coroutine and watched with a callback
         int fds[2];
         CHECK(pipe(fds) == 0, "pipe");
@@ -240,6 +244,7 @@ static void test_coroutines(Co& co, Ctx cx) {
         close(fds[0]);
         close(fds[1]);
     }
+#endif
     app.release(m.id);
 }
 
@@ -496,14 +501,14 @@ static void test_ctx_and_handles(Co& co, Ctx cx) {
     {   // Co::run is false when the coroutine was cancelled while it waited
         std::optional<bool> ran;
         Task t = cx.spawn([&ran](Co& co2) {
-            ran = co2.run([] { usleep(100000); });
+            ran = co2.run([] { std::this_thread::sleep_for(std::chrono::milliseconds(100)); });
         });
         co.sleep(0.03);
         t.cancel();
         co.sleep(0.3);
         CHECK(ran.has_value() && !*ran, "Co::run(void work) is false for a cancelled coroutine (%d)", ran.has_value() ? (int)*ran : -1);
         std::optional<std::optional<int>> got;
-        Task t2 = cx.spawn([&got](Co& co2) { got = co2.run([] { usleep(100000); return 3; }); });
+        Task t2 = cx.spawn([&got](Co& co2) { got = co2.run([] { std::this_thread::sleep_for(std::chrono::milliseconds(100)); return 3; }); });
         co.sleep(0.03);
         t2.cancel();
         co.sleep(0.3);

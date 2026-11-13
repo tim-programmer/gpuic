@@ -6,12 +6,15 @@
  */
 #include <gpuic/gpuic.h>
 
+#include "threads.h"   /* (src: the threads the library itself uses) */
+
 #include <math.h>
-#include <pthread.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#ifndef _MSC_VER
+#include <stdatomic.h>
+#endif
 
 static int failures;
 #define CHECK(cond, ...)                                                               \
@@ -24,8 +27,15 @@ static int failures;
         }                                                                              \
     } while (0)
 
-static pthread_t main_thread;
+/* Which thread this is: the address of something each thread has its own of. */
+static _Thread_local char thread_mark;
+static void *this_thread(void) { return &thread_mark; }
+static void *main_thread;
+#ifdef _WIN32
+static void msleep(int ms) { Sleep((DWORD)ms); }
+#else
 static void msleep(int ms) { nanosleep(&(struct timespec){ 0, ms * 1000000L }, NULL); }
+#endif
 
 typedef struct { int fired, ticks; } Counter;
 
@@ -65,16 +75,16 @@ static void test_timers(gp_co *co, gp_app *app) {
 /* ------------------------------------------------------------ background */
 
 typedef struct {
-    pthread_t worker;
+    void *worker;
     bool worker_ran, done_ran, done_on_main;
     int frees;
 } Bg;
 
-static void bg_work(void *p) { Bg *b = p; b->worker = pthread_self(); b->worker_ran = true; msleep(30); }
+static void bg_work(void *p) { Bg *b = p; b->worker = this_thread(); b->worker_ran = true; msleep(30); }
 static void bg_done(void *self, gp_ctx *cx, void *p) {
     Bg *b = p;
     b->done_ran = true;
-    b->done_on_main = pthread_equal(pthread_self(), main_thread);
+    b->done_on_main = this_thread() == main_thread;
 }
 static void bg_free(void *p) { ((Bg *)p)->frees++; }
 
@@ -85,7 +95,7 @@ static void test_background(gp_co *co, gp_app *app) {
     Bg a = { 0 };
     gp_background(&cx, bg_work, bg_done, &a, bg_free);
     gp_sleep(co, 0.25);
-    CHECK(a.worker_ran && !pthread_equal(a.worker, main_thread), "work did not run on a worker thread");
+    CHECK(a.worker_ran && a.worker != main_thread, "work did not run on a worker thread");
     CHECK(a.done_ran && a.done_on_main, "done must run on the main thread");
     CHECK(a.frees == 1, "free_data called %d times", a.frees);
 
@@ -109,7 +119,7 @@ static void test_background(gp_co *co, gp_app *app) {
 static int posted;
 static void on_post(void *self, gp_ctx *cx, void *data) {
     posted++;
-    if (!pthread_equal(pthread_self(), main_thread)) failures++;
+    if (this_thread() != main_thread) failures++;
 }
 static void *poster(void *arg) {
     gp_app *app = arg;
@@ -118,9 +128,9 @@ static void *poster(void *arg) {
 }
 
 static void test_post(gp_co *co, gp_app *app) {
-    pthread_t th[4];
-    for (int i = 0; i < 4; i++) pthread_create(&th[i], NULL, poster, app);
-    for (int i = 0; i < 4; i++) pthread_join(th[i], NULL);
+    gp_thread th[4];
+    for (int i = 0; i < 4; i++) CHECK(gp_thread_create(&th[i], poster, app), "thread %d", i);
+    for (int i = 0; i < 4; i++) gp_thread_join(th[i]);
     gp_sleep(co, 0.1);
     CHECK(posted == 400, "posted callbacks delivered: %d / 400", posted);
 
@@ -291,7 +301,11 @@ static void test_spring_easing(void) {
 /* ------------------------------------------------------------ shutdown */
 
 static bool shutdown_unwound;
+#ifdef _MSC_VER   /* (its <stdatomic.h> is behind an experimental switch) */
+static volatile bool shutdown_work_ran;
+#else
 static atomic_bool shutdown_work_ran; /* written by two pool threads at once */
+#endif
 static int shutdown_frees;
 static void long_work(void *p) { shutdown_work_ran = true; msleep(200); }
 static void long_free(void *p) { shutdown_frees++; }
@@ -465,7 +479,7 @@ static void ready(gp_app *app, void *userdata) {
 
 int main(void) {
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);   /* a physical pointer over the window is not part of the test */
-    main_thread = pthread_self();
+    main_thread = this_thread();
     test_spring_easing();
     test_spring_math();
     int rc = gp_application_run(ready, NULL);

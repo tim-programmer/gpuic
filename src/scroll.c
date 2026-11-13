@@ -308,7 +308,11 @@ void gp_scroll_touch(gp_window *w, int phase, float x, float y, int64_t t_ns) {
     }
     float speed = hypotf(vx, vy);
     if (speed >= FLING_MIN_SPEED) {
-        w->fling = (typeof(w->fling)){ true, w->touch.last, -vx, -vy, 0 };   /* (content speed: against the finger's) */
+        w->fling.active = true;
+        w->fling.at = w->touch.last;
+        w->fling.vx = -vx;   /* (content speed: against the finger's) */
+        w->fling.vy = -vy;
+        w->fling.last_ns = 0;
         w->dirty_paint = true;   /* a draw takes the first step */
     }
 }
