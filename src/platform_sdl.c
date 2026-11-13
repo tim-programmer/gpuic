@@ -7,6 +7,16 @@
 
 #include <SDL3/SDL.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 typedef struct {
     SDL_GLContext gl;
     SDL_Cursor *cursors[GP_CURSOR_COUNT];
@@ -85,6 +95,12 @@ bool gp_platform_open_window(gp_app *app, gp_window *w, const gp_window_options 
             return false;
         }
         SDL_GL_SetSwapInterval(1);
+#ifdef _WIN32
+        /* opengl32.dll stays loaded until the process ends. SDL frees it when the last GL window closes, and a driver
+         * that runs threads of its own (Mesa's llvmpipe) can deadlock there, joining them under the loader lock. */
+        HMODULE gl_dll;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, L"opengl32.dll", &gl_dll);
+#endif
     }
     SDL_GL_MakeCurrent(win, p->gl);
     sdl_window *sw = calloc(1, sizeof *sw);
