@@ -77,8 +77,14 @@ build tree, which an installed libgpuic can't refer to), so it is skipped with a
 The installed `gpuicConfig.cmake` finds the same dependencies again with `GPUIC_DEPENDENCIES=SYSTEM`.
 gpuic builds as a static library; there are no Windows DLL export macros yet.
 
-Only Linux has been built and run here. The other platforms' font directories and the SDL-based
-GL loading follow SDL's own cross-platform APIs, but are untested.
+Linux is where gpuic is developed and tested. **Windows** builds (MSVC from Visual Studio 2022 17.9 on, or
+MinGW-w64/clang): coroutines run on fibers, the thread pool on Win32 threads, and fonts come from scanning
+`%WINDIR%\Fonts` and the per-user font directory. Two things are missing there: watching file descriptors
+(`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest are not declared; test for `GP_HAS_FD`), and two of the
+tests (`fd_test`, and `text_test`, which is written against POSIX and Linux font locations). So far the Windows
+build has been cross-compiled with MinGW-w64 and run under Wine; `.github/workflows/windows-check.yml` builds and
+tests it with MSVC. macOS is untested: its font directories and the SDL-based GL loading follow SDL's own
+cross-platform APIs.
 
 ## Build & run
 
@@ -123,7 +129,7 @@ out: take two and subtract to measure one stretch (`tests/cables_bench.c` uses o
 `GPUIC_IME=text` shows an input-method composition in the focused field (after any `GPUIC_KEYS`).
 `GPUIC_ATLAS_RESET_EVERY=n` clears the glyph atlases every n draws, to exercise the overflow recovery.
 `GPUIC_LCD=off|rgb|bgr|vrgb|vbgr|auto` chooses how glyph edges are smoothed (see LCD antialiasing; the tests set `off`).
-`GPUIC_IGNORE_REAL_MOUSE=1` drops what the physical pointer does and keeps the injected events (the tests set it: a pointer resting over a test window changes hover and repaint behavior).
+`GPUIC_IGNORE_REAL_MOUSE=1` drops what the physical pointer does and keeps the injected events (the tests set it: a pointer resting over a test window changes hover and repaint behavior). `GPUIC_IGNORE_REAL_KEYS=1` does the same for the physical keyboard (keys and typed text); nothing sets it by default.
 
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
 and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
@@ -712,6 +718,8 @@ handler or a render function has one (`cx->window`); `gp_ctx_for_window(app, win
 
 ### Watching file descriptors
 
+(Not on Windows: these calls exist where the header defines `GP_HAS_FD`.)
+
 Pipes, sockets, eventfds, inotify, a child process's stdout: anything `poll(2)` understands wakes the
 event loop and runs your code on the main thread, like every other callback here.
 
@@ -975,7 +983,7 @@ gp_div(gp_transform_perspective(400), gp_rotate_x(25), gp_translate_z(-20))   /*
 ### Coroutines: async/await for C
 
 Sequential code that suspends at await points while the loop keeps running, on its own
-256 KiB guard-paged stack (`ucontext`):
+256 KiB guard-paged stack (`ucontext`; a fiber on Windows):
 
 ```c
 static void fetch(gp_co *co, void *self, gp_ctx *cx, void *data) {
@@ -1005,8 +1013,8 @@ its own cleanup code. Rules:
   (3) runs every entity's drop function (an entity may still use SDL: close an SDL audio device, destroy an SDL object; do not touch windows or other entities, whose order of dropping is unspecified),
   (4) frees subscriptions, text and graphics state, and only then (5) calls `SDL_Quit()` and returns. So an entity destructor that closes an SDL3 audio device sees SDL still initialised.
 * Stack depth is fixed; keep big buffers off it. A blocking call blocks the whole UI, as anywhere.
-* `ucontext` needs glibc/macOS-style libc (not musl); the platform-independent part is only the
-  executor, so a different coroutine backend could slot into `coro.c`.
+* `ucontext` needs glibc/macOS-style libc (not musl); Windows uses fibers instead. The platform-independent part is
+  the executor, so another coroutine backend slots into `coro.c` the same way.
 
 See `examples/async.c`: a stopwatch, a coroutine fetch with a frame-driven spinner, a worker
 reporting progress via `gp_post`, and an interruptible eased animation. In `examples/form.c`
@@ -1805,7 +1813,7 @@ Roughly in the order I'd tackle them:
 
 1. SVG / COLRv1 emoji fonts (FreeType gives the paint graph, it would need an interpreter with gradients, transforms and blend modes of its own).
 2. SVG patterns, markers and `textPath`; the rest of the filter primitives (turbulence, lighting, morphology, convolution, displacement, component transfer) and the filter region.
-3. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux).
+3. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux; on Windows there are no watches at all yet).
 4. A view with a scroller under the mouse is painted in full every frame (hover and scrollbars are evaluated, not cached), and a cached view that holds a scroller, a list or an overflow clip is
    painted in full when it or its scroller moves (their clip moves with them: only views without one are moved, see "Transforms" and `tests/paintshift_test.c`). The scene is still
    re-uploaded and drawn as a whole every frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.

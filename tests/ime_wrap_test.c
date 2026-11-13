@@ -127,7 +127,8 @@ static void ink(const uint8_t *px, int idx, size_t nrows, long *out) {
 }
 
 static void test_pixels(void) {
-    /* a long composition drawn: row for row the ink of the committed text, nothing run past the edge */
+    /* a long composition drawn: row for row the ink of the committed text, nothing run past the edge (the floor on the ink
+     * is only "something was drawn": the CJK fallback on Windows is lighter than Noto) */
     const char *base = "hello world", *pre = CJK CJK CJK CJK CJK;
     char whole[512];
     snprintf(whole, sizeof whole, "%s%s", base, pre);
@@ -147,7 +148,7 @@ static void test_pixels(void) {
     ink(f, 0, rows, a);
     ink(f, 1, rows, b);
     for (size_t r = 0; r < rows; r++)
-        CHECK(a[r] > 150 && labs(a[r] - b[r]) < 60, "row %zu: %ld ink pixels composing, %ld committed", r, a[r], b[r]);
+        CHECK(a[r] > 100 && labs(a[r] - b[r]) < 60, "row %zu: %ld ink pixels composing, %ld committed", r, a[r], b[r]);
     gp_simulate_ime(app, "", 0);
     settle();
 }

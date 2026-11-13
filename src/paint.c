@@ -992,12 +992,13 @@ static void paint_node(paint_ctx *pc, gp_el *n, float ox, float oy, rect clip, f
     if (!by_hover && vv->chunk_valid && vv->chunk_gen == n->layout_gen && memcmp(sig, vv->chunk_sig, sizeof sig) == 0) {
         /* Where it is: the same, or moved by whole device pixels with nothing below that is clipped to a box of its own (an overflow, a scroller, a list:
          * their clip moves with the subtree and is not the clip it inherits), which is the same instances moved. A row of a list that scrolls is painted
-         * once and then only shifted, whatever the offset (the offset is whole pixels while it is dragged or wheeled; a smooth scroll, which is not, repaints). */
+         * once and then only shifted, whatever the offset (the offset is whole pixels while it is dragged or wheeled; a smooth scroll, which is not, repaints).
+         * Whole exactly: a move a hair off (layout's float arithmetic) shifted would put the instances a hair from where a fresh paint does. */
         float dx = x - vv->chunk_x, dy = y - vv->chunk_y;
         bool same_place = dx == 0.f && dy == 0.f;
         float sx = dx * pc->scale, sy = dy * pc->scale;
         bool shiftable = !same_place && !(n->sub_flags & (GP_SUB_CLIP | GP_SUB_SCROLL | GP_SUB_LIST | GP_SUB_XF)) && !pc->has_xf &&
-                         fabsf(sx - roundf(sx)) < 1e-3f && fabsf(sy - roundf(sy)) < 1e-3f && fabsf(dx) < 1e6f && fabsf(dy) < 1e6f;
+                         sx == roundf(sx) && sy == roundf(sy) && fabsf(dx) < 1e6f && fabsf(dy) < 1e6f;
         if (same_place || shiftable) {
             if (shiftable) {
                 for (size_t i = 0; i < vv->nchunk; i++) {

@@ -771,11 +771,9 @@ static void test_scale(void) {
 
     gp_entity lone = make('L', 0);
     gp_ctx cl = cx_of(lone);
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int64_t t0 = gp_now_ns();
     for (int i = 0; i < 1000000; i++) gp_notify(&cl);
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    double ms = (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+    double ms = (double)(gp_now_ns() - t0) / 1e6;
     CHECK(ms < 500, "a million notifies of an unobserved entity took %.0f ms", ms);
     CHECK(!gp_effects_pending(app), "effects queued for an unobserved entity");
 

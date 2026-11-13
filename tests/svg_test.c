@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include "compat.h"
 
 static int failures;
 #define CHECK(cond, ...)                                                               \
@@ -221,11 +221,7 @@ static void api_tests(Fix *fx) {
 
     /* a file */
     char path[512];
-    snprintf(path, sizeof path, "%s/gpuic-svg-test-XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
-    int fd = mkstemp(path);
-    if (fd >= 0) {
-        CHECK(write(fd, S_HALVES, sizeof S_HALVES - 1) == (ssize_t)(sizeof S_HALVES - 1), "write");
-        close(fd);
+    if (test_temp_file(path, sizeof path, "gpuic-svg-test", S_HALVES, sizeof S_HALVES - 1)) {
         gp_svg fsv = gp_svg_load_file(app, path);
         CHECK(fsv.generation && gp_svg_size(app, fsv, &w, &h) && w == 40, "a file");
         gp_svg_release(app, fsv);

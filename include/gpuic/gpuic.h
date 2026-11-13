@@ -20,8 +20,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+/* Watching file descriptors (gp_watch_fd, gp_await_fd, gp_co_read and the rest) is built on poll(2): where GP_HAS_FD
+ * is not defined, which today means Windows, those calls do not exist. */
+#ifndef _WIN32
+#define GP_HAS_FD 1
 #include <sys/socket.h>
 #include <sys/types.h>
+#endif
+
+/* Lets the compiler check a printf-style call's arguments against its format (GCC and clang). */
+#if defined(__GNUC__)
+#define GP_PRINTF(fmt_index, first_arg) __attribute__((format(printf, fmt_index, first_arg)))
+#else
+#define GP_PRINTF(fmt_index, first_arg)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -555,7 +567,9 @@ void gp_post(gp_app *app, gp_entity entity, gp_task_fn fn, void *data);
 
 /* ---- file descriptors ------------------------------------------------------------------- */
 
-/* Pipes, sockets, eventfds, inotify, a child's stdout: anything poll(2) understands. The event loop
+/* Not on Windows (see GP_HAS_FD at the top).
+ *
+ * Pipes, sockets, eventfds, inotify, a child's stdout: anything poll(2) understands. The event loop
  * wakes when a watched descriptor is ready (and only then: nothing is polled on a timer), and the
  * callback runs on the main thread like every other one here.
  *
@@ -574,8 +588,10 @@ void gp_post(gp_app *app, gp_entity entity, gp_task_fn fn, void *data);
 enum { GP_FD_READ = 1, GP_FD_WRITE = 2, GP_FD_ERROR = 4, GP_FD_HUP = 8, GP_FD_INVALID = 16 };
 typedef void (*gp_fd_fn)(void *self, gp_ctx *cx, int fd, int events, void *data);
 
+#ifdef GP_HAS_FD
 gp_task gp_watch_fd(gp_ctx *cx, int fd, int events, gp_fd_fn fn, void *data);
 bool gp_fd_set_nonblocking(int fd);
+#endif
 
 /* ---- coroutines: async/await for C ------------------------------------------------------ */
 
@@ -610,11 +626,13 @@ bool gp_co_cancelled(const gp_co *co);
  * happened, 0 if it timed out. The rest are the usual calls for a non-blocking descriptor
  * (gp_fd_set_nonblocking) that wait instead of failing with EAGAIN; they return false / -1 with
  * errno == ECANCELED if the coroutine is cancelled. */
+#ifdef GP_HAS_FD
 bool gp_await_fd(gp_co *co, int fd, int events, double timeout, int *revents);
 ssize_t gp_co_read(gp_co *co, int fd, void *buf, size_t len);          /* >= 1 bytes, 0 at end of file, -1 on error */
 ssize_t gp_co_write(gp_co *co, int fd, const void *buf, size_t len);   /* all of it, or -1 */
 int gp_co_accept(gp_co *co, int listen_fd);                            /* a non-blocking socket, or -1 */
 int gp_co_connect(gp_co *co, int fd, const struct sockaddr *addr, socklen_t addrlen);   /* 0 or -1 */
+#endif
 
 /* ---------------------------------------------------------------- text input widget */
 
@@ -682,7 +700,7 @@ bool gp_text_input_row_rtl(gp_app *app, gp_entity input, size_t row); /* does th
 /* Valid until the next time the window's view tree is rebuilt. Call only while
  * building elements (inside a gp_render_fn). */
 void *gp_frame_alloc(size_t size);
-const char *gp_fmt(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+const char *gp_fmt(const char *fmt, ...) GP_PRINTF(1, 2);
 
 /* ---------------------------------------------------------------- elements */
 
@@ -691,7 +709,7 @@ extern gp_node gp_end_marker;
 
 gp_node *gp_div_(int unused, ...);
 gp_node *gp_text_(const char *text, ...);
-gp_node *gp_img_(gp_image image, ...);
+gp_node *gp_img_(gp_image image, int unused, ...);
 
 /* ---------------------------------------------------------------- stroked curves */
 
@@ -702,8 +720,9 @@ gp_node *gp_img_(gp_image image, ...);
  * border): compute them from your own model, no layout is needed. The element places itself: it is absolute, its box is the bounding box of the points padded by half the
  * stroke width plus the hit tolerance (plus more for a miter join, see gp_miter_limit), and it takes no part in the layout of its siblings. Put it where the stroke should be in
  * the tree order (it paints and is hit in that order, like any element), inside a parent that covers the area. */
-gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, ...);
-#define gp_curve(p0, c1, c2, p3, ...) gp_curve_((p0), (c1), (c2), (p3) __VA_OPT__(,) __VA_ARGS__, GP_END)
+/* (gp_curve_, gp_img_ and gp_svg_img_ take an int after their struct arguments: va_start after a struct is not reliable with MSVC on x64) */
+gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, int unused, ...);
+#define gp_curve(p0, c1, c2, p3, ...) gp_curve_((p0), (c1), (c2), (p3), 0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 gp_node *gp_polyline_(const gp_point *pts, size_t n, ...);
 #define gp_polyline(pts, n, ...) gp_polyline_((pts), (n) __VA_OPT__(,) __VA_ARGS__, GP_END)
 #define gp_xy(px, py) GP_LIT(gp_point, (px), (py))   /* a point (not gp_pt: that is the padding at the top) */
@@ -764,11 +783,11 @@ gp_node *gp_fill_nonzero(void);
  * (from the start by default). Glyphs that do not fit are left out. Left to right only; not hit tested (the stroke is). The string is copied. */
 gp_node *gp_path_text(const char *text);
 gp_node *gp_path_text_dy(float px);
-gp_node *gp_svg_img_(gp_svg svg, ...);
+gp_node *gp_svg_img_(gp_svg svg, int unused, ...);
 #define gp_div(...)        gp_div_(0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 #define gp_text(str, ...)  gp_text_((str) __VA_OPT__(,) __VA_ARGS__, GP_END)
-#define gp_img(image, ...) gp_img_((image) __VA_OPT__(,) __VA_ARGS__, GP_END)
-#define gp_svg_img(svg, ...) gp_svg_img_((svg) __VA_OPT__(,) __VA_ARGS__, GP_END)
+#define gp_img(image, ...) gp_img_((image), 0 __VA_OPT__(,) __VA_ARGS__, GP_END)
+#define gp_svg_img(svg, ...) gp_svg_img_((svg), 0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 /* How an image fills its box (content box: inside padding and border), the image centered in it:
  * FILL stretches it to the box; CONTAIN fits all of it inside, keeping its proportions; COVER fills the box, keeping its
  * proportions, and crops what overflows; NONE draws it at its own size, cropped if it is bigger; SCALE_DOWN is NONE for

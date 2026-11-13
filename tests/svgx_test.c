@@ -42,6 +42,13 @@ static bool is_color(const uint8_t *p, int r, int g, int b) { return p[3] > 247 
 static bool is_red(const uint8_t *p) { return is_color(p, 255, 0, 0); }
 static bool is_blue(const uint8_t *p) { return is_color(p, 0, 0, 255); }
 static bool is_green(const uint8_t *p) { return is_color(p, 0, 255, 0); }
+/* For the ink of small text: a stem of a thin font (Segoe UI and Arial at 12-14px, on Windows) may cover no pixel whole, so
+ * mostly covered and of that hue (straight or premultiplied alpha alike) */
+static bool is_hue(const uint8_t *p, int ch) {
+    return p[3] > 128 && p[ch] > 120 && p[(ch + 1) % 3] < 40 && p[(ch + 2) % 3] < 40;
+}
+static bool is_red_ink(const uint8_t *p) { return is_hue(p, 0); }
+static bool is_blue_ink(const uint8_t *p) { return is_hue(p, 2); }
 
 /* pictures that should be the same: the clipped or masked shape against the clip shape drawn directly (same rasterizer, so the edges agree to a few bytes, which also
  * checks nothing is lost or doubled where the layers are put together) */
@@ -59,7 +66,7 @@ static int vs_direct(const uint8_t *px, const char *reference_doc, int tol) {
     return bad;
 }
 
-static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec + (double)t.tv_nsec * 1e-9; }
+static double now(void) { return (double)gp_now_ns() * 1e-9; }
 
 static void test_use(void) {
     uint8_t *px = draw(HEAD "<defs><rect id='r' width='10' height='10' fill='#f00'/></defs><use href='#r' x='5' y='3'/>" TAIL);
@@ -374,9 +381,9 @@ static void test_text(void) {
     if (ts) {
         bool red = false, blue = false;
         for (int y = 5; y < 22; y++)
-            for (int x = 0; x < 20; x++) red |= is_red(P(ts, x, y));
+            for (int x = 0; x < 20; x++) red |= is_red_ink(P(ts, x, y));
         for (int y = 5; y < 22; y++)
-            for (int x = 20; x < 40; x++) blue |= is_blue(P(ts, x, y));
+            for (int x = 20; x < 40; x++) blue |= is_blue_ink(P(ts, x, y));
         CHECK(red && blue, "text: two tspans with their own fills and x");
     }
     free(ts);
@@ -477,7 +484,7 @@ static void test_registry(void) {
     CHECK(img && img->w == 40 && is_red(img->pixels + ((size_t)10 * 40 + 10) * 4), "registry: the use is drawn");
     bool blue = false;
     for (int y = 20; img && y < 36; y++)
-        for (int x = 20; x < 40; x++) blue |= is_blue(img->pixels + ((size_t)y * 40 + (size_t)x) * 4);
+        for (int x = 20; x < 40; x++) blue |= is_blue_ink(img->pixels + ((size_t)y * 40 + (size_t)x) * 4);
     gp_gfx_image *again = gp_gfx_image_get(g, im.index, im.generation);
     CHECK(blue || !g_ts_has_font, "registry: the text is drawn with the text system the gfx has");
     CHECK(again == img && gp_gfx_svg_raster(g, s, 40, 0).index == im.index, "registry: the raster is cached");

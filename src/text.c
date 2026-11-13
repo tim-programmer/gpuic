@@ -165,7 +165,7 @@ struct gp_text_system {
     int nvariations, cap_variations;
     int *style_hash;               /* open addressing over styles: id + 1, or 0 */
     int style_hash_cap;
-    struct { char *name; int generic, weight, font; } *sysmemo;   /* what the system said for a family at a weight */
+    struct sysmemo_entry { char *name; int generic, weight, font; } *sysmemo;   /* what the system said for a family at a weight */
     int nsysmemo, cap_sysmemo;
     int emoji;                     /* color emoji font id; -1 = not tried, -2 = unavailable */
     char *lang;                    /* fontconfig language hint for Han unification, or NULL */
@@ -184,7 +184,7 @@ struct gp_text_system {
     gp_font_scan_stats scan_stats;
 #endif
 
-    struct { uint32_t cp; int font; int style; bool emoji, valid; } resolve[RESOLVE_CACHE];
+    struct resolve_entry { uint32_t cp; int font; int style; bool emoji, valid; } resolve[RESOLVE_CACHE];
 
     Atlas alpha, color, lcd;
     glyph_slot *glyphs;
@@ -921,6 +921,9 @@ static void scan_fonts(gp_text_system *ts) {
     const char *win = getenv("WINDIR");
     snprintf(buf, sizeof buf, "%s\\Fonts", win ? win : "C:\\Windows");
     dirs_append(dirs, sizeof dirs, buf);
+    const char *local = getenv("LOCALAPPDATA");   /* fonts installed for this user only */
+    if (local) { snprintf(buf, sizeof buf, "%s\\Microsoft\\Windows\\Fonts", local); dirs_append(dirs, sizeof dirs, buf); }
+    (void)home;
 #elif defined(__APPLE__)
     dirs_append(dirs, sizeof dirs, "/System/Library/Fonts:/Library/Fonts");
     if (home) { snprintf(buf, sizeof buf, "%s/Library/Fonts", home); dirs_append(dirs, sizeof dirs, buf); }
@@ -1259,7 +1262,7 @@ static int system_family(gp_text_system *ts, const char *name, int generic, int 
         ts->cap_sysmemo = ts->cap_sysmemo ? ts->cap_sysmemo * 2 : 32;
         ts->sysmemo = realloc(ts->sysmemo, (size_t)ts->cap_sysmemo * sizeof *ts->sysmemo);
     }
-    ts->sysmemo[ts->nsysmemo++] = (typeof(*ts->sysmemo)){ strdup(key), generic, q, id };
+    ts->sysmemo[ts->nsysmemo++] = (struct sysmemo_entry){ strdup(key), generic, q, id };
     return id;
 }
 
@@ -1384,7 +1387,7 @@ static uint32_t decode(const char *s, size_t len, size_t i, size_t *n) {
  * will cover; the result for every codepoint is cached, including "nothing has it" (the primary's .notdef). */
 static int resolve_font(gp_text_system *ts, int style, uint32_t cp, bool want_emoji) {
     size_t h = (cp * 2654435761u + (uint32_t)style * 40503u + (want_emoji ? 977u : 0)) % RESOLVE_CACHE;
-    typeof(ts->resolve[0]) *c = &ts->resolve[h];
+    struct resolve_entry *c = &ts->resolve[h];
     if (c->valid && c->cp == cp && c->style == style && c->emoji == want_emoji) return c->font;
 
     int primary = primary_font(ts, style);
@@ -2154,7 +2157,7 @@ float gp_text_gamma(const gp_text_system *ts) { return ts->text_gamma; }
 
 typedef struct { char *p; size_t n, cap; float ox, oy; bool open; } outline_out;
 
-static void ol_put(outline_out *o, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void ol_put(outline_out *o, const char *fmt, ...) GP_PRINTF(2, 3);
 static void ol_put(outline_out *o, const char *fmt, ...) {
     char buf[160];
     va_list ap;

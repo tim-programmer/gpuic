@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include "compat.h"
 
 static int failures, skips;
 #define CHECK(cond, ...)                                                               \
@@ -193,7 +193,7 @@ static void check_painted(void) {
         int missing = check_glyphs(i, "1011", &found);
         CHECK(missing == 0 && found > 0, "digits %d (features %d, weight %d): %d glyphs are not painted as shaped (%d are)", i, texts[i]->ts.features, texts[i]->ts.weight, missing, found);
     }
-    if (access("/usr/share/fonts/TTF/DejaVuSansMono.ttf", R_OK) == 0 || access("/usr/share/fonts/dejavu/DejaVuSansMono.ttf", R_OK) == 0) {
+    if (test_file_exists("/usr/share/fonts/TTF/DejaVuSansMono.ttf") || test_file_exists("/usr/share/fonts/dejavu/DejaVuSansMono.ttf")) {
         int found;
         int missing = check_glyphs(15, TXT, &found);
         CHECK(missing == 0 && found > 0, "DejaVu Sans Mono sits on its own baseline (%d glyphs off, %d right)", missing, found);
@@ -248,7 +248,7 @@ static void run(void) {
         for (int i = 0; i < 4; i++) {
             char path[256];
             snprintf(path, sizeof path, "%s%s", dir, need[i]);
-            noto = noto && access(path, R_OK) == 0;
+            noto = noto && test_file_exists(path);
         }
     }
     if (!noto) {

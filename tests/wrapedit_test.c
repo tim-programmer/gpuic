@@ -37,7 +37,7 @@ static gp_node *view(void *self, gp_ctx *cx) {
 
 static unsigned long long rng = 88172645463325252ull;
 static unsigned rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return (unsigned)(rng >> 11); }
-static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec + (double)t.tv_nsec * 1e-9; }
+static double now(void) { return (double)gp_now_ns() * 1e-9; }
 
 static const char *words[] = { "alpha", "beta", "gamma", "delta", "epsilon", "supercalifragilisticexpialidocious", "a", "ab", "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d", "\xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\xe3\x81\x88\xe3\x81\x8a", "x-y", "tail" };
 static const char *pieces[] = { " ", "\n", "\n\n", "word ", "a", "\xd7\x90\xd7\x91", "\xe3\x81\x82", " longer words and more words ", "-", "\n\xe3\x81\x82\xe3\x81\x84\n", "0123456789", "" };

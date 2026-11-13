@@ -13,6 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>   /* Sleep */
+#undef TEXT
+#endif
 
 #define BASE     gp_rgb(0x1e1e2e)
 #define SURFACE  gp_rgb(0x313244)
@@ -170,7 +174,11 @@ static void job_progress(void *self, gp_ctx *cx, void *data) { /* main thread */
 static void job_work(void *p) { /* pool thread: report progress via the one thread-safe call */
     Job *j = p;
     for (int i = 1; i <= j->steps; i++) {
+#ifdef _WIN32
+        Sleep(40);
+#else
         nanosleep(&(struct timespec){ 0, 40 * 1000 * 1000 }, NULL);
+#endif
         gp_post(j->app, j->entity, job_progress, (void *)(intptr_t)(i * 100 / j->steps));
     }
 }

@@ -1,0 +1,78 @@
+name: Windows Check
+
+on:
+  push:
+    branches: [windows-check]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: windows-${{ matrix.preset }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [release]
+        # add release-clang later; windows-latest has LLVM but MSVC is the target
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        
+      # windows-latest already has CMake, Ninja, and VS 2022 (MSVC) preinstalled.
+      # Log the versions so a failure is attributable to the toolchain, not the code.
+      - name: Toolchain versions
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          cl 2>&1 | Select-Object -First 1
+          echo "CC=$env:CC CXX=$env:CXX"
+
+      # gpuic's FETCH mode downloads and builds SDL3, FreeType, HarfBuzz, FriBidi.
+      # This is the slowest step (~10-15 min on a cold runner) and the one most
+      # likely to fail on MSVC (HarfBuzz enables C++, FriBidi has a custom CMake).
+      # (Release's flags with debug info: a crashing test prints its stack with names and lines, tests/win_crash.c)
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B out/windows -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGPUIC_DEPENDENCIES=FETCH `
+            "-DCMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /Z7" `
+            "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /Z7" `
+            "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/DEBUG /OPT:REF /OPT:ICF"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build out/windows --parallel
+
+      # The tests draw with OpenGL 3.3 and the runner has no GPU (Windows' own software OpenGL is 1.1): Mesa's
+      # llvmpipe is installed system-wide, the counterpart of LIBGL_ALWAYS_SOFTWARE on the Linux job.
+      - name: Install Mesa (software OpenGL)
+        uses: ssciwr/setup-mesa-dist-win@v3
+
+      # Window tests need a desktop. The windows-latest runner has one, so unlike
+      # the Linux job we do not need xvfb. A crashing test prints what happened and exits (tests/win_crash.c);
+      # a hung one is ended by ctest after 5 minutes (the slowest tests take about one).
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir out/windows --output-on-failure -j 2 --timeout 300
+
+      - name: Upload the test log
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-log-windows
+          path: out/windows/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

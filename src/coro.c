@@ -1,7 +1,7 @@
 /*
- * Stackful coroutines (ucontext): async/await for C.
+ * Stackful coroutines (ucontext; fibers on Windows): async/await for C.
  *
- * A coroutine runs on its own mmap'd stack and only ever switches at its await points
+ * A coroutine runs on its own stack (mmap'd, or the fiber's) and only ever switches at its await points
  * (gp_sleep, gp_yield, gp_await_*), always to and from the main loop's stack, so there is
  * no scheduler of its own: an await registers a "wake" job with the executor and
  * suspends; when that job fires the executor resumes the coroutine.
@@ -15,11 +15,21 @@
 #include "internal.h"
 
 #include <errno.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <ucontext.h>
+#endif
 
 #define CO_STACK_SIZE (256 * 1024)
 #define CO_GUARD_SIZE 4096
@@ -33,8 +43,12 @@ struct gp_co {
     gp_co_fn fn;
     void *data;
 
+#ifdef _WIN32
+    void *fiber, *caller;    /* the coroutine's fiber (NULL before the first run and after the body returned), and the one that resumed it */
+#else
     ucontext_t ctx, caller;
     void *map;               /* mmap'd region: guard page + stack */
+#endif
     int state;
     bool cancelled;
     uint64_t wait_job;       /* the wake job this coroutine is suspended on */
@@ -57,16 +71,57 @@ bool gp_co_done(const gp_co *co) { return co->state == CO_DONE; }
 void gp_co_forget_window(gp_co *co, gp_window *w) { if (co->cx.window == w) co->cx.window = NULL; }
 bool gp_co_cancelled(const gp_co *co) { return co->cancelled; }
 
+static void co_body(gp_co *co) {
+    void *self = co->cx.entity.generation ? gp_entity_get(co->app, co->cx.entity) : NULL;
+    co->fn(co, self, &co->cx, co->data);
+    co->state = CO_DONE;
+}
+
+#ifdef _WIN32
+
+/* Fibers: the thread that runs the loop becomes one the first time a coroutine starts, and stays one. A fiber's
+ * stack has its own guard page and grows on demand up to the reserved size. */
+void gp_co_free(gp_co *co) {
+    if (co->fiber) DeleteFiber(co->fiber);
+    free(co);
+}
+
+static void CALLBACK co_entry(void *arg) {
+    gp_co *co = arg;
+    co_body(co);
+    SwitchToFiber(co->caller);   /* (a fiber function that returns ends the thread) back into gp_co_resume, for good */
+}
+
+void gp_co_resume(gp_app *app, gp_co *co) {
+    (void)app;
+    if (co->state != CO_NEW && co->state != CO_SUSPENDED) return;
+    void *me = IsThreadAFiber() ? GetCurrentFiber() : ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
+    if (co->state == CO_NEW) co->fiber = me ? CreateFiberEx(0, CO_STACK_SIZE, FIBER_FLAG_FLOAT_SWITCH, co_entry, co) : NULL;
+    if (!co->fiber) {
+        fprintf(stderr, "gpuic: could not allocate a coroutine stack\n");
+        co->state = CO_DONE;
+        return;
+    }
+    co->state = CO_RUNNING;
+    co->caller = me;
+    SwitchToFiber(co->fiber);
+    if (co->state == CO_DONE) { /* the body returned: its stack is dead */
+        DeleteFiber(co->fiber);
+        co->fiber = NULL;
+    }
+}
+
+static void co_switch_out(gp_co *co) { SwitchToFiber(co->caller); }
+
+#else
+
 void gp_co_free(gp_co *co) {
     if (co->map) munmap(co->map, CO_STACK_SIZE + CO_GUARD_SIZE);
     free(co);
 }
 
 static void co_entry(unsigned lo, unsigned hi) {
-    gp_co *co = (gp_co *)(((uintptr_t)hi << 32) | (uintptr_t)lo);
-    void *self = co->cx.entity.generation ? gp_entity_get(co->app, co->cx.entity) : NULL;
-    co->fn(co, self, &co->cx, co->data);
-    co->state = CO_DONE;
+    co_body((gp_co *)(((uintptr_t)hi << 32) | (uintptr_t)lo));
     /* returning switches to uc_link, i.e. back into gp_co_resume */
 }
 
@@ -99,6 +154,10 @@ void gp_co_resume(gp_app *app, gp_co *co) {
     }
 }
 
+static void co_switch_out(gp_co *co) { swapcontext(&co->ctx, &co->caller); }
+
+#endif
+
 void gp_co_cancel(gp_app *app, gp_co *co) {
     if (co->state == CO_DONE) return;
     co->cancelled = true;
@@ -113,7 +172,7 @@ void gp_co_cancel(gp_app *app, gp_co *co) {
 
 static bool suspend(gp_co *co) {
     co->state = CO_SUSPENDED;
-    swapcontext(&co->ctx, &co->caller);
+    co_switch_out(co);
     co->wait_job = 0;
     co->wait_bg = false;
     return !co->cancelled;
@@ -133,6 +192,7 @@ bool gp_await_frame(gp_co *co, double *time) {
     return suspend(co);
 }
 
+#ifdef GP_HAS_FD
 bool gp_await_fd(gp_co *co, int fd, int events, double timeout, int *revents) {
     int dummy;
     if (!revents) revents = &dummy;
@@ -141,6 +201,7 @@ bool gp_await_fd(gp_co *co, int fd, int events, double timeout, int *revents) {
     co->wait_job = gp_exec_wake_fd(co->app, co->job_id, fd, events, timeout >= 0 ? (int64_t)(timeout * 1e9) : -1, revents);
     return suspend(co);
 }
+#endif
 
 bool gp_await_background(gp_co *co, gp_work_fn work, void *data) {
     if (co->cancelled) return false;
@@ -150,6 +211,8 @@ bool gp_await_background(gp_co *co, gp_work_fn work, void *data) {
 }
 
 /* ---------------------------------------------------------------- non-blocking I/O */
+
+#ifdef GP_HAS_FD
 
 bool gp_fd_set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -209,3 +272,5 @@ int gp_co_connect(gp_co *co, int fd, const struct sockaddr *addr, socklen_t addr
     if (err) { errno = err; return -1; }
     return 0;
 }
+
+#endif   /* GP_HAS_FD */

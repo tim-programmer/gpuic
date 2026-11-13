@@ -16,7 +16,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#define strncasecmp _strnicmp
+#else
 #include <strings.h>
+#endif
 
 #define NANOSVG_IMPLEMENTATION
 #define NANOSVG_ALL_COLOR_KEYWORDS

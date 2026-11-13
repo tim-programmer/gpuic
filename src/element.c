@@ -1048,10 +1048,12 @@ static gp_node *make_curve(int kind, const gp_point *pts, size_t n, va_list ap) 
     return &el->base;
 }
 
-gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, ...) {
+/* (the int before the "...": va_start after a struct passed by value is not reliable with MSVC on x64, whose callee may keep its
+ * copy of the struct away from the slot the variable arguments follow) */
+gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, int unused, ...) {
     gp_point pts[4] = { p0, c1, c2, p3 };
     va_list ap;
-    va_start(ap, p3);
+    va_start(ap, unused);
     gp_node *n = make_curve(0, pts, 4, ap);
     va_end(ap);
     return n;
@@ -1065,22 +1067,22 @@ gp_node *gp_polyline_(const gp_point *pts, size_t n, ...) {
     return r;
 }
 
-gp_node *gp_img_(gp_image image, ...) {
+gp_node *gp_img_(gp_image image, int unused, ...) {
     gp_el *el = gp_el_new(g_bc->arena, GP_EL_IMAGE);
     el->image = image;
     va_list ap;
-    va_start(ap, image);
+    va_start(ap, unused);
     collect(el, ap, false);
     va_end(ap);
     return &el->base;
 }
 
-gp_node *gp_svg_img_(gp_svg svg, ...) {
+gp_node *gp_svg_img_(gp_svg svg, int unused, ...) {
     gp_el *el = gp_el_new(g_bc->arena, GP_EL_SVG);
     el->svg = svg;
     gp_view_uses_svg(g_bc->window, g_bc->view, svg);   /* (releasing it renders this view again) */
     va_list ap;
-    va_start(ap, svg);
+    va_start(ap, unused);
     collect(el, ap, false);
     va_end(ap);
     return &el->base;

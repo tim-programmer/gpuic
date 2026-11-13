@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include "compat.h"
 
 static int failures;
 #define CHECK(cond, ...)                                                               \
@@ -426,12 +426,9 @@ static void lifecycle_tests(Fix *fx) {
 
 static void async_tests(void) {
     char path[512];
-    snprintf(path, sizeof path, "%s/gpuic-image-test-XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
-    int fd = mkstemp(path);
-    CHECK(fd >= 0, "temp file");
-    if (fd < 0) return;
-    CHECK(write(fd, fx_png, sizeof fx_png) == (ssize_t)sizeof fx_png, "write");
-    close(fd);
+    bool made = test_temp_file(path, sizeof path, "gpuic-image-test", fx_png, sizeof fx_png);
+    CHECK(made, "temp file");
+    if (!made) return;
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     int base = gp_gfx_image_count(app->gfx), w = 0, h = 0;
 
