@@ -1,0 +1,67 @@
+name: Windows Check
+
+on:
+  push:
+    branches: [windows-check]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: windows-${{ matrix.preset }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [release]
+        # add release-clang later; windows-latest has LLVM but MSVC is the target
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # windows-latest already has CMake, Ninja, and VS 2022 (MSVC) preinstalled.
+      # Log the versions so a failure is attributable to the toolchain, not the code.
+      - name: Toolchain versions
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          cl 2>&1 | Select-Object -First 1
+          echo "CC=$env:CC CXX=$env:CXX"
+
+      # gpuic's FETCH mode downloads and builds SDL3, FreeType, HarfBuzz, FriBidi.
+      # This is the slowest step (~10-15 min on a cold runner) and the one most
+      # likely to fail on MSVC (HarfBuzz enables C++, FriBidi has a custom CMake).
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B out/windows -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DPULSERACK_GPUIC_DEPENDENCIES=FETCH `
+            -DPULSERACK_MIDI=ON `
+            -DPULSERACK_BUILD_TESTS=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build out/windows --parallel
+
+      # Window tests need a desktop. The windows-latest runner has one, so unlike
+      # the Linux job we do not need xvfb. If a test hangs, timeout-minutes ends it.
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir out/windows --output-on-failure -j 2
+
+      - name: Upload the test log
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-log-windows
+          path: out/windows/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
