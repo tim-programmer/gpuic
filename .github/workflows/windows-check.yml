@@ -26,6 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        
       # windows-latest already has CMake, Ninja, and VS 2022 (MSVC) preinstalled.
       # Log the versions so a failure is attributable to the toolchain, not the code.
       - name: Toolchain versions
