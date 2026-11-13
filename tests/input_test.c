@@ -882,14 +882,14 @@ static void test_soft_wrap_mouse(gp_co *co) {
     CHECK(hi > lo && hi - lo < 14 && lo >= s[1] - 1 && hi <= e[1], "double-click selected %zu..%zu", lo, hi);
     CHECK(strchr(val(w) + lo, ' ') == NULL || (size_t)(strchr(val(w) + lo, ' ') - val(w)) >= hi - 0, "the selected word contains a space");
 
-    /* a drag from row 0 to row 2 selects across the wrap */
+    /* a drag from row 0 to row 2 selects across the wrap (to the end of row 2 at most: with a narrow font x 120 is past its end) */
     gp_simulate_mouse(app, GP_SIM_DOWN, 60, row_y[0], 1, 0);
     gp_simulate_mouse(app, GP_SIM_MOVE, 100, row_y[1], 1, 0);
     gp_simulate_mouse(app, GP_SIM_MOVE, 120, row_y[2], 1, 0);
     gp_simulate_mouse(app, GP_SIM_UP, 120, row_y[2], 1, 0);
     settle(co);
     gp_text_input_selection(app, w, &lo, &hi);
-    CHECK(lo > s[0] && lo < e[0] && hi > s[2] && hi < e[2], "drag across rows selected %zu..%zu (rows %zu..%zu, %zu..%zu, %zu..%zu)", lo, hi, s[0], e[0], s[1], e[1], s[2], e[2]);
+    CHECK(lo > s[0] && lo < e[0] && hi > s[2] && hi <= e[2], "drag across rows selected %zu..%zu (rows %zu..%zu, %zu..%zu, %zu..%zu)", lo, hi, s[0], e[0], s[1], e[1], s[2], e[2]);
 
     /* a triple-click selects the whole hard line, however many rows it takes */
     gp_simulate_mouse(app, GP_SIM_DOWN, 60, row_y[1], 3, 0);
