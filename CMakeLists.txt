@@ -9,6 +9,13 @@ if(CMAKE_CXX_COMPILER)
   set(GPUIC_HAVE_CXX ON)
 endif()
 
+# Warnings: GCC/Clang style on those, MSVC style on MSVC.
+if(MSVC)
+  set(GPUIC_WARNING_FLAGS /W4)
+else()
+  set(GPUIC_WARNING_FLAGS -Wall -Wextra -Wno-unused-parameter)
+endif()
+
 # Examples, tests and install rules default to on only when gpuic is the top
 # level project, so add_subdirectory()/FetchContent users get just the library.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)
@@ -78,7 +85,7 @@ set_target_properties(gpuic PROPERTIES
 target_include_directories(gpuic
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE src)
-target_compile_options(gpuic PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_compile_options(gpuic PRIVATE ${GPUIC_WARNING_FLAGS})
 target_compile_features(gpuic PUBLIC c_std_11)   # the public builder macros use __VA_OPT__
 # The public header includes only the C library, so the dependencies stay private.
 # An installed gpuic finds the same dependencies again in its gpuicConfig.cmake.
@@ -103,12 +110,12 @@ if(GPUIC_BUILD_EXAMPLES)
   foreach(example counter form scroll list async inputs bidi observe animate fd fonts gradients images svg)
     add_executable(${example} examples/${example}.c)
     target_link_libraries(${example} PRIVATE gpuic)
-    target_compile_options(${example} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(${example} PRIVATE ${GPUIC_WARNING_FLAGS})
   endforeach()
   if(GPUIC_HAVE_CXX)
     add_executable(counter_cpp examples/counter_cpp.cpp)
     target_link_libraries(counter_cpp PRIVATE gpuic::cpp)
-    target_compile_options(counter_cpp PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(counter_cpp PRIVATE ${GPUIC_WARNING_FLAGS})
   endif()
 endif()
 
@@ -124,7 +131,7 @@ if(GPUIC_BUILD_TESTS)
     if(GPUIC_USES_FONTCONFIG)
       target_compile_definitions(${test} PRIVATE GPUIC_HAVE_FONTCONFIG)
     endif()
-    target_compile_options(${test} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(${test} PRIVATE ${GPUIC_WARNING_FLAGS})
     add_test(NAME ${test} COMMAND ${test})
     # tests never touch the user's real font scan cache
     set_tests_properties(${test} PROPERTIES ENVIRONMENT "${_gpuic_test_env}")
@@ -138,18 +145,22 @@ if(GPUIC_BUILD_TESTS)
     if(GPUIC_USES_FONTCONFIG)
       target_compile_definitions(cpp_test PRIVATE GPUIC_HAVE_FONTCONFIG)
     endif()
-    target_compile_options(cpp_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wno-unused-parameter>)
+    target_compile_options(cpp_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${GPUIC_WARNING_FLAGS}>)
     add_test(NAME cpp_test COMMAND cpp_test)
     set_tests_properties(cpp_test PROPERTIES ENVIRONMENT "${_gpuic_test_env}")
     # the header and the C++ layer as ISO C++ (no compound literals): -Wpedantic -Werror
     add_executable(cpp_pedantic tests/cpp_pedantic.cpp)
     target_link_libraries(cpp_pedantic PRIVATE gpuic::cpp gpuic_deps)
-    target_compile_options(cpp_pedantic PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)
+    if(MSVC)
+      target_compile_options(cpp_pedantic PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /WX>)
+    else()
+      target_compile_options(cpp_pedantic PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)
+    endif()
     add_test(NAME cpp_pedantic COMMAND cpp_pedantic)
     # timers, background work, coroutines, observation, text fields and loaders: every closure destroyed exactly once
     add_executable(cpp_async_test tests/cpp_async_test.cpp)
     target_link_libraries(cpp_async_test PRIVATE gpuic::cpp gpuic_deps)
-    target_compile_options(cpp_async_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wno-unused-parameter>)
+    target_compile_options(cpp_async_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${GPUIC_WARNING_FLAGS}>)
     add_test(NAME cpp_async_test COMMAND cpp_async_test)
     set_tests_properties(cpp_async_test PROPERTIES ENVIRONMENT "${_gpuic_test_env}")
     # scroll and focus handles, key bindings, actions, the clipboard
@@ -159,7 +170,7 @@ if(GPUIC_BUILD_TESTS)
     if(GPUIC_USES_FONTCONFIG)
       target_compile_definitions(cpp_input_test PRIVATE GPUIC_HAVE_FONTCONFIG)
     endif()
-    target_compile_options(cpp_input_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wno-unused-parameter>)
+    target_compile_options(cpp_input_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${GPUIC_WARNING_FLAGS}>)
     add_test(NAME cpp_input_test COMMAND cpp_input_test)
     set_tests_properties(cpp_input_test PROPERTIES ENVIRONMENT "${_gpuic_test_env}")
     find_package(Python3 COMPONENTS Interpreter)
