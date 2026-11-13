@@ -709,7 +709,7 @@ extern gp_node gp_end_marker;
 
 gp_node *gp_div_(int unused, ...);
 gp_node *gp_text_(const char *text, ...);
-gp_node *gp_img_(gp_image image, ...);
+gp_node *gp_img_(gp_image image, int unused, ...);
 
 /* ---------------------------------------------------------------- stroked curves */
 
@@ -720,8 +720,9 @@ gp_node *gp_img_(gp_image image, ...);
  * border): compute them from your own model, no layout is needed. The element places itself: it is absolute, its box is the bounding box of the points padded by half the
  * stroke width plus the hit tolerance (plus more for a miter join, see gp_miter_limit), and it takes no part in the layout of its siblings. Put it where the stroke should be in
  * the tree order (it paints and is hit in that order, like any element), inside a parent that covers the area. */
-gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, ...);
-#define gp_curve(p0, c1, c2, p3, ...) gp_curve_((p0), (c1), (c2), (p3) __VA_OPT__(,) __VA_ARGS__, GP_END)
+/* (gp_curve_, gp_img_ and gp_svg_img_ take an int after their struct arguments: va_start after a struct is not reliable with MSVC on x64) */
+gp_node *gp_curve_(gp_point p0, gp_point c1, gp_point c2, gp_point p3, int unused, ...);
+#define gp_curve(p0, c1, c2, p3, ...) gp_curve_((p0), (c1), (c2), (p3), 0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 gp_node *gp_polyline_(const gp_point *pts, size_t n, ...);
 #define gp_polyline(pts, n, ...) gp_polyline_((pts), (n) __VA_OPT__(,) __VA_ARGS__, GP_END)
 #define gp_xy(px, py) GP_LIT(gp_point, (px), (py))   /* a point (not gp_pt: that is the padding at the top) */
@@ -782,11 +783,11 @@ gp_node *gp_fill_nonzero(void);
  * (from the start by default). Glyphs that do not fit are left out. Left to right only; not hit tested (the stroke is). The string is copied. */
 gp_node *gp_path_text(const char *text);
 gp_node *gp_path_text_dy(float px);
-gp_node *gp_svg_img_(gp_svg svg, ...);
+gp_node *gp_svg_img_(gp_svg svg, int unused, ...);
 #define gp_div(...)        gp_div_(0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 #define gp_text(str, ...)  gp_text_((str) __VA_OPT__(,) __VA_ARGS__, GP_END)
-#define gp_img(image, ...) gp_img_((image) __VA_OPT__(,) __VA_ARGS__, GP_END)
-#define gp_svg_img(svg, ...) gp_svg_img_((svg) __VA_OPT__(,) __VA_ARGS__, GP_END)
+#define gp_img(image, ...) gp_img_((image), 0 __VA_OPT__(,) __VA_ARGS__, GP_END)
+#define gp_svg_img(svg, ...) gp_svg_img_((svg), 0 __VA_OPT__(,) __VA_ARGS__, GP_END)
 /* How an image fills its box (content box: inside padding and border), the image centered in it:
  * FILL stretches it to the box; CONTAIN fits all of it inside, keeping its proportions; COVER fills the box, keeping its
  * proportions, and crops what overflows; NONE draws it at its own size, cropped if it is bigger; SCALE_DOWN is NONE for

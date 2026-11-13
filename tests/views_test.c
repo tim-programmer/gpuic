@@ -191,6 +191,11 @@ static void verify_frame(void) {
             const gp_instance *a = &w->scene.items[i], *b = &fresh.items[i];
             printf("   cached: kind %.0f bounds %.2f %.2f %.2f %.2f color %.2f %.2f %.2f %.2f\n", a->kind, a->bounds[0], a->bounds[1], a->bounds[2], a->bounds[3], a->color[0], a->color[1], a->color[2], a->color[3]);
             printf("   mouse %.1f,%.1f in=%d drag_key=%llx pressed=%d\n", w->mouse.x, w->mouse.y, w->mouse_in, (unsigned long long)w->drag_key, w->pressed);
+            {   /* which floats differ (a -0 against a 0 differs to memcmp and to nothing else) */
+                const float *fa = (const float *)a, *fb = (const float *)b;
+                for (size_t q = 0; q < sizeof *a / sizeof(float); q++)
+                    if (memcmp(&fa[q], &fb[q], sizeof(float)) != 0) printf("   float %zu: cached %a, fresh %a\n", q, fa[q], fb[q]);
+            }
             for (size_t q = 0; q < w->views.cap; q++) {
                 gp_vview *vv = &w->views.v[q];
                 if (!vv->entity.generation || !vv->chunk_valid) continue;

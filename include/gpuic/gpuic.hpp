@@ -555,9 +555,9 @@ public:
         switch (kind_) {
         case Kind::Div: return gp_div_(0, mods, kids, GP_END);
         case Kind::Text: return gp_text_(str_, mods, GP_END);
-        case Kind::Img: return gp_img_(img_, mods, GP_END);
-        case Kind::Svg: return gp_svg_img_(svg_, mods, GP_END);
-        case Kind::Curve: return gp_curve_(pts_[0], pts_[1], pts_[2], pts_[3], mods, GP_END);
+        case Kind::Img: return gp_img_(img_, 0, mods, GP_END);
+        case Kind::Svg: return gp_svg_img_(svg_, 0, mods, GP_END);
+        case Kind::Curve: return gp_curve_(pts_[0], pts_[1], pts_[2], pts_[3], 0, mods, GP_END);
         case Kind::Polyline: return gp_polyline_(pts_, npts_, mods, GP_END);
         case Kind::UList: return gp_uniform_list_(count_, height_, list_fn_, data_, mods, GP_END);
         case Kind::List: return gp_list_(count_, height_, list_fn_, data_, mods, GP_END);

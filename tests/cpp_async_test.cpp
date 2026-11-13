@@ -366,7 +366,12 @@ static void write_bmp(const char* path) {   // 2 x 2, 24 bits: red, green / blue
 
 static void test_loaders(Co& co, Ctx cx) {
     App app = cx.app();
-    std::string path = "/tmp/gpuic_cpp_async_test.bmp";
+#ifdef _WIN32
+    const char* tmp = std::getenv("TEMP");
+#else
+    const char* tmp = std::getenv("TMPDIR");
+#endif
+    std::string path = std::string(tmp && *tmp ? tmp : "/tmp") + "/gpuic_cpp_async_test.bmp";
     write_bmp(path.c_str());
     gp_image im = app.load_image(path.c_str());
     int w = 0, h = 0;

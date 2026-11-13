@@ -889,7 +889,7 @@ static void test_soft_wrap_mouse(gp_co *co) {
     gp_simulate_mouse(app, GP_SIM_UP, 120, row_y[2], 1, 0);
     settle(co);
     gp_text_input_selection(app, w, &lo, &hi);
-    CHECK(lo > s[0] && lo < e[0] && hi > s[2] && hi < e[2], "drag across rows selected %zu..%zu", lo, hi);
+    CHECK(lo > s[0] && lo < e[0] && hi > s[2] && hi < e[2], "drag across rows selected %zu..%zu (rows %zu..%zu, %zu..%zu, %zu..%zu)", lo, hi, s[0], e[0], s[1], e[1], s[2], e[2]);
 
     /* a triple-click selects the whole hard line, however many rows it takes */
     gp_simulate_mouse(app, GP_SIM_DOWN, 60, row_y[1], 3, 0);

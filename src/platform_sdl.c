@@ -464,8 +464,19 @@ void gp_platform_inject_wheel(gp_window *w, float x, float y, float dx, float dy
 
 void gp_platform_pump(gp_app *app, int timeout_ms) {
     SDL_Event e;
-    if (timeout_ms != 0) {
-        if (!SDL_WaitEventTimeout(&e, timeout_ms)) return;
+    if (timeout_ms > 0) {
+        /* A wait can end with no event a little before its time (on Windows by up to a timer tick): wait out the rest
+         * here, so the loop wakes once, when the timer it slept for is due. */
+        int64_t deadline = gp_now_ns() + (int64_t)timeout_ms * 1000000;
+        for (;;) {
+            int64_t left = deadline - gp_now_ns();
+            if (left <= 0) return;
+            if (SDL_WaitEventTimeout(&e, (Sint32)((left + 999999) / 1000000))) break;
+        }
+        dispatch(app, &e);
+        gp_effects_flush(app);   /* observers run before the next event is looked at */
+    } else if (timeout_ms < 0) {
+        if (!SDL_WaitEvent(&e)) return;
         dispatch(app, &e);
         gp_effects_flush(app);   /* observers run before the next event is looked at */
     }
