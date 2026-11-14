@@ -86,6 +86,13 @@ build has been cross-compiled with MinGW-w64 and run under Wine; `.github/workfl
 tests it with MSVC. macOS is untested: its font directories and the SDL-based GL loading follow SDL's own
 cross-platform APIs.
 
+## Code style
+
+The C and C++ sources are formatted by clang-format 23.1.4 with the project's `.clang-format`, which also puts braces around the body of
+every `if`, `else`, `for`, `while` and `do`, one line or not (a body without braces is how a stray second line slips out of its condition).
+CI fails when a file is not formatted: run `tools/check_format.sh --fix` before committing (`pip install clang-format==23.1.4` gets the
+pinned version; another version may format slightly differently). Vendored code in `third_party/` and generated files are left as they are.
+
 ## Build & run
 
 From a checkout with the dependencies above available (or `-DGPUIC_DEPENDENCIES=FETCH`), plus

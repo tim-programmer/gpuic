@@ -18,6 +18,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The sources must be as .clang-format says (which includes braces around every if, else, for, while and do body): the same check as
+  # tools/check_format.sh locally, with the clang-format version pinned (versions differ in what they produce).
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install clang-format 23.1.4
+        run: pip install clang-format==23.1.4
+      - name: Check
+        run: tools/check_format.sh
+
   build-and-test:
     name: ${{ matrix.preset }}
     runs-on: ubuntu-24.04
