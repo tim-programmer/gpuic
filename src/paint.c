@@ -825,6 +825,17 @@ static void paint_text(paint_ctx *pc, gp_el *n, float x, float y, rect clip, flo
 static void border_widths(const gp_style *s, float w4[4]);
 static void corner_radii(const gp_style *s, float w, float h, float r[4]);
 
+/* How much a transform above makes a drawing bigger on the screen, in steps of an eighth of an octave (so a zoom that is animated makes a few
+ * rasters, not one a frame); 1 in perspective (the layout's size, stretched) and when it is close to 1. */
+static float svg_xform_scale(const paint_ctx *pc) {
+    if (!pc->has_xf) return 1.f;
+    const gp_affine *m = &pc->xf;
+    if (m->g != 0.f || m->h != 0.f || m->w1 != 0.f) return 1.f;
+    float mag = sqrtf(fabsf(m->a * m->d - m->b * m->c));
+    if (!(mag > 1e-3f) || fabsf(mag - 1.f) < 1e-3f) return 1.f;
+    return exp2f(roundf(log2f(mag) * 8.f) / 8.f);
+}
+
 /* An image: inside padding and border, scaled the way object-fit says and centered; the part of it that falls outside
  * the content box is cropped by choosing the texture rectangle, so what is drawn never leaves the box. The corners follow
  * the element's radius (less its border). */
@@ -859,6 +870,7 @@ static void paint_image(paint_ctx *pc, gp_el *n, float x, float y, rect clip, fl
     if (vx1 <= vx0 || vy1 <= vy0 || sw <= 0 || sh <= 0) return;
     if (n->kind == GP_EL_SVG) {   /* a drawing is rasterized for the size it is shown at, in device pixels, in the color `currentColor` is */
         float k = fmaxf(sw * pc->scale / iw, sh * pc->scale / ih);
+        k *= svg_xform_scale(pc);   /* under a scale above it: as many pixels as it covers on the screen */
         int rw = (int)ceilf(iw * k - 0.001f);
         if (rw < 1) rw = 1;
         if (rw > GP_SVG_MAX_RASTER) rw = GP_SVG_MAX_RASTER;
