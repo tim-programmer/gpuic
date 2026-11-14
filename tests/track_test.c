@@ -11,73 +11,99 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 60) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 60) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
-static gp_app *app;
-static gp_co *co_;
-static gp_window *win(void) { return app->windows[0]; }
+static gp_app* app;
+static gp_co* co_;
+static gp_window* win(void)
+{
+    return app->windows[0];
+}
 
-typedef struct { gp_scroll v, h, b, l, vl; int clicks; } Fix;
+typedef struct
+{
+    gp_scroll v, h, b, l, vl;
+    int clicks;
+} Fix;
 
-#define RED gp_rgb(0xc03030)
+#define RED  gp_rgb(0xc03030)
 #define BLUE gp_rgb(0x3030c0)
 
-static void on_click(void *self, gp_ctx *cx, const gp_mouse_event *ev, void *data) { ((Fix *)self)->clicks++; }
-static gp_node *row(void *self, gp_ctx *cx, size_t i, void *data) {
+static void on_click(void* self, gp_ctx* cx, const gp_mouse_event* ev, void* data)
+{
+    ((Fix*)self)->clicks++;
+}
+static gp_node* row(void* self, gp_ctx* cx, size_t i, void* data)
+{
     return gp_div(gp_h(20), gp_bg(i % 2 ? RED : BLUE));
 }
 
-static gp_node *render(void *self, gp_ctx *cx) {
-    Fix *f = self;
+static gp_node* render(void* self, gp_ctx* cx)
+{
+    Fix* f = self;
     gp_node **v = gp_frame_alloc(10 * sizeof *v), **h = gp_frame_alloc(10 * sizeof *h), **b = gp_frame_alloc(10 * sizeof *b);
-    for (int i = 0; i < 10; i++) {
+    for(int i = 0; i < 10; i++) {
         v[i] = gp_div(gp_h(100), gp_flex_none(), gp_bg(i % 2 ? RED : BLUE), gp_on_click(on_click));
         h[i] = gp_div(gp_w(100), gp_flex_none(), gp_bg(i % 2 ? RED : BLUE));
         b[i] = gp_div(gp_h(100), gp_flex_none(), gp_bg(i % 2 ? RED : BLUE));
     }
     return gp_div(
-        gp_size_full(), gp_flex_row(), gp_items_start(), gp_gap(20), gp_p(10), gp_bg(gp_rgb(0x202030)),
-        gp_div(gp_w(100), gp_h(200), gp_overflow_y_scroll(), gp_track_scroll(f->v), gp_children(v, 10)),
-        gp_div(gp_w(200), gp_h(100), gp_flex_row(), gp_overflow_x_scroll(), gp_track_scroll(f->h), gp_children(h, 10)),
-        gp_div(gp_w(100), gp_h(200), gp_border(4), gp_border_color(RED), gp_overflow_y_scroll(), gp_track_scroll(f->b), gp_children(b, 10)),
-        gp_uniform_list(5000, 20, row, NULL, gp_w(100), gp_h(200), gp_track_scroll(f->l)),
-        gp_list(200000, 20, row, NULL, gp_w(100), gp_h(200), gp_track_scroll(f->vl)));
+        gp_size_full(), gp_flex_row(), gp_items_start(), gp_gap(20), gp_p(10), gp_bg(gp_rgb(0x202030)), gp_div(gp_w(100), gp_h(200), gp_overflow_y_scroll(), gp_track_scroll(f->v), gp_children(v, 10)), gp_div(gp_w(200), gp_h(100), gp_flex_row(), gp_overflow_x_scroll(), gp_track_scroll(f->h), gp_children(h, 10)), gp_div(gp_w(100), gp_h(200), gp_border(4), gp_border_color(RED), gp_overflow_y_scroll(), gp_track_scroll(f->b), gp_children(b, 10)), gp_uniform_list(5000, 20, row, NULL, gp_w(100), gp_h(200), gp_track_scroll(f->l)), gp_list(200000, 20, row, NULL, gp_w(100), gp_h(200), gp_track_scroll(f->vl)));
 }
 
 static gp_ctx cx_;
-static void settle(void) { gp_sleep(co_, 0.15); }
-static float offy(gp_scroll s) { return gp_scroll_offset(&cx_, s).y; }
-static float offx(gp_scroll s) { return gp_scroll_offset(&cx_, s).x; }
-static bool near(float a, float b) { return fabsf(a - b) < 0.6f; }
+static void settle(void)
+{
+    gp_sleep(co_, 0.15);
+}
+static float offy(gp_scroll s)
+{
+    return gp_scroll_offset(&cx_, s).y;
+}
+static float offx(gp_scroll s)
+{
+    return gp_scroll_offset(&cx_, s).x;
+}
+static bool near(float a, float b)
+{
+    return fabsf(a - b) < 0.6f;
+}
 
 /* the thumb of scroller `i` (a child of the root) as the window shows it */
-static bool thumb(int i, int axis, gp_thumb *t) {
-    const gp_el *n = win()->tree->children[i];
+static bool thumb(int i, int axis, gp_thumb* t)
+{
+    const gp_el* n = win()->tree->children[i];
     return gp_scroll_thumb(n, axis, win()->tree->pos.x + n->pos.x, win()->tree->pos.y + n->pos.y, t);
 }
 static int64_t skew;
-static void jump(double seconds) {
+static void jump(double seconds)
+{
     skew += (int64_t)(seconds * 1e9);
     gp_debug_clock_skew(skew);
 }
-static void tick(void) { gp_sleep(co_, 0.02); }
-static void click(float x, float y) {
+static void tick(void)
+{
+    gp_sleep(co_, 0.02);
+}
+static void click(float x, float y)
+{
     gp_simulate_mouse(app, GP_SIM_MOVE, x, y, 0, 0);
     gp_simulate_mouse(app, GP_SIM_DOWN, x, y, 1, 0);
     gp_simulate_mouse(app, GP_SIM_UP, x, y, 1, 0);
     settle();
 }
 
-static void run(Fix *f) {
+static void run(Fix* f)
+{
     settle();
     cx_ = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_thumb t;
@@ -92,12 +118,18 @@ static void run(Fix *f) {
     thumb(0, 1, &t);
     click(x, t.track_start + 1);
     CHECK(near(offy(f->v), 175), "above the thumb pages up: %g", offy(f->v));
-    for (int i = 0; i < 6; i++) { thumb(0, 1, &t); click(x, t.track_start + t.track_len - 1); }
+    for(int i = 0; i < 6; i++) {
+        thumb(0, 1, &t);
+        click(x, t.track_start + t.track_len - 1);
+    }
     CHECK(near(offy(f->v), 800), "paging stops at the end: %g", offy(f->v));
     thumb(0, 1, &t);
     click(x, t.track_start + t.track_len - 1);
     CHECK(near(offy(f->v), 800), "...and a press below the thumb at the end does nothing: %g", offy(f->v));
-    for (int i = 0; i < 8; i++) { thumb(0, 1, &t); click(x, t.track_start + 1); }
+    for(int i = 0; i < 8; i++) {
+        thumb(0, 1, &t);
+        click(x, t.track_start + 1);
+    }
     CHECK(near(offy(f->v), 0), "and at the start: %g", offy(f->v));
 
     /* a press on the thumb drags (it does not page); a press on the track does not start a drag */
@@ -164,8 +196,11 @@ static void run(Fix *f) {
     gp_simulate_mouse(app, GP_SIM_MOVE, x, far, 0, 0);
     gp_simulate_mouse(app, GP_SIM_DOWN, x, far, 1, 0);
     tick();
-    gp_simulate_mouse(app, GP_SIM_MOVE, x, t.track_start + t.track_len + 25, 0, 0);   /* held, and the pointer slides below the track: the thumb will never reach it */
-    for (int i = 0; i < 4; i++) { jump(i ? 0.11 : 0.45); tick(); }
+    gp_simulate_mouse(app, GP_SIM_MOVE, x, t.track_start + t.track_len + 25, 0, 0); /* held, and the pointer slides below the track: the thumb will never reach it */
+    for(int i = 0; i < 4; i++) {
+        jump(i ? 0.11 : 0.45);
+        tick();
+    }
     CHECK(near(offy(f->v), 800), "paging stops at the end: %g", offy(f->v));
     jump(0.5);
     tick();
@@ -251,25 +286,32 @@ static void run(Fix *f) {
     CHECK(near(offy(f->vl), 3000000), "...and down: %g", offy(f->vl));
 }
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
     co_ = co;
-    Fix *fx = gp_entity_get(app, win()->root_view);
+    Fix* fx = gp_entity_get(app, win()->root_view);
     run(fx);
     gp_quit(app);
 }
 
-static void ready(gp_app *a, void *userdata) {
+static void ready(gp_app* a, void* userdata)
+{
     app = a;
     Fix init;
     memset(&init, 0, sizeof init);
-    init.v = gp_scroll_new(app); init.h = gp_scroll_new(app); init.b = gp_scroll_new(app); init.l = gp_scroll_new(app); init.vl = gp_scroll_new(app);
+    init.v = gp_scroll_new(app);
+    init.h = gp_scroll_new(app);
+    init.b = gp_scroll_new(app);
+    init.l = gp_scroll_new(app);
+    init.vl = gp_scroll_new(app);
     gp_entity v = gp_view_new(app, sizeof init, &init, render, NULL);
     gp_open_window(app, &(gp_window_options){ .title = "track_test", .width = 740, .height = 260 }, v);
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);

@@ -7,7 +7,7 @@
 #include <gpuic/gpuic.hpp>
 
 #ifdef GP_HAS_FD
-#include <unistd.h>
+# include <unistd.h>
 #endif
 
 #include <chrono>
@@ -16,31 +16,35 @@
 #include <memory>
 #include <string>
 #ifdef _WIN32
-#include <direct.h>
+# include <direct.h>
 #else
-#include <sys/stat.h>
-#include <unistd.h>
+# include <sys/stat.h>
+# include <unistd.h>
 #endif
 #include <thread>
 
 using namespace gpuic;
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            failures++;                                                                \
-            std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                           \
-            std::printf(__VA_ARGS__);                                                  \
-            std::printf("\n");                                                         \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                     \
+    do {                                                     \
+        if(!(cond)) {                                        \
+            failures++;                                      \
+            std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+            std::printf(__VA_ARGS__);                        \
+            std::printf("\n");                               \
+        }                                                    \
+    } while(0)
 
 /** A callable's payload: counts how many copies exist, so "destroyed once" is use_count() == 1 again at the end. */
 using Tok = std::shared_ptr<int>;
-static Tok make_tok() { return std::make_shared<int>(0); }
+static Tok make_tok()
+{
+    return std::make_shared<int>(0);
+}
 
-struct Model {
+struct Model
+{
     int fired = 0, ticks = 0;
     std::string log;
     bool saw_self = false;
@@ -50,13 +54,14 @@ static std::thread::id main_id;
 
 // ------------------------------------------------------------------------------------------------ timers
 
-static void test_timers(Co& co, Ctx cx) {
+static void test_timers(Co& co, Ctx cx)
+{
     App app = cx.app();
     auto m = app.new_entity<Model>();
     Ctx mc = app.ctx(m.id);
     Model* model = m.get(app);
 
-    {   // after: self by reference, captured std::string and shared_ptr (not trivially destructible), runs once, closure destroyed
+    { // after: self by reference, captured std::string and shared_ptr (not trivially destructible), runs once, closure destroyed
         Tok tok = make_tok();
         std::string name = "later";
         Task t = mc.after(0.05, [tok, name](Model& self, Ctx c) { self.fired++; self.log += name; (*tok)++; });
@@ -67,7 +72,7 @@ static void test_timers(Co& co, Ctx cx) {
         co.sleep(0.05);
         CHECK(tok.use_count() == 1, "the closure of a timer that ran is destroyed (use_count %ld)", tok.use_count());
     }
-    {   // every: ticks, then cancelled: destroyed once, no more ticks
+    { // every: ticks, then cancelled: destroyed once, no more ticks
         Tok tok = make_tok();
         Task t = mc.every(0.02, [tok](Model& self) { self.ticks++; });
         co.sleep(0.25);
@@ -78,12 +83,12 @@ static void test_timers(Co& co, Ctx cx) {
         co.sleep(0.1);
         CHECK(model->ticks == ticks, "a cancelled timer stops (%d -> %d)", ticks, model->ticks);
         CHECK(tok.use_count() == 1, "a cancelled interval's closure is destroyed (use_count %ld)", tok.use_count());
-        t.cancel();   // stale: harmless
+        t.cancel(); // stale: harmless
         Task none;
         none.cancel();
         CHECK(!none.active() && !none, "a default Task is inactive");
     }
-    {   // cancelled before it ever ran
+    { // cancelled before it ever ran
         Tok tok = make_tok();
         bool ran = false;
         Task t = mc.after(0.05, [tok, &ran] { ran = true; });
@@ -91,7 +96,7 @@ static void test_timers(Co& co, Ctx cx) {
         co.sleep(0.15);
         CHECK(!ran && tok.use_count() == 1, "a timer cancelled early does not run and is destroyed (ran %d, use_count %ld)", ran, tok.use_count());
     }
-    {   // the entity is released first: the callback never runs (its self would be gone), the closure is still destroyed
+    { // the entity is released first: the callback never runs (its self would be gone), the closure is still destroyed
         auto m2 = app.new_entity<Model>();
         Tok tok = make_tok();
         bool ran = false;
@@ -100,14 +105,14 @@ static void test_timers(Co& co, Ctx cx) {
         co.sleep(0.2);
         CHECK(!ran && tok.use_count() == 1, "a timer of a released entity does not run and is destroyed (ran %d, use_count %ld)", ran, tok.use_count());
     }
-    {   // a ctx for no entity: the closure takes no self; the callable may be mutable and move-only
+    { // a ctx for no entity: the closure takes no self; the callable may be mutable and move-only
         auto owned = std::make_unique<int>(41);
         int seen = 0;
         cx.after(0.02, [p = std::move(owned), &seen]() mutable { seen = ++*p; });
         co.sleep(0.15);
         CHECK(seen == 42, "an app-level, move-only, mutable closure ran (%d)", seen);
     }
-    {   // next_frame / animate
+    { // next_frame / animate
         Tok tok = make_tok();
         double t0 = -1;
         mc.next_frame([tok, &t0](double time) { t0 = time; });
@@ -125,12 +130,13 @@ static void test_timers(Co& co, Ctx cx) {
 
 // ------------------------------------------------------------------------------------------------ background
 
-static void test_background(Co& co, Ctx cx) {
+static void test_background(Co& co, Ctx cx)
+{
     App app = cx.app();
     auto m = app.new_entity<Model>();
     Ctx mc = app.ctx(m.id);
     Model* model = m.get(app);
-    {   // a result crosses threads: work on a pool thread, done on this one with the value
+    { // a result crosses threads: work on a pool thread, done on this one with the value
         Tok tok = make_tok();
         std::thread::id worker, done_id;
         int got = 0;
@@ -142,7 +148,7 @@ static void test_background(Co& co, Ctx cx) {
         CHECK(worker != main_id && done_id == main_id, "work ran on a pool thread, done on the main one");
         CHECK(tok.use_count() == 1, "both closures are destroyed once it is over (use_count %ld)", tok.use_count());
     }
-    {   // a std::string result, void work, cancelled
+    { // a std::string result, void work, cancelled
         std::string got;
         mc.background([] { return std::string("from the pool, long enough to leave the small string buffer"); }, [&got](std::string s) { got = s; });
         bool ran = false;
@@ -168,12 +174,13 @@ static void test_background(Co& co, Ctx cx) {
 
 // ------------------------------------------------------------------------------------------------ coroutines
 
-static void test_coroutines(Co& co, Ctx cx) {
+static void test_coroutines(Co& co, Ctx cx)
+{
     App app = cx.app();
     auto m = app.new_entity<Model>();
     Ctx mc = app.ctx(m.id);
     Model* model = m.get(app);
-    {   // a coroutine with all its awaits, self and a result from the pool
+    { // a coroutine with all its awaits, self and a result from the pool
         Tok tok = make_tok();
         std::optional<int> result;
         bool void_ran = false;
@@ -193,12 +200,15 @@ static void test_coroutines(Co& co, Ctx cx) {
         CHECK(model->log == "abc" && result == 11 && void_ran && frame_time > 0, "the coroutine ran through its awaits ('%s', %d)", model->log.c_str(), result.value_or(-1));
         CHECK(!t.active() && tok.use_count() == 1, "it ends and its closure is destroyed (use_count %ld)", tok.use_count());
     }
-    {   // cancelled while sleeping: the await says so, the body unwinds, the closure is destroyed once
+    { // cancelled while sleeping: the await says so, the body unwinds, the closure is destroyed once
         Tok tok = make_tok();
         bool saw_cancel = false, after_ran = false;
         Task t = mc.spawn([tok, &saw_cancel, &after_ran](Co& c) {
-            if (!c.sleep(5)) saw_cancel = c.cancelled();
-            else after_ran = true;
+            if(!c.sleep(5)) {
+                saw_cancel = c.cancelled();
+            } else {
+                after_ran = true;
+            }
         });
         co.sleep(0.05);
         t.cancel();
@@ -206,7 +216,7 @@ static void test_coroutines(Co& co, Ctx cx) {
         CHECK(saw_cancel && !after_ran, "a cancelled coroutine's await returned false (%d %d)", saw_cancel, after_ran);
         CHECK(tok.use_count() == 1, "and its closure is destroyed (use_count %ld)", tok.use_count());
     }
-    {   // its entity is released while it sleeps
+    { // its entity is released while it sleeps
         auto m2 = app.new_entity<Model>();
         Tok tok = make_tok();
         bool saw_cancel = false;
@@ -217,7 +227,7 @@ static void test_coroutines(Co& co, Ctx cx) {
         CHECK(saw_cancel && tok.use_count() == 1, "a coroutine of a released entity unwinds and is destroyed (%d, use_count %ld)", saw_cancel, tok.use_count());
     }
 #ifdef GP_HAS_FD
-    {   // I/O: a pipe, read in a coroutine and watched with a callback
+    { // I/O: a pipe, read in a coroutine and watched with a callback
         int fds[2];
         CHECK(pipe(fds) == 0, "pipe");
         gp_fd_set_nonblocking(fds[0]);
@@ -226,7 +236,9 @@ static void test_coroutines(Co& co, Ctx cx) {
         mc.spawn([tok, &got, fd = fds[0]](Co& c) {
             char buf[16];
             ssize_t n = c.read(fd, buf, sizeof buf);
-            if (n > 0) got.assign(buf, (size_t)n);
+            if(n > 0) {
+                got.assign(buf, (size_t)n);
+            }
         });
         co.sleep(0.05);
         CHECK(write(fds[1], "ping", 4) == 4, "write");
@@ -238,7 +250,8 @@ static void test_coroutines(Co& co, Ctx cx) {
         char buf[16];
         Task w = mc.watch_fd(fds[0], GP_FD_READ, [tok2, &events, &buf](Model& self, FdEvent ev) {
             events |= ev.events;
-            while (read(ev.fd, buf, sizeof buf) > 0) {}
+            while(read(ev.fd, buf, sizeof buf) > 0) {
+            }
             self.fired++;
         });
         CHECK(write(fds[1], "x", 1) == 1, "write");
@@ -251,10 +264,11 @@ static void test_coroutines(Co& co, Ctx cx) {
         close(fds[1]);
     }
 #endif
-    {   /* watching a directory: the closure is called with the event and destroyed once */
+    { /* watching a directory: the closure is called with the event and destroyed once */
         char dir[512];
-        const char* tmp = getenv("TEMP") ? getenv("TEMP") : getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
-        #ifdef _WIN32
+        const char* tmp = getenv("TEMP") ? getenv("TEMP") : getenv("TMPDIR") ? getenv("TMPDIR")
+                                                                             : "/tmp";
+#ifdef _WIN32
         snprintf(dir, sizeof dir, "%s/gpuic-cpp-watch-%d", tmp, (int)_getpid());
 #else
         snprintf(dir, sizeof dir, "%s/gpuic-cpp-watch-%d", tmp, (int)getpid());
@@ -268,15 +282,19 @@ static void test_coroutines(Co& co, Ctx cx) {
         std::string seen;
         int kind = 0;
         Task pw = mc.watch_path(dir, 0, [tok3, &seen, &kind](Model& self, const gp_path_event& ev) {
-            kind |= ev.kind;   /* (Windows follows CREATED with MODIFIED) */
+            kind |= ev.kind; /* (Windows follows CREATED with MODIFIED) */
             seen = ev.path;
             self.fired++;
         });
         CHECK(pw.active(), "watch_path made a watch");
         std::string file = std::string(dir) + "/made.txt";
         FILE* f = fopen(file.c_str(), "wb");
-        if (f) fclose(f);
-        for (int i = 0; i < 200 && seen.empty(); i++) co.sleep(0.01);
+        if(f) {
+            fclose(f);
+        }
+        for(int i = 0; i < 200 && seen.empty(); i++) {
+            co.sleep(0.01);
+        }
         CHECK((kind & GP_PATH_CREATED) && seen.size() >= 8 && seen.compare(seen.size() - 8, 8, "made.txt") == 0, "watch_path called back (%d '%s')", kind, seen.c_str());
         pw.cancel();
         co.sleep(0.05);
@@ -296,22 +314,26 @@ static void test_coroutines(Co& co, Ctx cx) {
 
 // ------------------------------------------------------------------------------------------------ observation
 
-struct Source { int value = 0; };
+struct Source
+{
+    int value = 0;
+};
 
-static void test_observation(Co& co, Ctx cx) {
+static void test_observation(Co& co, Ctx cx)
+{
     App app = cx.app();
     auto src = app.new_entity<Source>();
     auto obs = app.new_entity<Model>();
     Model* model = obs.get(app);
     Ctx oc = app.ctx(obs.id);
     Ctx sc = app.ctx(src.id);
-    {   // observe: called on notify with the observed entity; destroyed when cancelled (not inside the call that cancels it)
+    { // observe: called on notify with the observed entity; destroyed when cancelled (not inside the call that cancels it)
         Tok tok = make_tok();
         gp_entity seen{};
         Subscription sub = oc.observe(src.id, [tok, &seen](Model& self, gp_entity observed) { self.ticks++; seen = observed; });
         CHECK(sub.active() && tok.use_count() == 2, "a subscription holds its closure");
         sc.notify();
-        app.ctx().app();  // (a no-op: keeps the ctx path exercised)
+        app.ctx().app(); // (a no-op: keeps the ctx path exercised)
         gp_flush_effects(app);
         CHECK(model->ticks == 1 && seen.index == src.id.index, "observe was called with the observed entity (%d)", model->ticks);
         sub.cancel();
@@ -321,13 +343,13 @@ static void test_observation(Co& co, Ctx cx) {
         gp_flush_effects(app);
         CHECK(model->ticks == 1, "and it is not called again");
     }
-    {   // a closure that cancels its own subscription is still alive until it returns
+    { // a closure that cancels its own subscription is still alive until it returns
         Tok tok = make_tok();
         long inside = 0;
         Subscription sub;
         sub = oc.observe(src.id, [tok, &inside, &sub](Model& self) {
             sub.cancel();
-            inside = tok.use_count();   // reads the capture after the cancel: must not be destroyed yet
+            inside = tok.use_count(); // reads the capture after the cancel: must not be destroyed yet
             self.ticks += 10;
         });
         sc.notify();
@@ -335,8 +357,12 @@ static void test_observation(Co& co, Ctx cx) {
         CHECK(model->ticks == 11 && inside == 2, "a closure cancelling itself runs to the end (%d, use_count %ld)", model->ticks, inside);
         CHECK(tok.use_count() == 1, "and is destroyed afterwards (use_count %ld)", tok.use_count());
     }
-    {   // subscribe / emit with a payload; on_release with the state
-        struct Ping { int a; float b; };
+    { // subscribe / emit with a payload; on_release with the state
+        struct Ping
+        {
+            int a;
+            float b;
+        };
         Tok tok = make_tok();
         int a = 0;
         float b = 0;
@@ -369,7 +395,7 @@ static void test_observation(Co& co, Ctx cx) {
         CHECK(tok2.use_count() == 1, "and its closure is destroyed once the entity is gone (use_count %ld)", tok2.use_count());
         CHECK(tok.use_count() == 2, "the live subscription still holds its own");
     }
-    {   // the observer is released: its closure is destroyed, nothing is called
+    { // the observer is released: its closure is destroyed, nothing is called
         auto obs2 = app.new_entity<Model>();
         Tok tok = make_tok();
         bool called = false;
@@ -390,10 +416,15 @@ static void test_observation(Co& co, Ctx cx) {
 
 // ------------------------------------------------------------------------------------------------ images, fonts, text fields
 
-static void write_bmp(const char* path) {   // 2 x 2, 24 bits: red, green / blue, white
-    unsigned char px[2][2][3] = { { { 0, 0, 255 }, { 0, 255, 0 } }, { { 255, 0, 0 }, { 255, 255, 255 } } };   // BGR, bottom row first
+static void write_bmp(const char* path)
+{ // 2 x 2, 24 bits: red, green / blue, white
+    unsigned char px[2][2][3] = {
+        { { 0, 0, 255 },     { 0, 255, 0 } },
+        { { 255, 0, 0 }, { 255, 255, 255 } }
+    }; // BGR, bottom row first
     unsigned char file[54 + 16] = { 'B', 'M' };
-    auto put32 = [&](int at, unsigned v) { for (int i = 0; i < 4; i++) file[at + i] = (unsigned char)(v >> (8 * i)); };
+    auto put32 = [&](int at, unsigned v) { for (int i = 0; i < 4; i++){ file[at + i] = (unsigned char)(v >> (8 * i));
+} };
     put32(2, sizeof file);
     put32(10, 54);
     put32(14, 40);
@@ -402,15 +433,20 @@ static void write_bmp(const char* path) {   // 2 x 2, 24 bits: red, green / blue
     file[26] = 1;
     file[28] = 24;
     put32(34, 16);
-    for (int y = 0; y < 2; y++) {
-        for (int x = 0; x < 2; x++) for (int c = 0; c < 3; c++) file[54 + y * 8 + x * 3 + c] = px[y][x][c];
+    for(int y = 0; y < 2; y++) {
+        for(int x = 0; x < 2; x++) {
+            for(int c = 0; c < 3; c++) {
+                file[54 + y * 8 + x * 3 + c] = px[y][x][c];
+            }
+        }
     }
     FILE* f = std::fopen(path, "wb");
     std::fwrite(file, 1, sizeof file, f);
     std::fclose(f);
 }
 
-static void test_loaders(Co& co, Ctx cx) {
+static void test_loaders(Co& co, Ctx cx)
+{
     App app = cx.app();
 #ifdef _WIN32
     const char* tmp = std::getenv("TEMP");
@@ -429,7 +465,7 @@ static void test_loaders(Co& co, Ctx cx) {
     CHECK(raw.generation != 0, "image_from_rgba");
     app.release(raw);
 
-    {   // asynchronously: with a result, and for a file that is not there
+    { // asynchronously: with a result, and for a file that is not there
         Tok tok = make_tok();
         gp_image got{};
         int gw = 0;
@@ -456,12 +492,14 @@ static void test_loaders(Co& co, Ctx cx) {
 
 static TextInput g_field;
 
-struct Form {
+struct Form
+{
     int changes = 0, submits = 0;
     std::string last;
 };
 
-static void test_text_input(Co& co, Ctx cx) {
+static void test_text_input(Co& co, Ctx cx)
+{
     App app = cx.app();
     auto form = app.new_entity<Form>();
     Form* f = form.get(app);
@@ -507,7 +545,8 @@ static void test_text_input(Co& co, Ctx cx) {
 
 // ------------------------------------------------------------------------------------------------ ctx copies, handles that are over
 
-static void test_ctx_and_handles(Co& co, Ctx cx) {
+static void test_ctx_and_handles(Co& co, Ctx cx)
+{
     App app = cx.app();
     auto m = app.new_entity<Model>();
     Ctx a = app.ctx(m.id);
@@ -521,7 +560,7 @@ static void test_ctx_and_handles(Co& co, Ctx cx) {
     Ctx f = app.ctx();
     f = d;
     CHECK(e.raw() == a.raw() && f.raw() == a.raw(), "a Ctx that wraps a pointer keeps pointing at it when copied");
-    {   // the copy is good after the original is gone
+    { // the copy is good after the original is gone
         Ctx* heap = new Ctx(app.ctx(m.id));
         Ctx kept = *heap;
         delete heap;
@@ -530,7 +569,7 @@ static void test_ctx_and_handles(Co& co, Ctx cx) {
         co.sleep(0.1);
         CHECK(m.get(app)->fired == 1, "a copied Ctx works once the original is destroyed");
     }
-    {   // a drop function attached to something already over runs at once, exactly once
+    { // a drop function attached to something already over runs at once, exactly once
         int n = 0;
         auto count = [](void* p) { ++*static_cast<int*>(p); };
         Task t = cx.after(0.01, [] {});
@@ -549,7 +588,7 @@ static void test_ctx_and_handles(Co& co, Ctx cx) {
         CHECK(n == 1, "gp_subscription_on_drop on an unsubscribed one calls it at once (%d)", n);
         app.release(src.id);
     }
-    {   // Co::run is false when the coroutine was cancelled while it waited
+    { // Co::run is false when the coroutine was cancelled while it waited
         std::optional<bool> ran;
         Task t = cx.spawn([&ran](Co& co2) {
             ran = co2.run([] { std::this_thread::sleep_for(std::chrono::milliseconds(100)); });
@@ -570,7 +609,8 @@ static void test_ctx_and_handles(Co& co, Ctx cx) {
 
 // ------------------------------------------------------------------------------------------------ windows
 
-static void test_window(Co& co, Ctx cx) {
+static void test_window(Co& co, Ctx cx)
+{
     App app = cx.app();
     auto view = app.new_view_with<int>([](int&, Ctx) { return div().size_full(); });
     Window w = app.open_window("second", 120, 80, view);
@@ -601,7 +641,8 @@ static Tok g_end_tok3;
 static Tok g_end_tok4;
 static Tok g_end_tok5;
 
-static void driver(Co& co, Ctx cx) {
+static void driver(Co& co, Ctx cx)
+{
     test_timers(co, cx);
     test_background(co, cx);
     test_coroutines(co, cx);
@@ -625,14 +666,16 @@ static void driver(Co& co, Ctx cx) {
     cx.subscribe(keeper.id, "x", [t = g_end_tok3](const gp_event&) {});
     cx.spawn([t = g_end_tok4](Co& c) { c.sleep(100); });
     // a coroutine that starts a timer while it unwinds at shutdown: nothing cancels that one, the app's teardown must still free it
-    cx.spawn([t = g_end_tok5](Co& c, Ctx k) { if (!c.sleep(100)) k.after(100, [t] {}); });
+    cx.spawn([t = g_end_tok5](Co& c, Ctx k) { if (!c.sleep(100)){ k.after(100, [t] {});
+} });
     auto longer = app.text_input().on_change([t = g_end_tok4] {}).build();
     (void)longer;
     co.sleep(0.05);
     app.quit();
 }
 
-int main() {
+int main()
+{
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);
     main_id = std::this_thread::get_id();
     int rc = run([](App app) {
@@ -642,8 +685,12 @@ int main() {
     });
     CHECK(rc == 0, "run returned %d", rc);
     CHECK(g_end_tok.use_count() == 1 && g_end_tok2.use_count() == 1 && g_end_tok3.use_count() == 1 && g_end_tok4.use_count() == 1 && g_end_tok5.use_count() == 1,
-          "shutdown destroyed every closure still alive (%ld %ld %ld %ld %ld)", g_end_tok.use_count(), g_end_tok2.use_count(), g_end_tok3.use_count(),
-          g_end_tok4.use_count(), g_end_tok5.use_count());
+        "shutdown destroyed every closure still alive (%ld %ld %ld %ld %ld)",
+        g_end_tok.use_count(),
+        g_end_tok2.use_count(),
+        g_end_tok3.use_count(),
+        g_end_tok4.use_count(),
+        g_end_tok5.use_count());
     std::printf(failures ? "cpp_async_test: %d FAILURE(S)\n" : "cpp_async_test: all checks passed\n", failures);
     return failures != 0;
 }

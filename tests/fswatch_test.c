@@ -9,108 +9,154 @@
  * Time is real: events are waited for (up to 2 s each), and "nothing came" is checked after a pause in which the system would have spoken.
  */
 #include "../src/internal.h"
-#include "compat.h"
 #include "../src/threads.h"
+#include "compat.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
-#include <direct.h>
-#define mkdir_(p) _mkdir(p)
+# include <direct.h>
+# define mkdir_(p) _mkdir(p)
 #else
-#include <sys/stat.h>
-#include <unistd.h>
-#define mkdir_(p) mkdir(p, 0755)
+# include <sys/stat.h>
+# include <unistd.h>
+# define mkdir_(p) mkdir(p, 0755)
 #endif
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            failures++;                                                                \
-            printf("FAIL %s:%d: ", __FILE__, __LINE__);                                \
-            printf(__VA_ARGS__);                                                       \
-            printf("\n");                                                              \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                \
+    do {                                                \
+        if(!(cond)) {                                   \
+            failures++;                                 \
+            printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+            printf(__VA_ARGS__);                        \
+            printf("\n");                               \
+        }                                               \
+    } while(0)
 
 static char root[512];
-static char *P(const char *rel) {   /* a path under the test's directory (a few at once) */
+static char* P(const char* rel)
+{ /* a path under the test's directory (a few at once) */
     static char buf[8][600];
     static int k;
     k = (k + 1) % 8;
     snprintf(buf[k], sizeof buf[k], "%s/%s", root, rel);
     return buf[k];
 }
-static void write_file(const char *path, const char *text) {
-    FILE *f = fopen(path, "wb");
-    if (!f) { printf("cannot write %s\n", path); exit(2); }
+static void write_file(const char* path, const char* text)
+{
+    FILE* f = fopen(path, "wb");
+    if(!f) {
+        printf("cannot write %s\n", path);
+        exit(2);
+    }
     fputs(text, f);
     fclose(f);
 }
-static void append_file(const char *path, const char *text) {
-    FILE *f = fopen(path, "ab");
-    if (!f) { printf("cannot append %s\n", path); exit(2); }
+static void append_file(const char* path, const char* text)
+{
+    FILE* f = fopen(path, "ab");
+    if(!f) {
+        printf("cannot append %s\n", path);
+        exit(2);
+    }
     fputs(text, f);
     fclose(f);
 }
 
 /* ------------------------------------------------------------ recording */
 
-typedef struct { int kind; char path[600], old[600]; } Ev;
-typedef struct { Ev ev[256]; int n; int calls; } Log;
+typedef struct
+{
+    int kind;
+    char path[600], old[600];
+} Ev;
+typedef struct
+{
+    Ev ev[256];
+    int n;
+    int calls;
+} Log;
 
-static void on_event(void *self, gp_ctx *cx, const gp_path_event *e, void *data) {
-    Log *l = data;
+static void on_event(void* self, gp_ctx* cx, const gp_path_event* e, void* data)
+{
+    Log* l = data;
     l->calls++;
-    if (l->n >= 256) return;
-    Ev *v = &l->ev[l->n++];
+    if(l->n >= 256) {
+        return;
+    }
+    Ev* v = &l->ev[l->n++];
     v->kind = e->kind;
     snprintf(v->path, sizeof v->path, "%s", e->path ? e->path : "");
     snprintf(v->old, sizeof v->old, "%s", e->old_path ? e->old_path : "");
 }
 
 /* Windows names paths case-insensitively and with either separator */
-static bool same_path(const char *a, const char *b) {
-    for (; *a && *b; a++, b++) {
+static bool same_path(const char* a, const char* b)
+{
+    for(; *a && *b; a++, b++) {
         char x = *a == '\\' ? '/' : *a, y = *b == '\\' ? '/' : *b;
 #ifdef _WIN32
-        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
-        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+        if(x >= 'A' && x <= 'Z') {
+            x = (char)(x + 32);
+        }
+        if(y >= 'A' && y <= 'Z') {
+            y = (char)(y + 32);
+        }
 #endif
-        if (x != y) return false;
+        if(x != y) {
+            return false;
+        }
     }
     return *a == *b;
 }
-static int find(const Log *l, int kind, const char *path) {
-    for (int i = 0; i < l->n; i++)
-        if (l->ev[i].kind == kind && same_path(l->ev[i].path, path)) return i;
+static int find(const Log* l, int kind, const char* path)
+{
+    for(int i = 0; i < l->n; i++) {
+        if(l->ev[i].kind == kind && same_path(l->ev[i].path, path)) {
+            return i;
+        }
+    }
     return -1;
 }
-static int count_about(const Log *l, const char *path) {
+static int count_about(const Log* l, const char* path)
+{
     int c = 0;
-    for (int i = 0; i < l->n; i++)
-        if (same_path(l->ev[i].path, path) || same_path(l->ev[i].old, path)) c++;
+    for(int i = 0; i < l->n; i++) {
+        if(same_path(l->ev[i].path, path) || same_path(l->ev[i].old, path)) {
+            c++;
+        }
+    }
     return c;
 }
 /* waits (up to 2 s) until the log has an event of that kind about that path */
-static bool wait_for(gp_co *co, const Log *l, int kind, const char *path) {
-    for (int i = 0; i < 200; i++) {
-        if (find(l, kind, path) >= 0) return true;
+static bool wait_for(gp_co* co, const Log* l, int kind, const char* path)
+{
+    for(int i = 0; i < 200; i++) {
+        if(find(l, kind, path) >= 0) {
+            return true;
+        }
         gp_sleep(co, 0.01);
     }
     return false;
 }
-static void settle(gp_co *co) { gp_sleep(co, 0.3); }
-static void dump(const char *what, const Log *l) {
+static void settle(gp_co* co)
+{
+    gp_sleep(co, 0.3);
+}
+static void dump(const char* what, const Log* l)
+{
     printf("  %s: %d events\n", what, l->n);
-    for (int i = 0; i < l->n; i++) printf("    %d %s %s\n", l->ev[i].kind, l->ev[i].path, l->ev[i].old);
+    for(int i = 0; i < l->n; i++) {
+        printf("    %d %s %s\n", l->ev[i].kind, l->ev[i].path, l->ev[i].old);
+    }
 }
 
 /* ------------------------------------------------------------ tests */
 
-static void test_directory(gp_co *co, gp_app *app) {
+static void test_directory(gp_co* co, gp_app* app)
+{
     mkdir_(P("d"));
     mkdir_(P("d/sub"));
     write_file(P("d/sub/deep.txt"), "x");
@@ -144,16 +190,20 @@ static void test_directory(gp_co *co, gp_app *app) {
     CHECK(c >= 0 && c < m && m < r && r < d, "dir: in the order they happened (%d %d %d %d)", c, m, r, d);
     /* many writes at once arrive as few events, not one per write */
     l.n = 0;
-    for (int i = 0; i < 50; i++) {   /* (alternating: the system cannot fold them, they are folded here) */
+    for(int i = 0; i < 50; i++) { /* (alternating: the system cannot fold them, they are folded here) */
         append_file(P("d/c.txt"), "z");
         append_file(P("d/e.txt"), "z");
     }
     CHECK(wait_for(co, &l, GP_PATH_MODIFIED, P("d/c.txt")) && wait_for(co, &l, GP_PATH_MODIFIED, P("d/e.txt")), "dir: writes again");
     settle(co);
     int mods = 0;
-    for (int i = 0; i < l.n; i++) mods += l.ev[i].kind == GP_PATH_MODIFIED;
+    for(int i = 0; i < l.n; i++) {
+        mods += l.ev[i].kind == GP_PATH_MODIFIED;
+    }
     CHECK(mods >= 2 && mods <= 6, "dir: a hundred writes to two files, made at once, come as a MODIFIED or so each (%d)", mods);
-    if (failures) dump("directory", &l);
+    if(failures) {
+        dump("directory", &l);
+    }
     gp_cancel(app, t);
     settle(co);
     int before = l.calls;
@@ -162,7 +212,8 @@ static void test_directory(gp_co *co, gp_app *app) {
     CHECK(l.calls == before && !gp_task_active(app, t), "dir: cancelled, nothing more comes");
 }
 
-static void test_recursive(gp_co *co, gp_app *app) {
+static void test_recursive(gp_co* co, gp_app* app)
+{
     mkdir_(P("r"));
     mkdir_(P("r/x"));
     mkdir_(P("r/x/y"));
@@ -192,17 +243,20 @@ static void test_recursive(gp_co *co, gp_app *app) {
     gp_sleep(co, 0.05);
     append_file(P("r/x2/y/f.txt"), "6");
     CHECK(wait_for(co, &l, GP_PATH_MODIFIED, P("r/x2/y/f.txt")), "recursive: a file in it is reported under the new name");
-    if (failures) dump("recursive", &l);
+    if(failures) {
+        dump("recursive", &l);
+    }
     gp_cancel(app, t);
 }
 
-static void test_file(gp_co *co, gp_app *app) {
+static void test_file(gp_co* co, gp_app* app)
+{
     mkdir_(P("f"));
     write_file(P("f/watched.txt"), "1");
     static Log l;
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     mkdir_(P("f/sub"));
-    gp_task t = gp_watch_path(&cx, P("f/watched.txt"), GP_WATCH_RECURSIVE, on_event, &l);   /* (recursive means nothing for a file) */
+    gp_task t = gp_watch_path(&cx, P("f/watched.txt"), GP_WATCH_RECURSIVE, on_event, &l); /* (recursive means nothing for a file) */
     CHECK(gp_task_active(app, t), "file: a file can be watched");
     write_file(P("f/other.txt"), "x");
     write_file(P("f/sub/watched.txt"), "x");
@@ -212,7 +266,7 @@ static void test_file(gp_co *co, gp_app *app) {
     CHECK(count_about(&l, P("f/other.txt")) == 0 && count_about(&l, P("f/sub/watched.txt")) == 0, "file: nothing about another file beside it, nor one of its name below");
     /* saved the way editors do: a new file renamed over it */
     write_file(P("f/watched.txt.tmp"), "new contents");
-    remove(P("f/watched.txt"));   /* (rename does not replace on Windows) */
+    remove(P("f/watched.txt")); /* (rename does not replace on Windows) */
     rename(P("f/watched.txt.tmp"), P("f/watched.txt"));
     CHECK(wait_for(co, &l, GP_PATH_CREATED, P("f/watched.txt")), "file: replaced by a rename: CREATED");
     CHECK(count_about(&l, P("f/watched.txt.tmp")) == 0, "file: nothing about the temporary file");
@@ -221,7 +275,9 @@ static void test_file(gp_co *co, gp_app *app) {
     l.n = 0;
     write_file(P("f/watched.txt"), "again");
     CHECK(wait_for(co, &l, GP_PATH_CREATED, P("f/watched.txt")) && gp_task_active(app, t), "file: the watch goes on: made again is CREATED");
-    if (failures) dump("file", &l);
+    if(failures) {
+        dump("file", &l);
+    }
     gp_cancel(app, t);
 
     static Log later;
@@ -237,7 +293,8 @@ static void test_file(gp_co *co, gp_app *app) {
     CHECK(bad.id == 0, "an empty path: a null task");
 }
 
-static void test_two_watches(gp_co *co, gp_app *app) {
+static void test_two_watches(gp_co* co, gp_app* app)
+{
     mkdir_(P("two"));
     static Log a, b;
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
@@ -254,8 +311,12 @@ static void test_two_watches(gp_co *co, gp_app *app) {
     gp_cancel(app, tb);
 }
 
-typedef struct { int unused; } Owner;
-static void test_entity(gp_co *co, gp_app *app) {
+typedef struct
+{
+    int unused;
+} Owner;
+static void test_entity(gp_co* co, gp_app* app)
+{
     mkdir_(P("ent"));
     gp_entity e = gp_entity_new(app, sizeof(Owner), &(Owner){ 0 }, NULL);
     gp_ctx cx = gp_ctx_for(app, e);
@@ -271,7 +332,8 @@ static void test_entity(gp_co *co, gp_app *app) {
     CHECK(l.calls == before && !gp_task_active(app, t), "entity: released, its watch ends");
 }
 
-static void test_gone(gp_co *co, gp_app *app) {
+static void test_gone(gp_co* co, gp_app* app)
+{
 #ifndef _WIN32
     mkdir_(P("gone"));
     static Log l;
@@ -290,15 +352,17 @@ static void test_gone(gp_co *co, gp_app *app) {
 /* a callback that cancels its own watch: what was already on its way is not delivered */
 static gp_task self_cancel_task;
 static int self_cancel_calls;
-static void cancel_self(void *self, gp_ctx *cx, const gp_path_event *e, void *data) {
+static void cancel_self(void* self, gp_ctx* cx, const gp_path_event* e, void* data)
+{
     self_cancel_calls++;
     gp_cancel(cx->app, self_cancel_task);
 }
-static void test_cancel_inside(gp_co *co, gp_app *app) {
+static void test_cancel_inside(gp_co* co, gp_app* app)
+{
     mkdir_(P("cs"));
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     self_cancel_task = gp_watch_path(&cx, P("cs"), 0, cancel_self, NULL);
-    for (int i = 0; i < 5; i++) {
+    for(int i = 0; i < 5; i++) {
         char name[32];
         snprintf(name, sizeof name, "cs/%d.txt", i);
         write_file(P(name), "x");
@@ -309,27 +373,37 @@ static void test_cancel_inside(gp_co *co, gp_app *app) {
 
 /* the loop wakes for an event when nothing else would wake it: the file is written from a worker while the test sleeps */
 static double written_at, heard_at;
-static void *write_later(void *data) {   /* (a thread of its own: a worker's completion would wake the loop itself) */
+static void* write_later(void* data)
+{ /* (a thread of its own: a worker's completion would wake the loop itself) */
     usleep(200 * 1000);
     written_at = gp_time();
     write_file(P("wake/now.txt"), "x");
     return NULL;
 }
-static void heard(void *self, gp_ctx *cx, const gp_path_event *e, void *data) { if (!heard_at) heard_at = gp_time(); }
-static void test_wakes(gp_co *co, gp_app *app) {
+static void heard(void* self, gp_ctx* cx, const gp_path_event* e, void* data)
+{
+    if(!heard_at) {
+        heard_at = gp_time();
+    }
+}
+static void test_wakes(gp_co* co, gp_app* app)
+{
     mkdir_(P("wake"));
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_task t = gp_watch_path(&cx, P("wake"), 0, heard, NULL);
     gp_thread th;
     bool started = gp_thread_create(&th, write_later, NULL);
     gp_sleep(co, 2.0);
-    if (started) gp_thread_join(th);
+    if(started) {
+        gp_thread_join(th);
+    }
     CHECK(heard_at > 0 && heard_at - written_at < 0.5, "the event wakes the loop (heard %.3f s after the write)", heard_at - written_at);
     gp_cancel(app, t);
 }
 
-static void test_released(gp_co *co, gp_app *app) {
-    settle(co);   /* (cancelled watches are dropped at the end of a loop turn) */
+static void test_released(gp_co* co, gp_app* app)
+{
+    settle(co); /* (cancelled watches are dropped at the end of a loop turn) */
     int watches, dirs;
     gp_fswatch_debug_counts(app, &watches, &dirs);
     CHECK(watches == 0 && dirs == 0, "every watch cancelled: nothing is held, by us or the system (%d watches, %d directories)", watches, dirs);
@@ -337,8 +411,9 @@ static void test_released(gp_co *co, gp_app *app) {
 
 /* ------------------------------------------------------------ driver */
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    gp_app *app = cx->app;
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    gp_app* app = cx->app;
     test_directory(co, app);
     test_recursive(co, app);
     test_file(co, app);
@@ -357,24 +432,35 @@ static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     gp_quit(app);
 }
 
-static gp_node *view(void *self, gp_ctx *cx) { return gp_div(gp_size_full()); }
+static gp_node* view(void* self, gp_ctx* cx)
+{
+    return gp_div(gp_size_full());
+}
 
-static void ready(gp_app *app, void *userdata) {
+static void ready(gp_app* app, void* userdata)
+{
     gp_entity v = gp_view_new(app, 0, NULL, view, NULL);
     gp_open_window(app, &(gp_window_options){ .title = "fswatch_test", .width = 200, .height = 100 }, v);
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);
 #ifdef _WIN32
-    const char *tmp = getenv("TEMP") ? getenv("TEMP") : ".";
+    const char* tmp = getenv("TEMP") ? getenv("TEMP") : ".";
     snprintf(root, sizeof root, "%s/gpuic-fswatch-%d", tmp, (int)_getpid());
-    if (_mkdir(root) != 0) { printf("cannot make %s\n", root); return 2; }
+    if(_mkdir(root) != 0) {
+        printf("cannot make %s\n", root);
+        return 2;
+    }
 #else
     snprintf(root, sizeof root, "/tmp/gpuic-fswatch-XXXXXX");
-    if (!mkdtemp(root)) { perror("mkdtemp"); return 2; }
+    if(!mkdtemp(root)) {
+        perror("mkdtemp");
+        return 2;
+    }
 #endif
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);
@@ -384,7 +470,9 @@ int main(void) {
 #else
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", root);
 #endif
-    if (system(cmd) != 0) printf("(could not remove %s)\n", root);
+    if(system(cmd) != 0) {
+        printf("(could not remove %s)\n", root);
+    }
     printf(failures ? "fswatch_test: %d FAILURE(S)\n" : "fswatch_test: all checks passed\n", failures);
     return failures != 0;
 }

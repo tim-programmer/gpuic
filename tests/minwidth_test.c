@@ -12,34 +12,41 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 60) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 60) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
-static gp_app *app;
-static gp_co *co_;
-static gp_window *win(void) { return app->windows[0]; }
-static bool wait_draws(unsigned n) {
+static gp_app* app;
+static gp_co* co_;
+static gp_window* win(void)
+{
+    return app->windows[0];
+}
+static bool wait_draws(unsigned n)
+{
     unsigned long target = app->stat_draws + n;
-    for (int i = 0; i < 1000 && app->stat_draws < target; i++) gp_sleep(co_, 0.004);
+    for(int i = 0; i < 1000 && app->stat_draws < target; i++) {
+        gp_sleep(co_, 0.004);
+    }
     return app->stat_draws >= target;
 }
 
-#define RED gp_rgb(0xff0000)
-#define LONGWORD "internationalization"
-#define SENTENCE "aaa bbb ccc ddd eee fff ggg hhh"
+#define RED          gp_rgb(0xff0000)
+#define LONGWORD     "internationalization"
+#define SENTENCE     "aaa bbb ccc ddd eee fff ggg hhh"
 #define ROWW(w, ...) gp_div(gp_flex_row(), gp_w(w), gp_items_start(), ##__VA_ARGS__)
 
 static gp_image g_pic;
 
-static gp_node *render(void *self, gp_ctx *cx) {
+static gp_node* render(void* self, gp_ctx* cx)
+{
     return gp_div(
         gp_size_full(), gp_overflow_y_scroll(), gp_items_start(),
         /* 0: a word that cannot break keeps its width, the sentence gives way */ ROWW(150, gp_text(LONGWORD), gp_text(SENTENCE)),
@@ -73,26 +80,40 @@ static gp_node *render(void *self, gp_ctx *cx) {
         /* 27: a width of its own caps it, basis or not */ ROWW(600, gp_text(LONGWORD, gp_w(40), gp_flex_basis(20)), gp_text("tail")));
 }
 
-static gp_el *box(int i) { return win()->tree->children[i]; }
-static gp_el *kid(int i, int j) { return box(i)->children[j]; }
+static gp_el* box(int i)
+{
+    return win()->tree->children[i];
+}
+static gp_el* kid(int i, int j)
+{
+    return box(i)->children[j];
+}
 #define X(i, j) (kid(i, j)->pos.x)
 #define W(i, j) (kid(i, j)->size.w)
-static bool near(float a, float b) { return fabsf(a - b) < 0.51f; }
+static bool near(float a, float b)
+{
+    return fabsf(a - b) < 0.51f;
+}
 
 /* the widest word of `text` at the style `el` has: what min-content means */
-static float word_w(const gp_el *el) {
+static float word_w(const gp_el* el)
+{
     gp_size t = gp_text_measure_dir(app->text, GP_TEXT_SEL(el->ts), el->ts.size, el->text, 0, el->style.whitespace_pre, el->ts.dir, NULL, NULL, NULL);
     return ceilf(t.w);
 }
-static float natural_w(const gp_el *el) {
+static float natural_w(const gp_el* el)
+{
     gp_size t = gp_text_measure_dir(app->text, GP_TEXT_SEL(el->ts), el->ts.size, el->text, -1, el->style.whitespace_pre, el->ts.dir, NULL, NULL, NULL);
     return ceilf(t.w);
 }
 
-static void run(void) {
+static void run(void)
+{
     wait_draws(2);
     CHECK(win()->tree->nchildren == 28, "%u scenarios", win()->tree->nchildren);
-    if (win()->tree->nchildren != 28) return;
+    if(win()->tree->nchildren != 28) {
+        return;
+    }
     const float lw = word_w(kid(0, 0)), ln = natural_w(kid(0, 0));
     CHECK(lw == ln && lw > 100, "the long word is a single word, %g wide", lw);
     const float sw = word_w(kid(0, 1)), sn = natural_w(kid(0, 1));
@@ -140,13 +161,15 @@ static void run(void) {
     CHECK(near(W(21, 0), 70), "21: a nested item 70 wide asks for 70: %g", W(21, 0));
 }
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
     co_ = co;
     run();
     gp_quit(app);
 }
 
-static void ready(gp_app *a, void *userdata) {
+static void ready(gp_app* a, void* userdata)
+{
     app = a;
     static unsigned char px[50 * 4 * 4];
     memset(px, 200, sizeof px);
@@ -157,7 +180,8 @@ static void ready(gp_app *a, void *userdata) {
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);

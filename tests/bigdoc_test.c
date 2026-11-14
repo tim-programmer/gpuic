@@ -13,116 +13,179 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 60) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 60) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
-static gp_app *app;
-static gp_co *co_;
-static gp_window *win(void) { return app->windows[0]; }
+static gp_app* app;
+static gp_co* co_;
+static gp_window* win(void)
+{
+    return app->windows[0];
+}
 
 #define NLINES 300000
-#define LH 19.5f   /* 15 px font * GP_LINE_HEIGHT */
+#define LH     19.5f /* 15 px font * GP_LINE_HEIGHT */
 
-typedef struct { gp_entity big, small, wrapped; } Fix;
+typedef struct
+{
+    gp_entity big, small, wrapped;
+} Fix;
 
-static gp_node *render(void *self, gp_ctx *cx) {
-    Fix *f = self;
+static gp_node* render(void* self, gp_ctx* cx)
+{
+    Fix* f = self;
     return gp_div(gp_size_full(), gp_p(10), gp_gap(10), gp_child_view(f->big), gp_child_view(f->small), gp_child_view(f->wrapped));
 }
 
-static bool wait_draws(unsigned n) {
+static bool wait_draws(unsigned n)
+{
     unsigned long target = app->stat_draws + n;
-    for (int i = 0; i < 2500 && app->stat_draws < target; i++) gp_sleep(co_, 0.004);
+    for(int i = 0; i < 2500 && app->stat_draws < target; i++) {
+        gp_sleep(co_, 0.004);
+    }
     return app->stat_draws >= target;
 }
 /* until the window has nothing left to do: what a frame started (rows wrapped later, a scroll that rebuilds) is done, however slow frames are */
-static bool window_idle(void) { gp_window *w = win(); return !w->dirty_render && !w->dirty_layout && !w->dirty_paint && !w->anims.running; }
-static void settle(void) {
+static bool window_idle(void)
+{
+    gp_window* w = win();
+    return !w->dirty_render && !w->dirty_layout && !w->dirty_paint && !w->anims.running;
+}
+static void settle(void)
+{
     wait_draws(2);
-    for (int i = 0, quiet = 0; i < 1000 && quiet < 3; i++) {   /* (idle three looks in a row, 10 ms apart) */
+    for(int i = 0, quiet = 0; i < 1000 && quiet < 3; i++) { /* (idle three looks in a row, 10 ms apart) */
         gp_sleep(co_, 0.01);
         quiet = window_idle() ? quiet + 1 : 0;
     }
 }
-static void keys(const char *k) { gp_simulate_keystrokes(app, k); settle(); }
+static void keys(const char* k)
+{
+    gp_simulate_keystrokes(app, k);
+    settle();
+}
 
 /* ---- the tree */
-static const gp_el *find_scroller(const gp_el *n, int which, int *seen) {
-    if (n->on_scroll.fn && (n->style.overflow_y_scroll || n->style.overflow_x_scroll)) {
-        if ((*seen)++ == which) return n;
+static const gp_el* find_scroller(const gp_el* n, int which, int* seen)
+{
+    if(n->on_scroll.fn && (n->style.overflow_y_scroll || n->style.overflow_x_scroll)) {
+        if((*seen)++ == which) {
+            return n;
+        }
     }
-    for (uint32_t i = 0; i < n->nchildren; i++) {
-        const gp_el *r = find_scroller(n->children[i], which, seen);
-        if (r) return r;
+    for(uint32_t i = 0; i < n->nchildren; i++) {
+        const gp_el* r = find_scroller(n->children[i], which, seen);
+        if(r) {
+            return r;
+        }
     }
     return NULL;
 }
-static const gp_el *scroller(int which) { int seen = 0; return win()->tree ? find_scroller(win()->tree, which, &seen) : NULL; }
-static size_t count_els(const gp_el *n) {
+static const gp_el* scroller(int which)
+{
+    int seen = 0;
+    return win()->tree ? find_scroller(win()->tree, which, &seen) : NULL;
+}
+static size_t count_els(const gp_el* n)
+{
     size_t c = 1;
-    for (uint32_t i = 0; i < n->nchildren; i++) c += count_els(n->children[i]);
+    for(uint32_t i = 0; i < n->nchildren; i++) {
+        c += count_els(n->children[i]);
+    }
     return c;
 }
 /* the text element of the scroller that is `want`, or NULL; its position in the scroller's content */
-static const gp_el *text_el(const gp_el *sc, const char *want) {
-    for (uint32_t i = 0; i < sc->nchildren; i++) {
-        const gp_el *c = sc->children[i];
-        if (c->kind == GP_EL_TEXT && strcmp(c->text, want) == 0) return c;
+static const gp_el* text_el(const gp_el* sc, const char* want)
+{
+    for(uint32_t i = 0; i < sc->nchildren; i++) {
+        const gp_el* c = sc->children[i];
+        if(c->kind == GP_EL_TEXT && strcmp(c->text, want) == 0) {
+            return c;
+        }
     }
     return NULL;
 }
-static bool abs_of(const gp_el *n, const gp_el *target, float x, float y, float *ox, float *oy) {
+static bool abs_of(const gp_el* n, const gp_el* target, float x, float y, float* ox, float* oy)
+{
     x += n->pos.x;
     y += n->pos.y;
-    if (n == target) { *ox = x; *oy = y; return true; }
-    for (uint32_t i = 0; i < n->nchildren; i++)
-        if (abs_of(n->children[i], target, x - n->scroll.x, y - n->scroll.y, ox, oy)) return true;
+    if(n == target) {
+        *ox = x;
+        *oy = y;
+        return true;
+    }
+    for(uint32_t i = 0; i < n->nchildren; i++) {
+        if(abs_of(n->children[i], target, x - n->scroll.x, y - n->scroll.y, ox, oy)) {
+            return true;
+        }
+    }
     return false;
 }
 
 /* ---- the document */
-static char *make_doc(size_t *len_out) {
+static char* make_doc(size_t* len_out)
+{
     size_t cap = (size_t)NLINES * 64, len = 0;
-    char *d = malloc(cap);
-    for (int i = 0; i < NLINES; i++) {
+    char* d = malloc(cap);
+    for(int i = 0; i < NLINES; i++) {
         int pad = i % 7 * 3;
         len += (size_t)snprintf(d + len, cap - len, "line %d: lorem ipsum dolor sit amet%.*s%s", i, pad, "-----------------------", i == NLINES - 1 ? "" : "\n");
     }
     *len_out = len;
     return d;
 }
-static void line_text(char *out, size_t cap, int i) { snprintf(out, cap, "line %d: lorem ipsum dolor sit amet%.*s", i, i % 7 * 3, "-----------------------"); }
+static void line_text(char* out, size_t cap, int i)
+{
+    snprintf(out, cap, "line %d: lorem ipsum dolor sit amet%.*s", i, i % 7 * 3, "-----------------------");
+}
 
 static uint32_t rng_state = 12345;
-static uint32_t rnd(void) { rng_state = rng_state * 1664525u + 1013904223u; return rng_state >> 8; }
+static uint32_t rnd(void)
+{
+    rng_state = rng_state * 1664525u + 1013904223u;
+    return rng_state >> 8;
+}
 
-static void test_index_fuzz(gp_entity input, const char *what) {
-    static const char *pool[] = { "", "a", "\n", "\n\n", "x\ny", "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d", "\xd7\xa9\n", "\xc3\xa9", "abc\ndef\nghi", "\n\xd7\x90\n", "  ", "z" };
+static void test_index_fuzz(gp_entity input, const char* what)
+{
+    static const char* pool[] = { "", "a", "\n", "\n\n", "x\ny", "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d", "\xd7\xa9\n", "\xc3\xa9", "abc\ndef\nghi", "\n\xd7\x90\n", "  ", "z" };
     char why[256];
-    for (int i = 0; i < 3000; i++) {
+    for(int i = 0; i < 3000; i++) {
         size_t len = strlen(gp_text_input_text(app, input));
         size_t a = len ? rnd() % (len + 1) : 0, b = len ? rnd() % (len + 1) : 0;
-        if (rnd() % 3 == 0) b = a;   /* mostly insertions */
-        if (a > b) { size_t t = a; a = b; b = t; }
-        if (rnd() % 5 == 0 && len > 30) b = a + (rnd() % 20 > b - a ? 0 : 0) + (b - a > 20 ? 20 : b - a);
+        if(rnd() % 3 == 0) {
+            b = a; /* mostly insertions */
+        }
+        if(a > b) {
+            size_t t = a;
+            a = b;
+            b = t;
+        }
+        if(rnd() % 5 == 0 && len > 30) {
+            b = a + (rnd() % 20 > b - a ? 0 : 0) + (b - a > 20 ? 20 : b - a);
+        }
         gp_text_input_debug_replace(app, input, a, b, pool[rnd() % (sizeof pool / sizeof *pool)]);
-        if (i < 400 || i % 10 == 0) {
-            const char *bad = gp_text_input_debug_check(app, input, why, sizeof why);
-            if (bad) { CHECK(false, "%s: after edit %d (%zu..%zu): %s", what, i, a, b, bad); return; }
+        if(i < 400 || i % 10 == 0) {
+            const char* bad = gp_text_input_debug_check(app, input, why, sizeof why);
+            if(bad) {
+                CHECK(false, "%s: after edit %d (%zu..%zu): %s", what, i, a, b, bad);
+                return;
+            }
         }
     }
     CHECK(true, "ok");
 }
 
-static void test_big(Fix *f) {
+static void test_big(Fix* f)
+{
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_focus_set(&cx, gp_text_input_focus(app, f->big));
     settle();
@@ -130,9 +193,11 @@ static void test_big(Fix *f) {
     CHECK(nrows == NLINES, "rows %zu, wanted %d", nrows, NLINES);
 
     /* only what is near the view is built */
-    const gp_el *sc = scroller(0);
+    const gp_el* sc = scroller(0);
     CHECK(sc != NULL, "the big field's scroller");
-    if (!sc) return;
+    if(!sc) {
+        return;
+    }
     size_t els = count_els(win()->tree);
     CHECK(els < 400, "the whole tree has %zu elements for a document of %d lines", els, NLINES);
     char want[128];
@@ -150,7 +215,7 @@ static void test_big(Fix *f) {
     double dt = gp_time() - t0;
     sc = scroller(0);
     line_text(want, sizeof want, NLINES - 1);
-    const gp_el *last = text_el(sc, want);
+    const gp_el* last = text_el(sc, want);
     CHECK(last != NULL, "ctrl-end builds the last line");
     CHECK(last && fabsf(last->pos.y - (float)(NLINES - 1) * LH) < 1.5f, "...at its place: y %g, wanted %g", last ? last->pos.y : -1.f, (float)(NLINES - 1) * LH);
     CHECK(gp_text_input_scroll(app, f->big).y > total - 12 * LH, "scrolled to the end: %g", gp_text_input_scroll(app, f->big).y);
@@ -181,8 +246,8 @@ static void test_big(Fix *f) {
         CHECK(gp_text_input_row_range(app, f->big, NLINES, &s0, &e0) && e0 - s0 == 4, "its row range");
         CHECK(gp_text_input_caret_row(app, f->big) == NLINES, "the caret is on it: row %zu", gp_text_input_caret_row(app, f->big));
     }
-    keys("ctrl-z");   /* the typing of "tail" */
-    keys("ctrl-z");   /* Enter */
+    keys("ctrl-z"); /* the typing of "tail" */
+    keys("ctrl-z"); /* Enter */
     CHECK(gp_text_input_rows(app, f->big) == NLINES, "undo takes the line break back: %zu", gp_text_input_rows(app, f->big));
 
     /* a wheel jump into the middle: the rows are rebuilt around where it lands. (Not focused: a focused field also rebuilds
@@ -190,10 +255,10 @@ static void test_big(Fix *f) {
     gp_blur(&cx);
     wait_draws(2);
     {
-        const gp_el *s = scroller(0);
+        const gp_el* s = scroller(0);
         float ax = 0.f, ay = 0.f;
         abs_of(win()->tree, s, 0, 0, &ax, &ay);
-        gp_scroll_wheel(win(), (gp_point){ ax + 50, ay + 20 }, 0, -1e9f);   /* all the way up first */
+        gp_scroll_wheel(win(), (gp_point){ ax + 50, ay + 20 }, 0, -1e9f); /* all the way up first */
         wait_draws(2);
         CHECK(gp_text_input_scroll(app, f->big).y == 0, "back at the top by the wheel: %g", gp_text_input_scroll(app, f->big).y);
         float target = 123456 * LH;
@@ -230,7 +295,7 @@ static void test_big(Fix *f) {
         CHECK(count_els(win()->tree) < 400, "%zu elements", count_els(win()->tree));
 
         /* a click and a drag on a built row map to offsets in that row, deep in the document */
-        const gp_el *t = text_el(s, a);
+        const gp_el* t = text_el(s, a);
         float tx, ty;
         abs_of(win()->tree, t, 0, 0, &tx, &ty);
         abs_of(win()->tree, s, 0, 0, &ax, &ay);
@@ -266,7 +331,7 @@ static void test_big(Fix *f) {
 
     /* select from the top to the end, delete 14 MB, get it back */
     size_t full = strlen(gp_text_input_text(app, f->big));
-    char *copy = malloc(full + 1);
+    char* copy = malloc(full + 1);
     memcpy(copy, gp_text_input_text(app, f->big), full + 1);
     t0 = gp_time();
     keys("ctrl-shift-end");
@@ -287,27 +352,28 @@ static void test_big(Fix *f) {
     CHECK(gp_text_input_rows(app, f->big) == NLINES, "...and its rows: %zu", gp_text_input_rows(app, f->big));
     {
         char why[256];
-        const char *bad = gp_text_input_debug_check(app, f->big, why, sizeof why);
+        const char* bad = gp_text_input_debug_check(app, f->big, why, sizeof why);
         CHECK(!bad, "the index of the restored document: %s", bad ? bad : "");
     }
     printf("  (select all, delete and undo of %zu bytes: %.0f ms with the frames and %d settles in between)\n", full, took * 1000, 4);
     free(copy);
 }
 
-static void test_wide_line(Fix *f) {
+static void test_wide_line(Fix* f)
+{
     /* a 3000-character line at row 200000: not seen until the view gets there, and then the content is wide enough to scroll across to its end */
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_focus_set(&cx, gp_text_input_focus(app, f->big));
     size_t s0, e0;
     gp_text_input_row_range(app, f->big, 200000, &s0, &e0);
-    char *wide = malloc(3001);
+    char* wide = malloc(3001);
     memset(wide, 'w', 3000);
     wide[3000] = 0;
-    gp_text_input_debug_replace(app, f->big, e0, e0, wide);   /* appended to row 200000 */
+    gp_text_input_debug_replace(app, f->big, e0, e0, wide); /* appended to row 200000 */
     free(wide);
     gp_view_dirty(app, f->big);
     settle();
-    const gp_el *sc = scroller(0);
+    const gp_el* sc = scroller(0);
     float before = sc->scroll_max.x;
     gp_point p;
     {
@@ -323,9 +389,11 @@ static void test_wide_line(Fix *f) {
     keys("ctrl-home");
     sc = scroller(0);
     CHECK(sc->scroll_max.x > 1000, "scrolled away from it the content is still as wide as the widest row seen: %g", sc->scroll_max.x);
-    {   /* a new document (itself long enough to be built in part): what was seen of the old one is forgotten */
-        char *doc = malloc(5000 * 8 + 1);
-        for (int i = 0; i < 5000; i++) memcpy(doc + i * 8, "shorts\n\n", 8);
+    { /* a new document (itself long enough to be built in part): what was seen of the old one is forgotten */
+        char* doc = malloc(5000 * 8 + 1);
+        for(int i = 0; i < 5000; i++) {
+            memcpy(doc + i * 8, "shorts\n\n", 8);
+        }
         doc[5000 * 8] = 0;
         gp_text_input_set_text(&cx, f->big, doc);
         free(doc);
@@ -335,20 +403,22 @@ static void test_wide_line(Fix *f) {
     }
 }
 
-static void test_small(Fix *f) {
+static void test_small(Fix* f)
+{
     char why[256];
     gp_text_input_set_text(&(gp_ctx){ app, NULL, GP_ENTITY_NULL, false }, f->small, "a\n\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\nb");
     settle();
     CHECK(gp_text_input_rows(app, f->small) == 3 && gp_text_input_row_rtl(app, f->small, 1) && !gp_text_input_row_rtl(app, f->small, 0), "right-to-left rows come from the index");
     test_index_fuzz(f->small, "multi-line field, no wrap");
     test_index_fuzz(f->wrapped, "multi-line field, soft wrap");
-    const char *bad = gp_text_input_debug_check(app, f->small, why, sizeof why);
+    const char* bad = gp_text_input_debug_check(app, f->small, why, sizeof why);
     CHECK(!bad, "%s", bad ? bad : "");
 }
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
     co_ = co;
-    Fix *f = gp_entity_get(app, win()->root_view);
+    Fix* f = gp_entity_get(app, win()->root_view);
     gp_sleep(co, 0.5);
     test_small(f);
     test_big(f);
@@ -356,11 +426,12 @@ static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     gp_quit(app);
 }
 
-static void ready(gp_app *a, void *userdata) {
+static void ready(gp_app* a, void* userdata)
+{
     app = a;
     Fix init = { 0 };
     size_t len;
-    char *doc = make_doc(&len);
+    char* doc = make_doc(&len);
     double t0 = gp_time();
     init.big = gp_text_input_new(app, &(gp_text_input_options){ .multiline = true, .rows = 10, .text = doc });
     printf("  (creating a field of %zu bytes, %d lines: %.0f ms)\n", len, NLINES, (gp_time() - t0) * 1000);
@@ -373,7 +444,8 @@ static void ready(gp_app *a, void *userdata) {
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);

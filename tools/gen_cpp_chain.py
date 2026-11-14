@@ -31,7 +31,7 @@ KEYWORDS = {"and", "or", "not", "xor", "new", "delete", "default", "private", "p
 def parse():
     src = open(HEADER).read()
     out = []
-    for m in re.finditer(r"^gp_node \*gp_(\w+)\(([^)]*)\);", src, re.M):
+    for m in re.finditer(r"^gp_node\s*\*\s*gp_(\w+)\(([^)]*)\);", src, re.M):
         name, params = m.group(1), m.group(2).strip()
         if name in HAND or name.endswith("_") or "..." in params:
             continue
