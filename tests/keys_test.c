@@ -9,60 +9,104 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 40) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 40) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
-static gp_app *app;
-static gp_co *co_;
-static gp_window *win(void) { return app->windows[0]; }
+static gp_app* app;
+static gp_co* co_;
+static gp_window* win(void)
+{
+    return app->windows[0];
+}
 
-typedef struct {
+typedef struct
+{
     gp_focus editor, other;
     int comment, uncomment, top, saveall, jump, jump2, one, two, global_sel;
     int select_sum, select_calls, last_payload;
     bool payload_outside_null;
     int nested_outer_before, nested_outer_after, nested_inner;
-    char downs[512];      /* "key|mods " for every key that reached on_key_down */
+    char downs[512]; /* "key|mods " for every key that reached on_key_down */
     char ups[512];
     char texts[64];
 } Fix;
 
-static void logk(char *buf, size_t cap, const gp_key_event *ev) {
+static void logk(char* buf, size_t cap, const gp_key_event* ev)
+{
     size_t n = strlen(buf);
     snprintf(buf + n, cap - n, "%s|%u%s ", ev->key, ev->mods, ev->repeat ? "r" : "");
 }
-static void on_down(void *self, gp_ctx *cx, const gp_key_event *ev, void *data) { logk(((Fix *)self)->downs, sizeof ((Fix *)self)->downs, ev); }
-static void on_up(void *self, gp_ctx *cx, const gp_key_event *ev, void *data) { logk(((Fix *)self)->ups, sizeof ((Fix *)self)->ups, ev); }
-static void on_text(void *self, gp_ctx *cx, const char *utf8, void *data) { strncat(((Fix *)self)->texts, utf8, 63 - strlen(((Fix *)self)->texts)); }
-
-static void a_comment(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->comment++; }
-static void a_uncomment(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->uncomment++; }
-static void a_top(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->top++; }
-static void a_saveall(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->saveall++; }
-static void a_jump(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->jump++; }
-static void a_jump2(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->jump2++; }
-static void a_one(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->one++; }
-static void a_two(void *self, gp_ctx *cx, void *d) { ((Fix *)self)->two++; }
-static void a_select(void *self, gp_ctx *cx, void *d) {
-    Fix *f = self;
-    size_t size = 0;
-    const void *p = gp_action_payload(cx, &size);
-    f->select_calls++;
-    if (p && size == sizeof(int)) { f->last_payload = *(const int *)p; f->select_sum += *(const int *)p; }
-    else f->last_payload = -1;
+static void on_down(void* self, gp_ctx* cx, const gp_key_event* ev, void* data)
+{
+    logk(((Fix*)self)->downs, sizeof((Fix*)self)->downs, ev);
 }
-static void a_outer(void *self, gp_ctx *cx, void *d) {
-    Fix *f = self;
+static void on_up(void* self, gp_ctx* cx, const gp_key_event* ev, void* data)
+{
+    logk(((Fix*)self)->ups, sizeof((Fix*)self)->ups, ev);
+}
+static void on_text(void* self, gp_ctx* cx, const char* utf8, void* data)
+{
+    strncat(((Fix*)self)->texts, utf8, 63 - strlen(((Fix*)self)->texts));
+}
+
+static void a_comment(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->comment++;
+}
+static void a_uncomment(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->uncomment++;
+}
+static void a_top(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->top++;
+}
+static void a_saveall(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->saveall++;
+}
+static void a_jump(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->jump++;
+}
+static void a_jump2(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->jump2++;
+}
+static void a_one(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->one++;
+}
+static void a_two(void* self, gp_ctx* cx, void* d)
+{
+    ((Fix*)self)->two++;
+}
+static void a_select(void* self, gp_ctx* cx, void* d)
+{
+    Fix* f = self;
+    size_t size = 0;
+    const void* p = gp_action_payload(cx, &size);
+    f->select_calls++;
+    if(p && size == sizeof(int)) {
+        f->last_payload = *(const int*)p;
+        f->select_sum += *(const int*)p;
+    } else {
+        f->last_payload = -1;
+    }
+}
+static void a_outer(void* self, gp_ctx* cx, void* d)
+{
+    Fix* f = self;
     size_t size;
-    const int *mine = gp_action_payload(cx, &size);
+    const int* mine = gp_action_payload(cx, &size);
     f->nested_outer_before = mine ? *mine : -1;
     int inner = 77;
     gp_dispatch_action_with(cx, "tab::select", &inner, sizeof inner);
@@ -71,23 +115,21 @@ static void a_outer(void *self, gp_ctx *cx, void *d) {
     f->nested_inner = f->last_payload;
 }
 
-static gp_node *render(void *self, gp_ctx *cx) {
-    Fix *f = self;
+static gp_node* render(void* self, gp_ctx* cx)
+{
+    Fix* f = self;
     return gp_div(
-        gp_size_full(), gp_flex_col(), gp_gap(8), gp_p(8),
-        gp_div(gp_size_px(60), gp_track_focus(f->editor), gp_tab_stop(), gp_key_context("Editor"), gp_on_key_down(on_down), gp_on_key_up(on_up), gp_on_text_input(on_text),
-               gp_on_action("ed::comment", a_comment), gp_on_action("ed::uncomment", a_uncomment), gp_on_action("ed::top", a_top),
-               gp_on_action("ed::saveall", a_saveall), gp_on_action("ed::jump", a_jump), gp_on_action("ed::jump2", a_jump2),
-               gp_on_action("a::one", a_one), gp_on_action("a::two", a_two), gp_on_action("tab::select", a_select), gp_on_action("tab::outer", a_outer)),
-        gp_div(gp_size_px(60), gp_track_focus(f->other), gp_tab_stop(), gp_on_key_down(on_down), gp_on_key_up(on_up)));
+        gp_size_full(), gp_flex_col(), gp_gap(8), gp_p(8), gp_div(gp_size_px(60), gp_track_focus(f->editor), gp_tab_stop(), gp_key_context("Editor"), gp_on_key_down(on_down), gp_on_key_up(on_up), gp_on_text_input(on_text), gp_on_action("ed::comment", a_comment), gp_on_action("ed::uncomment", a_uncomment), gp_on_action("ed::top", a_top), gp_on_action("ed::saveall", a_saveall), gp_on_action("ed::jump", a_jump), gp_on_action("ed::jump2", a_jump2), gp_on_action("a::one", a_one), gp_on_action("a::two", a_two), gp_on_action("tab::select", a_select), gp_on_action("tab::outer", a_outer)), gp_div(gp_size_px(60), gp_track_focus(f->other), gp_tab_stop(), gp_on_key_down(on_down), gp_on_key_up(on_up)));
 }
 
-static void keys(const char *k) {
+static void keys(const char* k)
+{
     gp_simulate_keystrokes(app, k);
     gp_sleep(co_, 0.12);
 }
 
-static void run(Fix *fx) {
+static void run(Fix* fx)
+{
     gp_sleep(co_, 0.15);
     gp_ctx cx = gp_ctx_for_window(app, win(), win()->root_view);
     gp_focus_set(&cx, fx->editor);
@@ -207,21 +249,23 @@ static void run(Fix *fx) {
     /* parsing, and clearing */
     gp_clear_key_bindings(app);
     CHECK(gp_bind_key(app, "ctrl-e", "ed::sel", NULL) && !gp_bind_key(app, "", "x", NULL) && !gp_bind_key(app, "ctrl-a ctrl-b ctrl-c ctrl-d ctrl-e", "x", NULL) && !gp_bind_key(app, "ctrl-notamod-x", "x", NULL),
-          "binding: a good keystroke; none, five and a bad modifier are refused");
+        "binding: a good keystroke; none, five and a bad modifier are refused");
     int before_clear = fx->comment;
     keys("ctrl-k ctrl-c");
     CHECK(fx->comment == before_clear, "after gp_clear_key_bindings the chord is gone");
     gp_debug_clock_skew(0);
 }
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
     co_ = co;
-    Fix *fx = gp_entity_get(app, win()->root_view);
+    Fix* fx = gp_entity_get(app, win()->root_view);
     run(fx);
     gp_quit(app);
 }
 
-static void ready(gp_app *a, void *userdata) {
+static void ready(gp_app* a, void* userdata)
+{
     app = a;
     Fix init = { .editor = gp_focus_new(app), .other = gp_focus_new(app) };
     gp_entity v = gp_view_new(app, sizeof(Fix), &init, render, NULL);
@@ -229,7 +273,7 @@ static void ready(gp_app *a, void *userdata) {
     gp_bind_key(app, "ctrl-k ctrl-c", "ed::comment", "Editor");
     gp_bind_key(app, "ctrl-k ctrl-u", "ed::uncomment", "Editor");
     gp_bind_key(app, "g g", "ed::top", "Editor");
-    gp_bind_key(app, "ctrl-k escape", "ed::top", "Editor");   /* never runs: escape cancels a chord */
+    gp_bind_key(app, "ctrl-k escape", "ed::top", "Editor"); /* never runs: escape cancels a chord */
     gp_bind_key(app, "ctrl-x ctrl-s ctrl-w", "ed::saveall", "Editor");
     gp_bind_key(app, "ctrl-j", "ed::jump", "Editor");
     gp_bind_key(app, "ctrl-j ctrl-j", "ed::jump2", "Editor");
@@ -243,7 +287,8 @@ static void ready(gp_app *a, void *userdata) {
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);

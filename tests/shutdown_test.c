@@ -10,40 +10,49 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 20) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 20) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
-typedef struct { SDL_AudioDeviceID dev; } Audio;
+typedef struct
+{
+    SDL_AudioDeviceID dev;
+} Audio;
 static int drops, video_at_drop, audio_at_drop, closed_ok;
-static gp_app *app;
+static gp_app* app;
 
-static void audio_drop(void *self) {
-    Audio *a = self;
+static void audio_drop(void* self)
+{
+    Audio* a = self;
     drops++;
     video_at_drop = SDL_WasInit(SDL_INIT_VIDEO) != 0;
     audio_at_drop = SDL_WasInit(SDL_INIT_AUDIO) != 0;
-    if (a->dev) {
-        SDL_CloseAudioDevice(a->dev);   /* must still work: SDL has not been shut down */
+    if(a->dev) {
+        SDL_CloseAudioDevice(a->dev); /* must still work: SDL has not been shut down */
         closed_ok = 1;
     }
 }
 
-static gp_node *render(void *self, gp_ctx *cx) { return gp_div(gp_size_full()); }
+static gp_node* render(void* self, gp_ctx* cx)
+{
+    return gp_div(gp_size_full());
+}
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
     gp_sleep(co, 0.1);
     gp_quit(app);
 }
 
-static void ready(gp_app *a, void *userdata) {
+static void ready(gp_app* a, void* userdata)
+{
     app = a;
     CHECK(SDL_InitSubSystem(SDL_INIT_AUDIO), "the dummy audio driver starts: %s", SDL_GetError());
     SDL_AudioSpec spec = { SDL_AUDIO_F32, 2, 48000 };
@@ -56,7 +65,8 @@ static void ready(gp_app *a, void *userdata) {
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     setenv("SDL_AUDIODRIVER", "dummy", 1);
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);

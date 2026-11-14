@@ -12,33 +12,39 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 60) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 60) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
-static gp_app *app;
-static gp_co *co_;
-static gp_window *win(void) { return app->windows[0]; }
+static gp_app* app;
+static gp_co* co_;
+static gp_window* win(void)
+{
+    return app->windows[0];
+}
 
-enum { N = 10 };
-typedef struct {
+enum { N = 10,
+};
+typedef struct
+{
     gp_focus a[N], b[N], c[N], d[2];
     gp_scroll sa, sb, sc, sd, se;
 } Fix;
 
 #define RED gp_rgb(0xc03030)
 
-static gp_node *render(void *self, gp_ctx *cx) {
-    Fix *f = self;
+static gp_node* render(void* self, gp_ctx* cx)
+{
+    Fix* f = self;
     gp_node **a = gp_frame_alloc(N * sizeof *a), **b = gp_frame_alloc(N * sizeof *b), **c = gp_frame_alloc(N * sizeof *c);
-    for (int i = 0; i < N; i++) {
+    for(int i = 0; i < N; i++) {
         a[i] = gp_div(gp_w(80), gp_h(40), gp_bg(RED), gp_track_focus(f->a[i]), gp_tab_stop());
         b[i] = gp_div(gp_w(40), gp_h(40), gp_flex_none(), gp_bg(RED), gp_track_focus(f->b[i]), gp_tab_stop());
         c[i] = gp_div(gp_w(80), gp_h(40), gp_bg(RED), gp_track_focus(f->c[i]), gp_tab_stop());
@@ -50,32 +56,41 @@ static gp_node *render(void *self, gp_ctx *cx) {
         /* B: a row */
         gp_div(gp_w(100), gp_h(50), gp_flex_row(), gp_overflow_x_scroll(), gp_track_scroll(f->sb), gp_children(b, N)),
         /* C: a scroller in a scroller */
-        gp_div(gp_w(100), gp_h(120), gp_overflow_y_scroll(), gp_track_scroll(f->sc),
-               gp_div(gp_h(200), gp_flex_none()),
-               gp_div(gp_w(100), gp_h(100), gp_flex_none(), gp_overflow_y_scroll(), gp_track_scroll(f->sd), gp_children(c, N)),
-               gp_div(gp_h(100), gp_flex_none())),
+        gp_div(gp_w(100), gp_h(120), gp_overflow_y_scroll(), gp_track_scroll(f->sc), gp_div(gp_h(200), gp_flex_none()), gp_div(gp_w(100), gp_h(100), gp_flex_none(), gp_overflow_y_scroll(), gp_track_scroll(f->sd), gp_children(c, N)), gp_div(gp_h(100), gp_flex_none())),
         /* D: one tall element, then a small one */
-        gp_div(gp_w(100), gp_h(100), gp_overflow_y_scroll(), gp_track_scroll(f->se),
-               gp_div(gp_h(50), gp_flex_none()),
-               gp_div(gp_w(80), gp_h(300), gp_flex_none(), gp_bg(RED), gp_track_focus(f->d[0]), gp_tab_stop()),
-               gp_div(gp_w(80), gp_h(20), gp_flex_none(), gp_bg(RED), gp_track_focus(f->d[1]), gp_tab_stop())));
+        gp_div(gp_w(100), gp_h(100), gp_overflow_y_scroll(), gp_track_scroll(f->se), gp_div(gp_h(50), gp_flex_none()), gp_div(gp_w(80), gp_h(300), gp_flex_none(), gp_bg(RED), gp_track_focus(f->d[0]), gp_tab_stop()), gp_div(gp_w(80), gp_h(20), gp_flex_none(), gp_bg(RED), gp_track_focus(f->d[1]), gp_tab_stop())));
 }
 
 static gp_ctx cx_;
-static void settle(void) { gp_sleep(co_, 0.15); }
-static void tab(int n, bool shift) {
-    for (int i = 0; i < n; i++) {
+static void settle(void)
+{
+    gp_sleep(co_, 0.15);
+}
+static void tab(int n, bool shift)
+{
+    for(int i = 0; i < n; i++) {
         gp_simulate_keystrokes(app, shift ? "shift-tab" : "tab");
         settle();
     }
 }
-static void focus(gp_focus f) { gp_focus_set(&cx_, f); settle(); }
-static bool near(float a, float b) { return fabsf(a - b) < 0.6f; }
-static gp_point off(gp_scroll s) { return gp_scroll_offset(&cx_, s); }
+static void focus(gp_focus f)
+{
+    gp_focus_set(&cx_, f);
+    settle();
+}
+static bool near(float a, float b)
+{
+    return fabsf(a - b) < 0.6f;
+}
+static gp_point off(gp_scroll s)
+{
+    return gp_scroll_offset(&cx_, s);
+}
 #define OFFY(s, want, what) CHECK(near(off(s).y, (want)), what ": y offset %g, wanted %g", off(s).y, (float)(want))
 #define OFFX(s, want, what) CHECK(near(off(s).x, (want)), what ": x offset %g, wanted %g", off(s).x, (float)(want))
 
-static void run(Fix *f) {
+static void run(Fix* f)
+{
     settle();
     cx_ = gp_ctx_for(app, GP_ENTITY_NULL);
 
@@ -149,34 +164,45 @@ static void run(Fix *f) {
     gp_scroll_into_view(&cx_, f->a[5]);
     settle();
     OFFY(f->sa, 148, "gp_scroll_into_view: A5 (204..244) to the bottom");
-    gp_scroll_into_view(&cx_, gp_focus_new(app));   /* tracked by nothing: ignored */
+    gp_scroll_into_view(&cx_, gp_focus_new(app)); /* tracked by nothing: ignored */
     gp_scroll_into_view(&cx_, (gp_focus){ 0 });
     settle();
     OFFY(f->sa, 148, "an unknown handle changes nothing");
 }
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
     co_ = co;
-    Fix *fx = gp_entity_get(app, win()->root_view);
+    Fix* fx = gp_entity_get(app, win()->root_view);
     run(fx);
     gp_quit(app);
 }
 
-static void ready(gp_app *a, void *userdata) {
+static void ready(gp_app* a, void* userdata)
+{
     app = a;
     Fix init;
     memset(&init, 0, sizeof init);
-    for (int i = 0; i < N; i++) { init.a[i] = gp_focus_new(app); init.b[i] = gp_focus_new(app); init.c[i] = gp_focus_new(app); }
+    for(int i = 0; i < N; i++) {
+        init.a[i] = gp_focus_new(app);
+        init.b[i] = gp_focus_new(app);
+        init.c[i] = gp_focus_new(app);
+    }
     init.d[0] = gp_focus_new(app);
     init.d[1] = gp_focus_new(app);
-    init.sa = gp_scroll_new(app); init.sb = gp_scroll_new(app); init.sc = gp_scroll_new(app); init.sd = gp_scroll_new(app); init.se = gp_scroll_new(app);
+    init.sa = gp_scroll_new(app);
+    init.sb = gp_scroll_new(app);
+    init.sc = gp_scroll_new(app);
+    init.sd = gp_scroll_new(app);
+    init.se = gp_scroll_new(app);
     gp_entity v = gp_view_new(app, sizeof init, &init, render, NULL);
     gp_open_window(app, &(gp_window_options){ .title = "reveal_test", .width = 520, .height = 300 }, v);
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
+int main(void)
+{
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);

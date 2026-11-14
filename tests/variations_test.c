@@ -6,66 +6,85 @@
  */
 #include "../src/internal.h"
 
+#include "compat.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "compat.h"
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 40) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 40) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
-static gp_app *app;
-static gp_co *co_;
-static gp_window *win(void) { return app->windows[0]; }
+static gp_app* app;
+static gp_co* co_;
+static gp_window* win(void)
+{
+    return app->windows[0];
+}
 
-typedef struct { const char *vars; gp_entity inner; } Fix;
+typedef struct
+{
+    const char* vars;
+    gp_entity inner;
+} Fix;
 
-static gp_node *inner_render(void *self, gp_ctx *cx);
+static gp_node* inner_render(void* self, gp_ctx* cx);
 
 #define T() gp_text("HHHH", gp_text_size(24), gp_font_family("Adwaita Sans"))
 
-static gp_node *render(void *self, gp_ctx *cx) {
-    Fix *f = self;
-    return gp_div(gp_flex_col(), gp_items_start(), gp_p(10),
-                  gp_div(T()),                                                                                   /* 0: the default */
-                  gp_div(gp_font_variations("opsz 32"), T()),                                                    /* 1 */
-                  gp_div(gp_font_variations("opsz 32"), gp_div(T())),                                            /* 2: inherited */
-                  gp_div(gp_font_variations("opsz 32"), gp_div(gp_font_variations("normal"), T())),              /* 3: put back */
-                  gp_div(gp_font_variations("wdth 75"), T()),                                                    /* 4: an axis it lacks */
-                  gp_div(gp_font_variations("opsz 32"), gp_font_weight(700), T()),                               /* 5 */
-                  gp_div(gp_font_variations("opsz 32, wght 300"), gp_font_weight(700), T()),                     /* 6: the list's weight wins */
-                  gp_div(gp_font_variations("opsz 32"), gp_div(gp_font_weight(300), T())),                       /* 7: a weight inside keeps the axis */
-                  gp_div(f->vars ? gp_font_variations(f->vars) : NULL, T()),                                     /* 8: the one the test changes */
-                  gp_div(f->vars ? gp_font_variations(f->vars) : NULL, gp_child_view_cached(f->inner)));         /* 9: a cached view below it */
+static gp_node* render(void* self, gp_ctx* cx)
+{
+    Fix* f = self;
+    return gp_div(gp_flex_col(), gp_items_start(), gp_p(10), gp_div(T()),                      /* 0: the default */
+        gp_div(gp_font_variations("opsz 32"), T()),                                            /* 1 */
+        gp_div(gp_font_variations("opsz 32"), gp_div(T())),                                    /* 2: inherited */
+        gp_div(gp_font_variations("opsz 32"), gp_div(gp_font_variations("normal"), T())),      /* 3: put back */
+        gp_div(gp_font_variations("wdth 75"), T()),                                            /* 4: an axis it lacks */
+        gp_div(gp_font_variations("opsz 32"), gp_font_weight(700), T()),                       /* 5 */
+        gp_div(gp_font_variations("opsz 32, wght 300"), gp_font_weight(700), T()),             /* 6: the list's weight wins */
+        gp_div(gp_font_variations("opsz 32"), gp_div(gp_font_weight(300), T())),               /* 7: a weight inside keeps the axis */
+        gp_div(f->vars ? gp_font_variations(f->vars) : NULL, T()),                             /* 8: the one the test changes */
+        gp_div(f->vars ? gp_font_variations(f->vars) : NULL, gp_child_view_cached(f->inner))); /* 9: a cached view below it */
 }
 
-static gp_node *inner_render(void *self, gp_ctx *cx) { return gp_div(T()); }
+static gp_node* inner_render(void* self, gp_ctx* cx)
+{
+    return gp_div(T());
+}
 
-static bool wait_draws(unsigned n) {
+static bool wait_draws(unsigned n)
+{
     unsigned long target = app->stat_draws + n;
-    for (int i = 0; i < 1000 && app->stat_draws < target; i++) gp_sleep(co_, 0.004);
+    for(int i = 0; i < 1000 && app->stat_draws < target; i++) {
+        gp_sleep(co_, 0.004);
+    }
     return app->stat_draws >= target;
 }
 
 /* the text element of box i, and its width */
-static float width_of(int i) {
-    const gp_el *n = win()->tree->children[i];
-    while (n->kind != GP_EL_TEXT && n->nchildren) n = n->children[0];
+static float width_of(int i)
+{
+    const gp_el* n = win()->tree->children[i];
+    while(n->kind != GP_EL_TEXT && n->nchildren) {
+        n = n->children[0];
+    }
     return n->size.w;
 }
-static const gp_el *text_of(int i) {
-    const gp_el *n = win()->tree->children[i];
-    while (n->kind != GP_EL_TEXT && n->nchildren) n = n->children[0];
+static const gp_el* text_of(int i)
+{
+    const gp_el* n = win()->tree->children[i];
+    while(n->kind != GP_EL_TEXT && n->nchildren) {
+        n = n->children[0];
+    }
     return n;
 }
 
@@ -73,18 +92,23 @@ static const gp_el *text_of(int i) {
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
-static float reference(float opsz, float wght) {
+static float reference(float opsz, float wght)
+{
     FT_Library lib;
     FT_Face face;
     FT_Init_FreeType(&lib);
     FT_New_Face(lib, "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf", 0, &face);
-    FT_MM_Var *mm;
+    FT_MM_Var* mm;
     FT_Get_MM_Var(face, &mm);
     FT_Fixed co[16];
     FT_Get_Var_Design_Coordinates(face, mm->num_axis, co);
-    for (FT_UInt i = 0; i < mm->num_axis; i++) {
-        if (mm->axis[i].tag == FT_MAKE_TAG('o', 'p', 's', 'z') && opsz > 0) co[i] = (FT_Fixed)(opsz * 65536.f);
-        if (mm->axis[i].tag == FT_MAKE_TAG('w', 'g', 'h', 't')) co[i] = (FT_Fixed)wght << 16;
+    for(FT_UInt i = 0; i < mm->num_axis; i++) {
+        if(mm->axis[i].tag == FT_MAKE_TAG('o', 'p', 's', 'z') && opsz > 0) {
+            co[i] = (FT_Fixed)(opsz * 65536.f);
+        }
+        if(mm->axis[i].tag == FT_MAKE_TAG('w', 'g', 'h', 't')) {
+            co[i] = (FT_Fixed)wght << 16;
+        }
     }
     FT_Set_Var_Design_Coordinates(face, mm->num_axis, co);
     FT_Load_Glyph(face, FT_Get_Char_Index(face, 'H'), FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING);
@@ -95,9 +119,13 @@ static float reference(float opsz, float wght) {
     return w;
 }
 /* (layout rounds a text's width up to a whole pixel) */
-static bool near(float got, float ref) { return fabsf(got - ceilf(ref - 0.001f)) < 0.01f; }
+static bool near(float got, float ref)
+{
+    return fabsf(got - ceilf(ref - 0.001f)) < 0.01f;
+}
 
-static void run(Fix *f) {
+static void run(Fix* f)
+{
     wait_draws(2);
     float def = reference(0, 400), o32 = reference(32, 400), o32b = reference(32, 700), o32l = reference(32, 300);
     CHECK(ceilf(def) != ceilf(o32) && ceilf(o32b) != ceilf(o32l), "(the font's optical size changes the width: %.2f vs %.2f; %.2f vs %.2f)", def, o32, o32b, o32l);
@@ -132,14 +160,16 @@ static void run(Fix *f) {
     CHECK(near(width_of(9), def), "and again when it goes: %.2f", width_of(9));
 }
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
     co_ = co;
-    Fix *fx = gp_entity_get(app, win()->root_view);
+    Fix* fx = gp_entity_get(app, win()->root_view);
     run(fx);
     gp_quit(app);
 }
 
-static void ready(gp_app *a, void *userdata) {
+static void ready(gp_app* a, void* userdata)
+{
     app = a;
     gp_font_add_file(app, "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf", &(gp_font_options){ .family = "Adwaita Sans" });
     Fix init = { .vars = NULL, .inner = gp_view_new(app, 1, NULL, inner_render, NULL) };
@@ -149,8 +179,9 @@ static void ready(gp_app *a, void *userdata) {
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
-    if (!test_file_exists("/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf")) {
+int main(void)
+{
+    if(!test_file_exists("/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf")) {
         printf("variations_test: skipped, Adwaita Sans is not installed\n");
         return 0;
     }

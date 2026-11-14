@@ -5,7 +5,7 @@
  * Time is real here (pipes are filled from this thread, from another thread and from the other end of a
  * socket), so the checks leave generous room and look for what must or must not happen, not exact timing.
  */
-#define _GNU_SOURCE   /* pipe2 */
+#define _GNU_SOURCE /* pipe2 */
 #include "../src/internal.h"
 
 #include <arpa/inet.h>
@@ -21,56 +21,81 @@
 #include <unistd.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            failures++;                                                                \
-            printf("FAIL %s:%d: ", __FILE__, __LINE__);                                \
-            printf(__VA_ARGS__);                                                       \
-            printf("\n");                                                              \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                \
+    do {                                                \
+        if(!(cond)) {                                   \
+            failures++;                                 \
+            printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+            printf(__VA_ARGS__);                        \
+            printf("\n");                               \
+        }                                               \
+    } while(0)
 
-static void msleep(int ms) { nanosleep(&(struct timespec){ 0, ms * 1000000L }, NULL); }
+static void msleep(int ms)
+{
+    nanosleep(&(struct timespec){ 0, ms * 1000000L }, NULL);
+}
 
-typedef struct {
+typedef struct
+{
     int fired;
-    int events;             /* of the last call */
-    int fd;                 /* of the last call */
-    int drain;              /* read what is there on each call */
-    int cancel_after;       /* cancel the watch from its own callback after this many calls (0 = never) */
+    int events;       /* of the last call */
+    int fd;           /* of the last call */
+    int drain;        /* read what is there on each call */
+    int cancel_after; /* cancel the watch from its own callback after this many calls (0 = never) */
     gp_task task;
     char got[4096];
     size_t ngot;
     int hup, invalid, readable, writable, error;
 } Watch;
 
-static void on_fd(void *self, gp_ctx *cx, int fd, int events, void *data) {
-    Watch *w = data ? data : self;
+static void on_fd(void* self, gp_ctx* cx, int fd, int events, void* data)
+{
+    Watch* w = data ? data : self;
     w->fired++;
     w->events = events;
     w->fd = fd;
-    if (events & GP_FD_HUP) w->hup++;
-    if (events & GP_FD_INVALID) w->invalid++;
-    if (events & GP_FD_READ) w->readable++;
-    if (events & GP_FD_WRITE) w->writable++;
-    if (events & GP_FD_ERROR) w->error++;
-    if (w->drain && (events & GP_FD_READ)) {
+    if(events & GP_FD_HUP) {
+        w->hup++;
+    }
+    if(events & GP_FD_INVALID) {
+        w->invalid++;
+    }
+    if(events & GP_FD_READ) {
+        w->readable++;
+    }
+    if(events & GP_FD_WRITE) {
+        w->writable++;
+    }
+    if(events & GP_FD_ERROR) {
+        w->error++;
+    }
+    if(w->drain && (events & GP_FD_READ)) {
         char buf[512];
         ssize_t n;
-        while ((n = read(fd, buf, sizeof buf)) > 0)
-            for (ssize_t i = 0; i < n && w->ngot < sizeof w->got; i++) w->got[w->ngot++] = buf[i];
+        while((n = read(fd, buf, sizeof buf)) > 0) {
+            for(ssize_t i = 0; i < n && w->ngot < sizeof w->got; i++) {
+                w->got[w->ngot++] = buf[i];
+            }
+        }
     }
-    if (w->cancel_after && w->fired >= w->cancel_after) gp_cancel(cx->app, w->task);
+    if(w->cancel_after && w->fired >= w->cancel_after) {
+        gp_cancel(cx->app, w->task);
+    }
 }
 
-static void make_pipe(int p[2]) {
-    if (pipe2(p, O_NONBLOCK | O_CLOEXEC) != 0) { perror("pipe2"); exit(2); }
+static void make_pipe(int p[2])
+{
+    if(pipe2(p, O_NONBLOCK | O_CLOEXEC) != 0) {
+        perror("pipe2");
+        exit(2);
+    }
 }
 
 /* ------------------------------------------------------------ callbacks */
 
-static void test_readable(gp_co *co, gp_app *app) {
+static void test_readable(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     Watch w = { .drain = 1 };
@@ -87,7 +112,7 @@ static void test_readable(gp_co *co, gp_app *app) {
     CHECK(w.events == GP_FD_READ && w.fd == p[0], "events %d, fd %d (want %d, %d)", w.events, w.fd, GP_FD_READ, p[0]);
 
     /* the watch survives its own callback: again, and again */
-    for (int i = 0; i < 5; i++) {
+    for(int i = 0; i < 5; i++) {
         CHECK(write(p[1], "x", 1) == 1, "write");
         gp_sleep(co, 0.03);
     }
@@ -105,7 +130,8 @@ static void test_readable(gp_co *co, gp_app *app) {
 }
 
 /* Level-triggered: it keeps calling while the data is there, and stops when it is read. */
-static void test_level_triggered(gp_co *co, gp_app *app) {
+static void test_level_triggered(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     Watch w = { 0 };
@@ -126,7 +152,8 @@ static void test_level_triggered(gp_co *co, gp_app *app) {
 }
 
 /* A watch on an idle descriptor costs no wakeups at all. */
-static void test_idle(gp_co *co, gp_app *app) {
+static void test_idle(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     Watch w = { 0 };
@@ -136,11 +163,13 @@ static void test_idle(gp_co *co, gp_app *app) {
     /* the quietest of three 400 ms spans: a watch that cost wakeups would cost them in every one, while a window still being mapped and exposed
      * (a slow start: a sanitizer build, a software renderer) wakes the loop in the first */
     unsigned long woke = (unsigned long)-1;
-    for (int k = 0; k < 3 && woke > 4; k++) {
+    for(int k = 0; k < 3 && woke > 4; k++) {
         unsigned long before = app->stat_wakeups;
         gp_sleep(co, 0.4);
         unsigned long n = app->stat_wakeups - before;
-        if (n < woke) woke = n;
+        if(n < woke) {
+            woke = n;
+        }
     }
     CHECK(woke <= 4, "the loop woke %lu times in 400 ms with one idle watch", woke);
     gp_cancel(app, t);
@@ -148,16 +177,19 @@ static void test_idle(gp_co *co, gp_app *app) {
     close(p[1]);
 }
 
-static void test_writable(gp_co *co, gp_app *app) {
+static void test_writable(gp_co* co, gp_app* app)
+{
     int sv[2];
     CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) == 0, "socketpair");
     /* fill the send buffer */
     char block[4096];
     memset(block, 'z', sizeof block);
     size_t total = 0;
-    for (;;) {
+    for(;;) {
         ssize_t n = write(sv[0], block, sizeof block);
-        if (n < 0) break;
+        if(n < 0) {
+            break;
+        }
         total += (size_t)n;
     }
     CHECK(errno == EAGAIN, "filling the socket ended with errno %d", errno);
@@ -172,18 +204,21 @@ static void test_writable(gp_co *co, gp_app *app) {
     size_t drained = 0;
     char buf[8192];
     ssize_t n;
-    while ((n = read(sv[1], buf, sizeof buf)) > 0) drained += (size_t)n;
+    while((n = read(sv[1], buf, sizeof buf)) > 0) {
+        drained += (size_t)n;
+    }
     CHECK(drained == total, "drained %zu of %zu bytes", drained, total);
     gp_sleep(co, 0.1);
     CHECK(w.fired >= 1 && (w.events & GP_FD_WRITE), "no write-ready call after the other side read (%d calls)", w.fired);
-    w.cancel_after = w.fired + 1;   /* it is level-triggered: it will be called again right away */
+    w.cancel_after = w.fired + 1; /* it is level-triggered: it will be called again right away */
     gp_sleep(co, 0.1);
     CHECK(!gp_task_active(app, w.task), "the watch cancelled itself from its callback and is still active");
     close(sv[0]);
     close(sv[1]);
 }
 
-static void test_hup(gp_co *co, gp_app *app) {
+static void test_hup(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     Watch w = { .drain = 1, .cancel_after = 0 };
@@ -198,16 +233,17 @@ static void test_hup(gp_co *co, gp_app *app) {
     close(p[0]);
 }
 
-static void test_closed_under_a_watch(gp_co *co, gp_app *app) {
+static void test_closed_under_a_watch(gp_co* co, gp_app* app)
+{
     int p[2], q[2];
     make_pipe(p);
-    make_pipe(q);       /* before the close, so that the new descriptors cannot take the number that is about to be free */
+    make_pipe(q); /* before the close, so that the new descriptors cannot take the number that is about to be free */
     Watch w = { 0 };
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     w.task = gp_watch_fd(&cx, p[0], GP_FD_READ, on_fd, &w);
     gp_sleep(co, 0.05);
-    close(p[0]);        /* a bug in the caller, but it must not hang or spin. (p[1] stays open: closing it would hang the
-                           pipe up for the poll that is still holding the old file, which is a different event.) */
+    close(p[0]); /* a bug in the caller, but it must not hang or spin. (p[1] stays open: closing it would hang the
+                    pipe up for the poll that is still holding the old file, which is a different event.) */
     /* poll() only learns of it when it starts again; adding a watch makes it */
     Watch w2 = { .drain = 1 };
     w2.task = gp_watch_fd(&cx, q[0], GP_FD_READ, on_fd, &w2);
@@ -221,17 +257,23 @@ static void test_closed_under_a_watch(gp_co *co, gp_app *app) {
 }
 
 /* Owned by an entity: releasing it ends the watch; the callback gets the entity's state as `self`. */
-typedef struct { int fired; } Owner;
-static void on_owned(void *self, gp_ctx *cx, int fd, int events, void *data) {
-    ((Owner *)self)->fired++;
+typedef struct
+{
+    int fired;
+} Owner;
+static void on_owned(void* self, gp_ctx* cx, int fd, int events, void* data)
+{
+    ((Owner*)self)->fired++;
     char buf[64];
-    while (read(fd, buf, sizeof buf) > 0) {}
+    while(read(fd, buf, sizeof buf) > 0) {
+    }
 }
-static void test_entity(gp_co *co, gp_app *app) {
+static void test_entity(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     gp_entity e = gp_entity_new(app, sizeof(Owner), NULL, NULL);
-    Owner *o = gp_entity_get(app, e);
+    Owner* o = gp_entity_get(app, e);
     gp_ctx cx = gp_ctx_for(app, e);
     gp_task t = gp_watch_fd(&cx, p[0], GP_FD_READ, on_owned, NULL);
     CHECK(write(p[1], "1", 1) == 1, "write");
@@ -246,7 +288,8 @@ static void test_entity(gp_co *co, gp_app *app) {
 }
 
 /* Descriptor numbers are reused: a cancelled watch must not see the next pipe that gets the same number. */
-static void test_reused_descriptor(gp_co *co, gp_app *app) {
+static void test_reused_descriptor(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     Watch old = { 0 };
@@ -268,16 +311,24 @@ static void test_reused_descriptor(gp_co *co, gp_app *app) {
 }
 
 /* Callbacks that add, cancel and close while others are being delivered. */
-typedef struct { Watch a, b; int p[2], q[2]; gp_task tb; } Chain;
-static void chain_a(void *self, gp_ctx *cx, int fd, int events, void *data) {
-    Chain *c = data;
+typedef struct
+{
+    Watch a, b;
+    int p[2], q[2];
+    gp_task tb;
+} Chain;
+static void chain_a(void* self, gp_ctx* cx, int fd, int events, void* data)
+{
+    Chain* c = data;
     c->a.fired++;
     char buf[8];
-    while (read(fd, buf, sizeof buf) > 0) {}
-    gp_cancel(cx->app, c->tb);                  /* cancels a sibling that is ready in the same turn */
+    while(read(fd, buf, sizeof buf) > 0) {
+    }
+    gp_cancel(cx->app, c->tb); /* cancels a sibling that is ready in the same turn */
     gp_cancel(cx->app, c->a.task);
 }
-static void test_callbacks_modify_watches(gp_co *co, gp_app *app) {
+static void test_callbacks_modify_watches(gp_co* co, gp_app* app)
+{
     Chain c = { 0 };
     make_pipe(c.p);
     make_pipe(c.q);
@@ -289,35 +340,58 @@ static void test_callbacks_modify_watches(gp_co *co, gp_app *app) {
     CHECK(c.a.fired == 1, "first watch called %d times", c.a.fired);
     CHECK(c.b.fired <= 1, "second watch called %d times", c.b.fired);
     gp_cancel(app, c.tb);
-    close(c.p[0]); close(c.p[1]); close(c.q[0]); close(c.q[1]);
+    close(c.p[0]);
+    close(c.p[1]);
+    close(c.q[0]);
+    close(c.q[1]);
 }
 
 /* Many descriptors, each delivered exactly the data written to it. */
-enum { MANY = 300 };
-typedef struct { int p[2]; Watch w; } Slot;
+enum { MANY = 300,
+};
+typedef struct
+{
+    int p[2];
+    Watch w;
+} Slot;
 static Slot slots[MANY];
-static void test_many(gp_co *co, gp_app *app) {
+static void test_many(gp_co* co, gp_app* app)
+{
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
-    for (int i = 0; i < MANY; i++) {
+    for(int i = 0; i < MANY; i++) {
         make_pipe(slots[i].p);
         slots[i].w.drain = 1;
         slots[i].w.task = gp_watch_fd(&cx, slots[i].p[0], GP_FD_READ, on_fd, &slots[i].w);
     }
-    for (int i = 0; i < MANY; i += 3) { char c = (char)('a' + i % 26); CHECK(write(slots[i].p[1], &c, 1) == 1, "write"); }
+    for(int i = 0; i < MANY; i += 3) {
+        char c = (char)('a' + i % 26);
+        CHECK(write(slots[i].p[1], &c, 1) == 1, "write");
+    }
     gp_sleep(co, 0.3);
     int bad = 0;
-    for (int i = 0; i < MANY; i++) {
+    for(int i = 0; i < MANY; i++) {
         int want = i % 3 == 0;
-        if (slots[i].w.ngot != (size_t)want || (want && slots[i].w.got[0] != (char)('a' + i % 26)) || slots[i].w.fired != want) bad++;
+        if(slots[i].w.ngot != (size_t)want || (want && slots[i].w.got[0] != (char)('a' + i % 26)) || slots[i].w.fired != want) {
+            bad++;
+        }
     }
     CHECK(bad == 0, "%d of %d descriptors got the wrong thing", bad, MANY);
     /* the rest, in reverse order */
-    for (int i = MANY - 1; i >= 0; i--) if (i % 3) { char c = 'q'; CHECK(write(slots[i].p[1], &c, 1) == 1, "write"); }
+    for(int i = MANY - 1; i >= 0; i--) {
+        if(i % 3) {
+            char c = 'q';
+            CHECK(write(slots[i].p[1], &c, 1) == 1, "write");
+        }
+    }
     gp_sleep(co, 0.4);
     bad = 0;
-    for (int i = 0; i < MANY; i++) if (slots[i].w.fired != 1) bad++;
+    for(int i = 0; i < MANY; i++) {
+        if(slots[i].w.fired != 1) {
+            bad++;
+        }
+    }
     CHECK(bad == 0, "%d of %d descriptors were not called exactly once", bad, MANY);
-    for (int i = 0; i < MANY; i++) {
+    for(int i = 0; i < MANY; i++) {
         gp_cancel(app, slots[i].w.task);
         close(slots[i].p[0]);
         close(slots[i].p[1]);
@@ -326,14 +400,16 @@ static void test_many(gp_co *co, gp_app *app) {
 }
 
 /* Written from another thread, as a worker or a child process would. */
-static void *late_writer(void *arg) {
-    int fd = *(int *)arg;
+static void* late_writer(void* arg)
+{
+    int fd = *(int*)arg;
     msleep(80);
     ssize_t r = write(fd, "from a thread", 13);
     (void)r;
     return NULL;
 }
-static void test_other_thread(gp_co *co, gp_app *app) {
+static void test_other_thread(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     Watch w = { .drain = 1 };
@@ -342,7 +418,9 @@ static void test_other_thread(gp_co *co, gp_app *app) {
     pthread_t th;
     pthread_create(&th, NULL, late_writer, &p[1]);
     double t0 = gp_time();
-    while (!w.fired && gp_time() - t0 < 2) gp_sleep(co, 0.005);
+    while(!w.fired && gp_time() - t0 < 2) {
+        gp_sleep(co, 0.005);
+    }
     double took = gp_time() - t0;
     pthread_join(th, NULL);
     CHECK(w.fired == 1 && w.ngot == 13, "thread write: %d calls, %zu bytes", w.fired, w.ngot);
@@ -354,7 +432,8 @@ static void test_other_thread(gp_co *co, gp_app *app) {
 
 /* ------------------------------------------------------------ awaits */
 
-static void test_await(gp_co *co, gp_app *app) {
+static void test_await(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     int rev = -1;
@@ -377,7 +456,7 @@ static void test_await(gp_co *co, gp_app *app) {
     CHECK(write(p[1], "k", 1) == 1, "write");
     CHECK(gp_await_fd(co, p[0], GP_FD_READ, 0.05, &rev) && rev == GP_FD_READ, "ready with a deadline");
     t0 = gp_time();
-    gp_sleep(co, 0.15);      /* the deadline of the await above passed meanwhile: it must not resume this sleep early */
+    gp_sleep(co, 0.15); /* the deadline of the await above passed meanwhile: it must not resume this sleep early */
     CHECK(gp_time() - t0 > 0.14, "sleep was cut short to %.3f s by a stale wake", gp_time() - t0);
     CHECK(read(p[0], &c, 1) == 1, "read");
 
@@ -392,13 +471,20 @@ static void test_await(gp_co *co, gp_app *app) {
     close(p[1]);
 }
 
-typedef struct { int fd; bool returned, result; int rev; } Waiter;
-static void waiter(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    Waiter *w = data;
+typedef struct
+{
+    int fd;
+    bool returned, result;
+    int rev;
+} Waiter;
+static void waiter(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    Waiter* w = data;
     w->result = gp_await_fd(co, w->fd, GP_FD_READ, -1, &w->rev);
     w->returned = true;
 }
-static void test_cancel_await(gp_co *co, gp_app *app) {
+static void test_cancel_await(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     Waiter w = { .fd = p[0] };
@@ -424,68 +510,99 @@ static void test_cancel_await(gp_co *co, gp_app *app) {
 }
 
 /* A TCP echo server and client, both coroutines, moving more than a socket buffer holds. */
-enum { PAYLOAD = 1 << 20 };
-typedef struct { int listen_fd; uint16_t port; bool server_done, writer_done, reader_done; size_t served; unsigned char *sent, *received; size_t nreceived; int cfd; bool connected; int connect_errno; } Echo;
+enum { PAYLOAD = 1 << 20,
+};
+typedef struct
+{
+    int listen_fd;
+    uint16_t port;
+    bool server_done, writer_done, reader_done;
+    size_t served;
+    unsigned char *sent, *received;
+    size_t nreceived;
+    int cfd;
+    bool connected;
+    int connect_errno;
+} Echo;
 
-static void echo_server(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    Echo *e = data;
+static void echo_server(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    Echo* e = data;
     int fd = gp_co_accept(co, e->listen_fd);
-    if (fd < 0) { e->server_done = true; return; }
+    if(fd < 0) {
+        e->server_done = true;
+        return;
+    }
     char buf[4096];
-    for (;;) {
+    for(;;) {
         ssize_t n = gp_co_read(co, fd, buf, sizeof buf);
-        if (n <= 0) break;
-        if (gp_co_write(co, fd, buf, (size_t)n) != n) break;
+        if(n <= 0) {
+            break;
+        }
+        if(gp_co_write(co, fd, buf, (size_t)n) != n) {
+            break;
+        }
         e->served += (size_t)n;
     }
     close(fd);
     e->server_done = true;
 }
 
-static void echo_writer(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    Echo *e = data;
-    if (gp_co_connect(co, e->cfd, (struct sockaddr *)&(struct sockaddr_in){ .sin_family = AF_INET, .sin_port = htons(e->port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK) }, sizeof(struct sockaddr_in)) < 0) {
+static void echo_writer(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    Echo* e = data;
+    if(gp_co_connect(co, e->cfd, (struct sockaddr*)&(struct sockaddr_in){ .sin_family = AF_INET, .sin_port = htons(e->port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK) }, sizeof(struct sockaddr_in)) < 0) {
         e->connect_errno = errno;
         e->writer_done = true;
         return;
     }
     e->connected = true;
     size_t off = 0;
-    while (off < PAYLOAD) {
+    while(off < PAYLOAD) {
         size_t chunk = PAYLOAD - off < 100000 ? PAYLOAD - off : 100000;
-        if (gp_co_write(co, e->cfd, e->sent + off, chunk) != (ssize_t)chunk) break;
+        if(gp_co_write(co, e->cfd, e->sent + off, chunk) != (ssize_t)chunk) {
+            break;
+        }
         off += chunk;
     }
     shutdown(e->cfd, SHUT_WR);
     e->writer_done = off == PAYLOAD;
 }
 
-static void echo_reader(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    Echo *e = data;
-    while (!e->connected && !e->writer_done) gp_sleep(co, 0.005);
-    while (e->nreceived < PAYLOAD) {
+static void echo_reader(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    Echo* e = data;
+    while(!e->connected && !e->writer_done) {
+        gp_sleep(co, 0.005);
+    }
+    while(e->nreceived < PAYLOAD) {
         ssize_t n = gp_co_read(co, e->cfd, e->received + e->nreceived, PAYLOAD - e->nreceived);
-        if (n <= 0) break;
+        if(n <= 0) {
+            break;
+        }
         e->nreceived += (size_t)n;
     }
     e->reader_done = true;
 }
 
-static void test_tcp_echo(gp_co *co, gp_app *app) {
+static void test_tcp_echo(gp_co* co, gp_app* app)
+{
     Echo e = { 0 };
     e.sent = malloc(PAYLOAD);
     e.received = malloc(PAYLOAD);
-    for (size_t i = 0; i < PAYLOAD; i++) e.sent[i] = (unsigned char)(i * 2654435761u >> 13);
+    for(size_t i = 0; i < PAYLOAD; i++) {
+        e.sent[i] = (unsigned char)(i * 2654435761u >> 13);
+    }
     e.listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     int one = 1;
     setsockopt(e.listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
-    CHECK(bind(e.listen_fd, (struct sockaddr *)&a, sizeof a) == 0 && listen(e.listen_fd, 4) == 0, "listen");
+    CHECK(bind(e.listen_fd, (struct sockaddr*)&a, sizeof a) == 0 && listen(e.listen_fd, 4) == 0, "listen");
     socklen_t len = sizeof a;
-    getsockname(e.listen_fd, (struct sockaddr *)&a, &len);
+    getsockname(e.listen_fd, (struct sockaddr*)&a, &len);
     e.port = ntohs(a.sin_port);
     e.cfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-    int small = 8192;   /* a tiny send buffer: a write of 100 KB goes in many pieces, with EAGAIN between them */
+    int small = 8192; /* a tiny send buffer: a write of 100 KB goes in many pieces, with EAGAIN between them */
     setsockopt(e.cfd, SOL_SOCKET, SO_SNDBUF, &small, sizeof small);
 
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
@@ -493,34 +610,36 @@ static void test_tcp_echo(gp_co *co, gp_app *app) {
     gp_spawn(&cx, echo_writer, &e);
     gp_spawn(&cx, echo_reader, &e);
     double t0 = gp_time();
-    while (!(e.server_done && e.writer_done && e.reader_done) && gp_time() - t0 < 10) gp_sleep(co, 0.02);
+    while(!(e.server_done && e.writer_done && e.reader_done) && gp_time() - t0 < 10) {
+        gp_sleep(co, 0.02);
+    }
     CHECK(e.connected, "client did not connect (errno %d)", e.connect_errno);
-    CHECK(e.writer_done && e.reader_done && e.server_done, "echo unfinished: writer %d reader %d server %d (received %zu, served %zu)",
-          e.writer_done, e.reader_done, e.server_done, e.nreceived, e.served);
-    CHECK(e.nreceived == PAYLOAD && memcmp(e.sent, e.received, PAYLOAD) == 0, "the echo of %d bytes came back as %zu bytes, %s", PAYLOAD,
-          e.nreceived, e.nreceived == PAYLOAD ? "different" : "short");
+    CHECK(e.writer_done && e.reader_done && e.server_done, "echo unfinished: writer %d reader %d server %d (received %zu, served %zu)", e.writer_done, e.reader_done, e.server_done, e.nreceived, e.served);
+    CHECK(e.nreceived == PAYLOAD && memcmp(e.sent, e.received, PAYLOAD) == 0, "the echo of %d bytes came back as %zu bytes, %s", PAYLOAD, e.nreceived, e.nreceived == PAYLOAD ? "different" : "short");
     close(e.cfd);
     close(e.listen_fd);
     free(e.sent);
     free(e.received);
 }
 
-static void refused(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    int *out = data;
+static void refused(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    int* out = data;
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     /* a port that was just closed: nothing listens */
     int probe = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
-    bind(probe, (struct sockaddr *)&a, sizeof a);
+    bind(probe, (struct sockaddr*)&a, sizeof a);
     socklen_t len = sizeof a;
-    getsockname(probe, (struct sockaddr *)&a, &len);
+    getsockname(probe, (struct sockaddr*)&a, &len);
     close(probe);
-    int r = gp_co_connect(co, fd, (struct sockaddr *)&a, sizeof a);
+    int r = gp_co_connect(co, fd, (struct sockaddr*)&a, sizeof a);
     out[0] = r;
     out[1] = errno;
     close(fd);
 }
-static void test_connect_refused(gp_co *co, gp_app *app) {
+static void test_connect_refused(gp_co* co, gp_app* app)
+{
     int out[2] = { 99, 0 };
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_spawn(&cx, refused, out);
@@ -528,14 +647,16 @@ static void test_connect_refused(gp_co *co, gp_app *app) {
     CHECK(out[0] == -1 && out[1] == ECONNREFUSED, "connect to a closed port: %d, errno %d (%s)", out[0], out[1], strerror(out[1]));
 }
 
-static void reading_forever(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    int *r = data;
+static void reading_forever(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    int* r = data;
     char buf[8];
     errno = 0;
     r[0] = (int)gp_co_read(co, r[2], buf, sizeof buf);
     r[1] = errno;
 }
-static void test_read_cancelled(gp_co *co, gp_app *app) {
+static void test_read_cancelled(gp_co* co, gp_app* app)
+{
     int p[2];
     make_pipe(p);
     int r[3] = { 99, 0, p[0] };
@@ -551,10 +672,11 @@ static void test_read_cancelled(gp_co *co, gp_app *app) {
 
 /* ------------------------------------------------------------ driver */
 
-static void leave_watches(gp_co *co, gp_app *app, int pipes[3][2]) {
+static void leave_watches(gp_co* co, gp_app* app, int pipes[3][2])
+{
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     static Watch w[3];
-    for (int i = 0; i < 3; i++) {
+    for(int i = 0; i < 3; i++) {
         make_pipe(pipes[i]);
         gp_watch_fd(&cx, pipes[i][0], GP_FD_READ, on_fd, &w[i]);
     }
@@ -563,8 +685,9 @@ static void leave_watches(gp_co *co, gp_app *app, int pipes[3][2]) {
     gp_spawn(&cx, waiter, &wa);
 }
 
-static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
-    gp_app *app = cx->app;
+static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    gp_app* app = cx->app;
     test_readable(co, app);
     test_level_triggered(co, app);
     test_idle(co, app);
@@ -589,17 +712,22 @@ static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
     gp_quit(app);
 }
 
-static gp_node *view(void *self, gp_ctx *cx) { return gp_div(gp_size_full()); }
+static gp_node* view(void* self, gp_ctx* cx)
+{
+    return gp_div(gp_size_full());
+}
 
-static void ready(gp_app *app, void *userdata) {
+static void ready(gp_app* app, void* userdata)
+{
     gp_entity root = gp_view_new(app, 0, NULL, view, NULL);
     gp_open_window(app, &(gp_window_options){ .title = "fd_test", .width = 200, .height = 100 }, root);
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_spawn(&cx, driver, NULL);
 }
 
-int main(void) {
-    setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1);   /* a physical pointer over the window is not part of the test */
+int main(void)
+{
+    setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1); /* a physical pointer over the window is not part of the test */
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);
     printf(failures ? "fd_test: %d FAILURE(S)\n" : "fd_test: all checks passed\n", failures);

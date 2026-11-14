@@ -15,61 +15,95 @@
 #include <time.h>
 
 static int failures;
-#define CHECK(cond, ...)                                                               \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            if (failures++ < 50) {                                                     \
-                printf("FAIL %s:%d: ", __FILE__, __LINE__);                            \
-                printf(__VA_ARGS__);                                                   \
-                printf("\n");                                                          \
-            }                                                                          \
-        }                                                                              \
-    } while (0)
+#define CHECK(cond, ...)                                    \
+    do {                                                    \
+        if(!(cond)) {                                       \
+            if(failures++ < 50) {                           \
+                printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                printf(__VA_ARGS__);                        \
+                printf("\n");                               \
+            }                                               \
+        }                                                   \
+    } while(0)
 
 #define HEAD "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='40' height='40' viewBox='0 0 40 40'>"
 #define TAIL "</svg>"
 
 static int W = 40;
-static gp_text_system *g_ts;
+static gp_text_system* g_ts;
 static bool g_ts_has_font;
-static uint8_t *draw(const char *doc) {
-    uint8_t *px = gp_svg_render(doc, strlen(doc), 0x000000, W, W, 40.f, g_ts);
+static uint8_t* draw(const char* doc)
+{
+    uint8_t* px = gp_svg_render(doc, strlen(doc), 0x000000, W, W, 40.f, g_ts);
     return px;
 }
 #define P(px, x, y) ((px) + ((size_t)(y) * (size_t)W + (size_t)(x)) * 4)
-static bool is_clear(const uint8_t *p) { return p[3] < 8; }
-static bool is_color(const uint8_t *p, int r, int g, int b) { return p[3] > 247 && abs(p[0] - r) < 8 && abs(p[1] - g) < 8 && abs(p[2] - b) < 8; }
-static bool is_red(const uint8_t *p) { return is_color(p, 255, 0, 0); }
-static bool is_blue(const uint8_t *p) { return is_color(p, 0, 0, 255); }
-static bool is_green(const uint8_t *p) { return is_color(p, 0, 255, 0); }
+static bool is_clear(const uint8_t* p)
+{
+    return p[3] < 8;
+}
+static bool is_color(const uint8_t* p, int r, int g, int b)
+{
+    return p[3] > 247 && abs(p[0] - r) < 8 && abs(p[1] - g) < 8 && abs(p[2] - b) < 8;
+}
+static bool is_red(const uint8_t* p)
+{
+    return is_color(p, 255, 0, 0);
+}
+static bool is_blue(const uint8_t* p)
+{
+    return is_color(p, 0, 0, 255);
+}
+static bool is_green(const uint8_t* p)
+{
+    return is_color(p, 0, 255, 0);
+}
 /* For the ink of small text: a stem of a thin font (Segoe UI and Arial at 12-14px, on Windows) may cover no pixel whole, so
  * mostly covered and of that hue (straight or premultiplied alpha alike) */
-static bool is_hue(const uint8_t *p, int ch) {
+static bool is_hue(const uint8_t* p, int ch)
+{
     return p[3] > 128 && p[ch] > 120 && p[(ch + 1) % 3] < 40 && p[(ch + 2) % 3] < 40;
 }
-static bool is_red_ink(const uint8_t *p) { return is_hue(p, 0); }
-static bool is_blue_ink(const uint8_t *p) { return is_hue(p, 2); }
+static bool is_red_ink(const uint8_t* p)
+{
+    return is_hue(p, 0);
+}
+static bool is_blue_ink(const uint8_t* p)
+{
+    return is_hue(p, 2);
+}
 
 /* pictures that should be the same: the clipped or masked shape against the clip shape drawn directly (same rasterizer, so the edges agree to a few bytes, which also
  * checks nothing is lost or doubled where the layers are put together) */
-static int differ(const uint8_t *a, const uint8_t *b, int tol) {
+static int differ(const uint8_t* a, const uint8_t* b, int tol)
+{
     int bad = 0;
-    for (size_t i = 0; i < (size_t)W * (size_t)W; i++)
-        for (int c = 0; c < 4; c++)
-            if (abs((int)a[i * 4 + c] - (int)b[i * 4 + c]) > tol) { bad++; break; }
+    for(size_t i = 0; i < (size_t)W * (size_t)W; i++) {
+        for(int c = 0; c < 4; c++) {
+            if(abs((int)a[i * 4 + c] - (int)b[i * 4 + c]) > tol) {
+                bad++;
+                break;
+            }
+        }
+    }
     return bad;
 }
-static int vs_direct(const uint8_t *px, const char *reference_doc, int tol) {
-    uint8_t *ref = draw(reference_doc);
+static int vs_direct(const uint8_t* px, const char* reference_doc, int tol)
+{
+    uint8_t* ref = draw(reference_doc);
     int bad = ref && px ? differ(px, ref, tol) : 99999;
     free(ref);
     return bad;
 }
 
-static double now(void) { return (double)gp_now_ns() * 1e-9; }
+static double now(void)
+{
+    return (double)gp_now_ns() * 1e-9;
+}
 
-static void test_use(void) {
-    uint8_t *px = draw(HEAD "<defs><rect id='r' width='10' height='10' fill='#f00'/></defs><use href='#r' x='5' y='3'/>" TAIL);
+static void test_use(void)
+{
+    uint8_t* px = draw(HEAD "<defs><rect id='r' width='10' height='10' fill='#f00'/></defs><use href='#r' x='5' y='3'/>" TAIL);
     CHECK(px && is_red(P(px, 10, 8)) && is_red(P(px, 5, 3)) && is_red(P(px, 14, 12)), "use: the square is where x and y put it");
     CHECK(px && is_clear(P(px, 2, 2)) && is_clear(P(px, 16, 8)) && is_clear(P(px, 10, 14)), "use: and nowhere else (the one in defs is not drawn)");
     free(px);
@@ -120,18 +154,19 @@ static void test_use(void) {
     CHECK(now() - t0 < 2.0, "use: a cycle and a bomb take %.2f s", now() - t0);
 }
 
-static void test_clip(void) {
-    const char *clip = "<defs><clipPath id='c'><circle cx='20' cy='20' r='10'/></clipPath></defs>";
+static void test_clip(void)
+{
+    const char* clip = "<defs><clipPath id='c'><circle cx='20' cy='20' r='10'/></clipPath></defs>";
     char doc[1024];
     snprintf(doc, sizeof doc, HEAD "%s<rect width='40' height='40' fill='#f00' clip-path='url(#c)'/>" TAIL, clip);
-    uint8_t *px = draw(doc);
+    uint8_t* px = draw(doc);
     CHECK(px && is_red(P(px, 20, 20)) && is_clear(P(px, 2, 2)) && is_clear(P(px, 20, 5)) && is_red(P(px, 20, 12)), "clip: red inside the circle, nothing outside");
     int bad = vs_direct(px, HEAD "<circle cx='20' cy='20' r='10' fill='#f00'/>" TAIL, 3);
     CHECK(bad == 0, "clip: %d pixels differ from the circle drawn directly", bad);
     free(px);
 
     int save = W;
-    W = 80;   /* at twice the size */
+    W = 80; /* at twice the size */
     px = draw(doc);
     bad = vs_direct(px, HEAD "<circle cx='20' cy='20' r='10' fill='#f00'/>" TAIL, 3);
     CHECK(bad == 0, "clip at 2x: %d pixels differ", bad);
@@ -209,16 +244,18 @@ static void test_clip(void) {
     free(px);
 
     /* a gradient defined in defs still paints a clipped shape */
-    px = draw(HEAD "<defs><linearGradient id='g' x1='0' x2='1' y1='0' y2='0'><stop offset='0' stop-color='#f00'/><stop offset='1' stop-color='#00f'/></linearGradient>" "<clipPath id='c'><rect width='40' height='20'/></clipPath></defs><rect width='40' height='40' fill='url(#g)' clip-path='url(#c)'/>" TAIL);
+    px = draw(HEAD "<defs><linearGradient id='g' x1='0' x2='1' y1='0' y2='0'><stop offset='0' stop-color='#f00'/><stop offset='1' stop-color='#00f'/></linearGradient>"
+                   "<clipPath id='c'><rect width='40' height='20'/></clipPath></defs><rect width='40' height='40' fill='url(#g)' clip-path='url(#c)'/>" TAIL);
     CHECK(px && P(px, 3, 10)[0] > 200 && P(px, 36, 10)[2] > 200 && is_clear(P(px, 20, 30)), "clip: a gradient fill through a clip");
     free(px);
 }
 
-static void test_mask(void) {
+static void test_mask(void)
+{
     char doc[1024];
-    const char *shape = "<rect width='40' height='40' fill='#f00' mask='url(#m)'/>";
+    const char* shape = "<rect width='40' height='40' fill='#f00' mask='url(#m)'/>";
     snprintf(doc, sizeof doc, HEAD "<defs><mask id='m'><rect width='40' height='40' fill='#fff'/></mask></defs>%s" TAIL, shape);
-    uint8_t *px = draw(doc);
+    uint8_t* px = draw(doc);
     CHECK(px && is_red(P(px, 20, 20)), "mask: white shows everything");
     free(px);
     snprintf(doc, sizeof doc, HEAD "<defs><mask id='m'><rect width='40' height='40' fill='#000'/></mask></defs>%s" TAIL, shape);
@@ -244,12 +281,12 @@ static void test_mask(void) {
     CHECK(bad == 0, "mask: %d pixels differ from the circle drawn directly", bad);
     free(px);
     /* a gradient mask: opaque at the left, gone at the right */
-    snprintf(doc, sizeof doc,
-             HEAD "<defs><linearGradient id='l' x1='0' x2='1' y1='0' y2='0'><stop offset='0' stop-color='#fff'/><stop offset='1' stop-color='#000'/></linearGradient>"
-                  "<mask id='m'><rect width='40' height='40' fill='url(#l)'/></mask></defs>%s" TAIL, shape);
+    snprintf(doc, sizeof doc, HEAD "<defs><linearGradient id='l' x1='0' x2='1' y1='0' y2='0'><stop offset='0' stop-color='#fff'/><stop offset='1' stop-color='#000'/></linearGradient>"
+                                   "<mask id='m'><rect width='40' height='40' fill='url(#l)'/></mask></defs>%s" TAIL,
+        shape);
     px = draw(doc);
     bool ok = px != NULL;
-    for (int x = 2; ok && x < 38; x += 4) {
+    for(int x = 2; ok && x < 38; x += 4) {
         float want = 1.f - ((float)x + 0.5f) / 40.f;
         ok = fabsf((float)P(px, x, 20)[3] / 255.f - want) < 0.07f;
     }
@@ -270,52 +307,70 @@ static void test_mask(void) {
 }
 
 /* the box of the ink in a picture (alpha above 40), as left, top, right, bottom pixel edges; false if there is none */
-static bool ink_box(const uint8_t *px, int *l, int *t, int *r, int *b) {
+static bool ink_box(const uint8_t* px, int* l, int* t, int* r, int* b)
+{
     int x0 = W, y0 = W, x1 = -1, y1 = -1;
-    for (int y = 0; y < W; y++)
-        for (int x = 0; x < W; x++)
-            if (P(px, x, y)[3] > 40) {
-                if (x < x0) x0 = x;
-                if (x > x1) x1 = x;
-                if (y < y0) y0 = y;
-                if (y > y1) y1 = y;
+    for(int y = 0; y < W; y++) {
+        for(int x = 0; x < W; x++) {
+            if(P(px, x, y)[3] > 40) {
+                if(x < x0) {
+                    x0 = x;
+                }
+                if(x > x1) {
+                    x1 = x;
+                }
+                if(y < y0) {
+                    y0 = y;
+                }
+                if(y > y1) {
+                    y1 = y;
+                }
             }
-    *l = x0; *t = y0; *r = x1 + 1; *b = y1 + 1;
+        }
+    }
+    *l = x0;
+    *t = y0;
+    *r = x1 + 1;
+    *b = y1 + 1;
     return x1 >= 0;
 }
-static long ink_sum(const uint8_t *px) {
+static long ink_sum(const uint8_t* px)
+{
     long s = 0;
-    for (size_t i = 0; i < (size_t)W * (size_t)W; i++) s += px[i * 4 + 3];
+    for(size_t i = 0; i < (size_t)W * (size_t)W; i++) {
+        s += px[i * 4 + 3];
+    }
     return s;
 }
 
-static void test_text(void) {
+static void test_text(void)
+{
     gp_glyph_pos g[4];
-    if (!g_ts || gp_text_shape(g_ts, 400, 16.f, "H", 1, g, 4, NULL) < 1 || g[0].glyph == 0) {
+    if(!g_ts || gp_text_shape(g_ts, 400, 16.f, "H", 1, g, 4, NULL) < 1 || g[0].glyph == 0) {
         printf("SKIP: no font to draw SVG text with\n");
         return;
     }
     int l, t, r, b;
-    uint8_t *px = draw(HEAD "<text x='5' y='30' font-size='12' fill='#f00'>HHH</text>" TAIL);
+    uint8_t* px = draw(HEAD "<text x='5' y='30' font-size='12' fill='#f00'>HHH</text>" TAIL);
     bool ok = px && ink_box(px, &l, &t, &r, &b);
     CHECK(ok, "text: something is drawn");
-    if (ok) {
+    if(ok) {
         float w = 0;
         gp_text_shape(g_ts, 400, 12.f, "HHH", 3, NULL, 0, &w);
         CHECK(abs(l - 5) <= 3 && abs((r - l) - (int)w) <= 5, "text: starts near x = 5 (%d) and is as wide as it shapes (%d, shaped %.1f)", l, r - l, (double)w);
         CHECK(b >= 28 && b <= 32 && t >= 19 && t <= 24, "text: sits on its baseline at y = 30 (bottom %d) and is a capital's height (top %d)", b, t);
         int cx = (l + r) / 2, cy = (t + b) / 2;
-        const uint8_t *stem = P(px, l + 2, cy);
+        const uint8_t* stem = P(px, l + 2, cy);
         CHECK(is_red(stem) || (stem[3] > 200 && stem[0] > 200 && stem[1] < 40), "text: painted with the fill (%d %d %d %d)", stem[0], stem[1], stem[2], stem[3]);
         (void)cx;
     }
     free(px);
 
     /* the size: twice the font size is twice the height */
-    uint8_t *a = draw(HEAD "<text x='2' y='38' font-size='10'>H</text>" TAIL);
-    uint8_t *c = draw(HEAD "<text x='2' y='38' font-size='20'>H</text>" TAIL);
+    uint8_t* a = draw(HEAD "<text x='2' y='38' font-size='10'>H</text>" TAIL);
+    uint8_t* c = draw(HEAD "<text x='2' y='38' font-size='20'>H</text>" TAIL);
     int l2, t2, r2, b2;
-    if (a && c && ink_box(a, &l, &t, &r, &b) && ink_box(c, &l2, &t2, &r2, &b2)) {
+    if(a && c && ink_box(a, &l, &t, &r, &b) && ink_box(c, &l2, &t2, &r2, &b2)) {
         float ratio = (float)(b2 - t2) / (float)(b - t);
         CHECK(ratio > 1.8f && ratio < 2.2f, "text: font-size 20 is twice as tall as 10 (%d against %d)", b2 - t2, b - t);
     } else {
@@ -325,10 +380,10 @@ static void test_text(void) {
     free(c);
 
     /* the anchor: the text ends, or is centered, at x */
-    uint8_t *s0 = draw(HEAD "<text x='20' y='30' font-size='16'>HHHH</text>" TAIL);
-    uint8_t *s1 = draw(HEAD "<text x='20' y='30' font-size='16' text-anchor='middle'>HHHH</text>" TAIL);
-    uint8_t *s2 = draw(HEAD "<text x='20' y='30' font-size='16' text-anchor='end'>HHHH</text>" TAIL);
-    if (s0 && s1 && s2) {
+    uint8_t* s0 = draw(HEAD "<text x='20' y='30' font-size='16'>HHHH</text>" TAIL);
+    uint8_t* s1 = draw(HEAD "<text x='20' y='30' font-size='16' text-anchor='middle'>HHHH</text>" TAIL);
+    uint8_t* s2 = draw(HEAD "<text x='20' y='30' font-size='16' text-anchor='end'>HHHH</text>" TAIL);
+    if(s0 && s1 && s2) {
         int a0, a1, a2, b0, b1, b2, t_, bb;
         ink_box(s0, &a0, &t_, &b0, &bb);
         ink_box(s1, &a1, &t_, &b1, &bb);
@@ -344,16 +399,16 @@ static void test_text(void) {
     free(s2);
 
     /* bold has more ink; italic is the same ink slanted (the box is wider) */
-    uint8_t *n = draw(HEAD "<text x='2' y='30' font-size='24'>Ho</text>" TAIL);
-    uint8_t *bo = draw(HEAD "<text x='2' y='30' font-size='24' font-weight='bold'>Ho</text>" TAIL);
+    uint8_t* n = draw(HEAD "<text x='2' y='30' font-size='24'>Ho</text>" TAIL);
+    uint8_t* bo = draw(HEAD "<text x='2' y='30' font-size='24' font-weight='bold'>Ho</text>" TAIL);
     CHECK(n && bo && ink_sum(bo) > ink_sum(n) * 105 / 100, "text: bold has more ink (%ld against %ld)", bo ? ink_sum(bo) : -1, n ? ink_sum(n) : -1);
     free(n);
     free(bo);
 
     /* italic is slanted (a wider box), a family changes the glyphs (when the system has another to give) */
-    uint8_t *up = draw(HEAD "<text x='4' y='30' font-size='16'>HHH</text>" TAIL);
-    uint8_t *it = draw(HEAD "<text x='4' y='30' font-size='16' font-style='italic'>HHH</text>" TAIL);
-    if (up && it) {
+    uint8_t* up = draw(HEAD "<text x='4' y='30' font-size='16'>HHH</text>" TAIL);
+    uint8_t* it = draw(HEAD "<text x='4' y='30' font-size='16' font-style='italic'>HHH</text>" TAIL);
+    if(up && it) {
         int ul, ut, ur, ub, il, it_, ir, ib;
         ink_box(up, &ul, &ut, &ur, &ub);
         ink_box(it, &il, &it_, &ir, &ib);
@@ -365,31 +420,40 @@ static void test_text(void) {
         float wm = 0, ws = 0;
         gp_text_shape(g_ts, GP_FONT_SEL(gp_text_family(g_ts, "monospace"), 400), 16.f, "iiii", 4, NULL, 0, &wm);
         gp_text_shape(g_ts, GP_FONT_SEL(gp_text_family(g_ts, "sans-serif"), 400), 16.f, "iiii", 4, NULL, 0, &ws);
-        if (wm > ws + 4.f) {
-            uint8_t *fm = draw(HEAD "<text x='2' y='30' font-size='16' font-family='monospace'>iiii</text>" TAIL);
-            uint8_t *fs = draw(HEAD "<text x='2' y='30' font-size='16' font-family='sans-serif'>iiii</text>" TAIL);
+        if(wm > ws + 4.f) {
+            uint8_t* fm = draw(HEAD "<text x='2' y='30' font-size='16' font-family='monospace'>iiii</text>" TAIL);
+            uint8_t* fs = draw(HEAD "<text x='2' y='30' font-size='16' font-family='sans-serif'>iiii</text>" TAIL);
             int a0, a1, b0, b1, c0, c1;
-            if (fm && fs && ink_box(fm, &a0, &c0, &b0, &c1) && ink_box(fs, &a1, &c0, &b1, &c1)) CHECK((b0 - a0) > (b1 - a1) + 3, "text: font-family monospace is wider than sans-serif (%d, %d)", b0 - a0, b1 - a1);
-            else CHECK(false, "text: families drawn");
+            if(fm && fs && ink_box(fm, &a0, &c0, &b0, &c1) && ink_box(fs, &a1, &c0, &b1, &c1)) {
+                CHECK((b0 - a0) > (b1 - a1) + 3, "text: font-family monospace is wider than sans-serif (%d, %d)", b0 - a0, b1 - a1);
+            } else {
+                CHECK(false, "text: families drawn");
+            }
             free(fm);
             free(fs);
         }
     }
 
     /* tspans: their own fill and position, and dx / dy */
-    uint8_t *ts = draw(HEAD "<text y='20' font-size='14'><tspan x='2' fill='#f00'>HH</tspan><tspan x='22' fill='#00f'>HH</tspan></text>" TAIL);
-    if (ts) {
+    uint8_t* ts = draw(HEAD "<text y='20' font-size='14'><tspan x='2' fill='#f00'>HH</tspan><tspan x='22' fill='#00f'>HH</tspan></text>" TAIL);
+    if(ts) {
         bool red = false, blue = false;
-        for (int y = 5; y < 22; y++)
-            for (int x = 0; x < 20; x++) red |= is_red_ink(P(ts, x, y));
-        for (int y = 5; y < 22; y++)
-            for (int x = 20; x < 40; x++) blue |= is_blue_ink(P(ts, x, y));
+        for(int y = 5; y < 22; y++) {
+            for(int x = 0; x < 20; x++) {
+                red |= is_red_ink(P(ts, x, y));
+            }
+        }
+        for(int y = 5; y < 22; y++) {
+            for(int x = 20; x < 40; x++) {
+                blue |= is_blue_ink(P(ts, x, y));
+            }
+        }
         CHECK(red && blue, "text: two tspans with their own fills and x");
     }
     free(ts);
-    uint8_t *d0 = draw(HEAD "<text x='5' y='20' font-size='14'>H</text>" TAIL);
-    uint8_t *d1 = draw(HEAD "<text x='5' y='20' dx='10' dy='12' font-size='14'>H</text>" TAIL);
-    if (d0 && d1) {
+    uint8_t* d0 = draw(HEAD "<text x='5' y='20' font-size='14'>H</text>" TAIL);
+    uint8_t* d1 = draw(HEAD "<text x='5' y='20' dx='10' dy='12' font-size='14'>H</text>" TAIL);
+    if(d0 && d1) {
         ink_box(d0, &l, &t, &r, &b);
         ink_box(d1, &l2, &t2, &r2, &b2);
         CHECK(l2 - l == 10 && t2 - t == 12, "text: dx and dy move it (%d, %d)", l2 - l, t2 - t);
@@ -399,93 +463,127 @@ static void test_text(void) {
 
     /* the pen goes on across tspans without an x; a tspan with an x starts there; dx adds a gap; font-size in pt */
     {
-        uint8_t *pn = draw(HEAD "<text x='2' y='30' font-size='12'><tspan fill='#f00'>HH</tspan><tspan fill='#00f'>HH</tspan></text>" TAIL);
-        uint8_t *dxg = draw(HEAD "<text x='2' y='30' font-size='12' fill='#f00'>H<tspan dx='10' fill='#00f'>H</tspan></text>" TAIL);
-        uint8_t *ab = draw(HEAD "<text y='30' font-size='12'><tspan x='2' fill='#f00'>HH</tspan><tspan x='28' fill='#00f'>HH</tspan></text>" TAIL);
+        uint8_t* pn = draw(HEAD "<text x='2' y='30' font-size='12'><tspan fill='#f00'>HH</tspan><tspan fill='#00f'>HH</tspan></text>" TAIL);
+        uint8_t* dxg = draw(HEAD "<text x='2' y='30' font-size='12' fill='#f00'>H<tspan dx='10' fill='#00f'>H</tspan></text>" TAIL);
+        uint8_t* ab = draw(HEAD "<text y='30' font-size='12'><tspan x='2' fill='#f00'>HH</tspan><tspan x='28' fill='#00f'>HH</tspan></text>" TAIL);
         int rl = 99, rr = -1, bl = 99, br = -1;
-        for (int pass = 0; pass < 3; pass++) {
-            uint8_t *im = pass == 0 ? pn : pass == 1 ? dxg : ab;
-            rl = 99; rr = -1; bl = 99; br = -1;
-            for (int y = 0; im && y < W; y++)
-                for (int x = 0; x < W; x++) {
-                    const uint8_t *p = P(im, x, y);
-                    if (p[3] > 200 && p[0] > 200 && p[2] < 40) { if (x < rl) rl = x; if (x > rr) rr = x; }
-                    if (p[3] > 200 && p[2] > 200 && p[0] < 40) { if (x < bl) bl = x; if (x > br) br = x; }
+        for(int pass = 0; pass < 3; pass++) {
+            uint8_t* im = pass == 0 ? pn : pass == 1 ? dxg
+                                                     : ab;
+            rl = 99;
+            rr = -1;
+            bl = 99;
+            br = -1;
+            for(int y = 0; im && y < W; y++) {
+                for(int x = 0; x < W; x++) {
+                    const uint8_t* p = P(im, x, y);
+                    if(p[3] > 200 && p[0] > 200 && p[2] < 40) {
+                        if(x < rl) {
+                            rl = x;
+                        }
+                        if(x > rr) {
+                            rr = x;
+                        }
+                    }
+                    if(p[3] > 200 && p[2] > 200 && p[0] < 40) {
+                        if(x < bl) {
+                            bl = x;
+                        }
+                        if(x > br) {
+                            br = x;
+                        }
+                    }
                 }
-            if (pass == 0) CHECK(rr > 0 && bl > rr - 1 && bl < rr + 6, "text: the second tspan continues where the first ended (red ends %d, blue starts %d)", rr, bl);
-            if (pass == 1) CHECK(rr > 0 && bl >= rr + 9 && bl <= rr + 16, "text: dx = 10 leaves a gap of about 10 (plus the letters side bearings) (red ends %d, blue starts %d)", rr, bl);
-            if (pass == 2) CHECK(rl > 0 && bl >= 28 && bl <= 31 && rl <= 4, "text: a tspan with x = 28 starts there (%d), the first at 2 (%d)", bl, rl);
+            }
+            if(pass == 0) {
+                CHECK(rr > 0 && bl > rr - 1 && bl < rr + 6, "text: the second tspan continues where the first ended (red ends %d, blue starts %d)", rr, bl);
+            }
+            if(pass == 1) {
+                CHECK(rr > 0 && bl >= rr + 9 && bl <= rr + 16, "text: dx = 10 leaves a gap of about 10 (plus the letters side bearings) (red ends %d, blue starts %d)", rr, bl);
+            }
+            if(pass == 2) {
+                CHECK(rl > 0 && bl >= 28 && bl <= 31 && rl <= 4, "text: a tspan with x = 28 starts there (%d), the first at 2 (%d)", bl, rl);
+            }
         }
         free(pn);
         free(dxg);
         free(ab);
-        uint8_t *pt = draw(HEAD "<text x='2' y='30' font-size='12pt'>H</text>" TAIL);
-        uint8_t *px16 = draw(HEAD "<text x='2' y='30' font-size='16'>H</text>" TAIL);
+        uint8_t* pt = draw(HEAD "<text x='2' y='30' font-size='12pt'>H</text>" TAIL);
+        uint8_t* px16 = draw(HEAD "<text x='2' y='30' font-size='16'>H</text>" TAIL);
         CHECK(pt && px16 && differ(pt, px16, 0) == 0, "text: 12pt is 16px");
         free(pt);
         free(px16);
     }
 
     /* entities and white space */
-    uint8_t *e1 = draw(HEAD "<text x='2' y='30' font-size='16'>&amp;&#65;&#x42;   x\n  y</text>" TAIL);
-    uint8_t *e2 = draw(HEAD "<text x='2' y='30' font-size='16'>&amp;AB x y</text>" TAIL);
+    uint8_t* e1 = draw(HEAD "<text x='2' y='30' font-size='16'>&amp;&#65;&#x42;   x\n  y</text>" TAIL);
+    uint8_t* e2 = draw(HEAD "<text x='2' y='30' font-size='16'>&amp;AB x y</text>" TAIL);
     CHECK(e1 && e2 && differ(e1, e2, 0) == 0, "text: entities are decoded and white space is one space");
     free(e1);
     free(e2);
 
     /* text is a shape: a clip cuts it, a use copies it, a transform moves it */
-    uint8_t *cl = draw(HEAD "<defs><clipPath id='c'><rect width='20' height='40'/></clipPath></defs><text x='2' y='30' font-size='24' fill='#f00' clip-path='url(#c)'>HHHH</text>" TAIL);
-    if (cl) {
+    uint8_t* cl = draw(HEAD "<defs><clipPath id='c'><rect width='20' height='40'/></clipPath></defs><text x='2' y='30' font-size='24' fill='#f00' clip-path='url(#c)'>HHHH</text>" TAIL);
+    if(cl) {
         bool left = false, right = false;
-        for (int y = 0; y < W; y++) {
-            for (int x = 0; x < 20; x++) left |= P(cl, x, y)[3] > 200;
-            for (int x = 20; x < 40; x++) right |= P(cl, x, y)[3] > 8;
+        for(int y = 0; y < W; y++) {
+            for(int x = 0; x < 20; x++) {
+                left |= P(cl, x, y)[3] > 200;
+            }
+            for(int x = 20; x < 40; x++) {
+                right |= P(cl, x, y)[3] > 8;
+            }
         }
         CHECK(left && !right, "text: a clip cuts it at x = 20");
     }
     free(cl);
-    uint8_t *u1 = draw(HEAD "<defs><text id='t' font-size='14'>H</text></defs><use href='#t' x='20' y='30' fill='#00f'/>" TAIL);
-    uint8_t *u2 = draw(HEAD "<text x='20' y='30' font-size='14' fill='#00f'>H</text>" TAIL);
+    uint8_t* u1 = draw(HEAD "<defs><text id='t' font-size='14'>H</text></defs><use href='#t' x='20' y='30' fill='#00f'/>" TAIL);
+    uint8_t* u2 = draw(HEAD "<text x='20' y='30' font-size='14' fill='#00f'>H</text>" TAIL);
     CHECK(u1 && u2 && ink_sum(u1) > 0 && differ(u1, u2, 2) == 0, "text: a use of a text is the text there");
     free(u1);
     free(u2);
-    uint8_t *tr1 = draw(HEAD "<g transform='translate(10 5)'><text x='2' y='20' font-size='14'>H</text></g>" TAIL);
-    uint8_t *tr2 = draw(HEAD "<text x='12' y='25' font-size='14'>H</text>" TAIL);
+    uint8_t* tr1 = draw(HEAD "<g transform='translate(10 5)'><text x='2' y='20' font-size='14'>H</text></g>" TAIL);
+    uint8_t* tr2 = draw(HEAD "<text x='12' y='25' font-size='14'>H</text>" TAIL);
     CHECK(tr1 && tr2 && differ(tr1, tr2, 2) == 0, "text: inside a transformed group");
     free(tr1);
     free(tr2);
 
     /* the font properties come from the group above, a style attribute too */
-    uint8_t *i1 = draw(HEAD "<g font-size='20'><text x='2' y='30'>H</text></g>" TAIL);
-    uint8_t *i2 = draw(HEAD "<text x='2' y='30' style='font-size:20px'>H</text>" TAIL);
-    uint8_t *i3 = draw(HEAD "<text x='2' y='30' font-size='20'>H</text>" TAIL);
+    uint8_t* i1 = draw(HEAD "<g font-size='20'><text x='2' y='30'>H</text></g>" TAIL);
+    uint8_t* i2 = draw(HEAD "<text x='2' y='30' style='font-size:20px'>H</text>" TAIL);
+    uint8_t* i3 = draw(HEAD "<text x='2' y='30' font-size='20'>H</text>" TAIL);
     CHECK(i1 && i2 && i3 && differ(i1, i3, 0) == 0 && differ(i2, i3, 0) == 0, "text: font-size from an ancestor and from style");
     free(i1);
     free(i2);
     free(i3);
 
     /* without a text system the text is not drawn (and nothing breaks) */
-    gp_text_system *saved = g_ts;
+    gp_text_system* saved = g_ts;
     g_ts = NULL;
-    uint8_t *no = draw(HEAD "<text x='2' y='30' font-size='24'>HHH</text><rect width='5' height='5' fill='#f00'/>" TAIL);
+    uint8_t* no = draw(HEAD "<text x='2' y='30' font-size='24'>HHH</text><rect width='5' height='5' fill='#f00'/>" TAIL);
     CHECK(no && is_red(P(no, 2, 2)) && is_clear(P(no, 8, 22)), "text: without a text system only the shapes are drawn");
     free(no);
     g_ts = saved;
 }
 
 /* through the registry the way the app draws it: the text system the gfx was given is the one the text is drawn with, and the raster is cached */
-static void test_registry(void) {
-    gp_gfx *g = gp_gfx_new();
+static void test_registry(void)
+{
+    gp_gfx* g = gp_gfx_new();
     gp_text_set_gfx(g_ts, g);
-    const char *doc = HEAD "<defs><rect id='r' width='10' height='10' fill='#f00'/></defs><use href='#r' x='5' y='5'/>" "<text x='20' y='34' font-size='12' fill='#00f'>HH</text>" TAIL;
+    const char* doc = HEAD "<defs><rect id='r' width='10' height='10' fill='#f00'/></defs><use href='#r' x='5' y='5'/>"
+                           "<text x='20' y='34' font-size='12' fill='#00f'>HH</text>" TAIL;
     gp_svg s = gp_gfx_svg_add(g, strdup(doc), strlen(doc), 40.f, 40.f);
     gp_image im = gp_gfx_svg_raster(g, s, 40, 0);
-    gp_gfx_image *img = gp_gfx_image_get(g, im.index, im.generation);
+    gp_gfx_image* img = gp_gfx_image_get(g, im.index, im.generation);
     CHECK(img && img->w == 40 && is_red(img->pixels + ((size_t)10 * 40 + 10) * 4), "registry: the use is drawn");
     bool blue = false;
-    for (int y = 20; img && y < 36; y++)
-        for (int x = 20; x < 40; x++) blue |= is_blue_ink(img->pixels + ((size_t)y * 40 + (size_t)x) * 4);
-    gp_gfx_image *again = gp_gfx_image_get(g, im.index, im.generation);
+    for(int y = 20; img && y < 36; y++) {
+        for(int x = 20; x < 40; x++) {
+            blue |= is_blue_ink(img->pixels + ((size_t)y * 40 + (size_t)x) * 4);
+        }
+    }
+    gp_gfx_image* again = gp_gfx_image_get(g, im.index, im.generation);
     CHECK(blue || !g_ts_has_font, "registry: the text is drawn with the text system the gfx has");
     CHECK(again == img && gp_gfx_svg_raster(g, s, 40, 0).index == im.index, "registry: the raster is cached");
     gp_text_set_gfx(g_ts, NULL);
@@ -493,20 +591,25 @@ static void test_registry(void) {
 }
 
 /* the gaussian blur of a box [x0, x1] x [y0, y1] of alpha 1, at the middle of pixel (x, y), by the integral of the gaussian (an independent oracle) */
-static float blurred_box(float x0, float x1, float y0, float y1, float sd, int x, int y, float scale) {
+static float blurred_box(float x0, float x1, float y0, float y1, float sd, int x, int y, float scale)
+{
     float s = sd * scale * 1.41421356f;
     float fx = 0.5f * (erff(((float)x + 0.5f - x0 * scale) / s) - erff(((float)x + 0.5f - x1 * scale) / s));
     float fy = 0.5f * (erff(((float)y + 0.5f - y0 * scale) / s) - erff(((float)y + 0.5f - y1 * scale) / s));
     return fx * fy;
 }
 
-static float srgb_of_linear(float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * powf(c, 1.f / 2.4f) - 0.055f; }
+static float srgb_of_linear(float c)
+{
+    return c <= 0.0031308f ? c * 12.92f : 1.055f * powf(c, 1.f / 2.4f) - 0.055f;
+}
 
 #define FILTER(body) HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'>" body "</filter></defs>"
-#define RECT10 "<rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#f)'/>"
+#define RECT10       "<rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#f)'/>"
 
-static void test_filter(void) {
-    uint8_t *px = draw(FILTER("<feOffset dx='5' dy='3'/>") RECT10 TAIL);
+static void test_filter(void)
+{
+    uint8_t* px = draw(FILTER("<feOffset dx='5' dy='3'/>") RECT10 TAIL);
     CHECK(px && is_red(P(px, 22, 21)) && is_red(P(px, 29, 27)) && is_clear(P(px, 16, 16)) && is_clear(P(px, 33, 21)) && is_clear(P(px, 22, 15)), "filter: feOffset moves the shape (5, 3)");
     free(px);
 
@@ -514,12 +617,15 @@ static void test_filter(void) {
     px = draw(FILTER("<feGaussianBlur stdDeviation='2'/>") RECT10 TAIL);
     int bad = 0;
     float worst = 0;
-    for (int y = 5; y < 35 && px; y++)
-        for (int x = 5; x < 35; x++) {
+    for(int y = 5; y < 35 && px; y++) {
+        for(int x = 5; x < 35; x++) {
             float want = blurred_box(15, 25, 15, 25, 2, x, y, 1.f), got = (float)P(px, x, y)[3] / 255.f;
-            if (fabsf(want - got) > 0.03f) bad++;
+            if(fabsf(want - got) > 0.03f) {
+                bad++;
+            }
             worst = fmaxf(worst, fabsf(want - got));
         }
+    }
     CHECK(px && bad == 0, "filter: feGaussianBlur 2 against the integral of the gaussian: %d pixels more than 3%% off (worst %.3f)", bad, (double)worst);
     CHECK(px && P(px, 20, 20)[0] > 245 && P(px, 20, 20)[1] < 8, "filter: a blurred red box is still red inside");
     CHECK(px && P(px, 15, 20)[3] > 100 && P(px, 15, 20)[3] < 155, "filter: its edge is half (%d)", px ? P(px, 15, 20)[3] : -1);
@@ -530,9 +636,13 @@ static void test_filter(void) {
     W = 80;
     px = draw(FILTER("<feGaussianBlur stdDeviation='2'/>") RECT10 TAIL);
     bad = 0;
-    for (int y = 10; y < 70 && px; y++)
-        for (int x = 10; x < 70; x++)
-            if (fabsf(blurred_box(15, 25, 15, 25, 2, x, y, 2.f) - (float)P(px, x, y)[3] / 255.f) > 0.03f) bad++;
+    for(int y = 10; y < 70 && px; y++) {
+        for(int x = 10; x < 70; x++) {
+            if(fabsf(blurred_box(15, 25, 15, 25, 2, x, y, 2.f) - (float)P(px, x, y)[3] / 255.f) > 0.03f) {
+                bad++;
+            }
+        }
+    }
     CHECK(px && bad == 0, "filter: at 2x the blur is 4 px wide: %d pixels off", bad);
     free(px);
     W = save;
@@ -545,22 +655,25 @@ static void test_filter(void) {
     /* a drop shadow: the shape on top, a black half-opaque blurred copy below it, moved */
     px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feDropShadow dx='6' dy='4' stdDeviation='2' flood-color='#000' flood-opacity='0.5'/></filter></defs>" RECT10 TAIL);
     bad = 0;
-    for (int y = 5; px && y < 38; y++)
-        for (int x = 5; x < 38; x++) {
-            float sa = 0.5f * blurred_box(21, 31, 19, 29, 2, x, y, 1.f);   /* the shadow's alpha */
+    for(int y = 5; px && y < 38; y++) {
+        for(int x = 5; x < 38; x++) {
+            float sa = 0.5f * blurred_box(21, 31, 19, 29, 2, x, y, 1.f); /* the shadow's alpha */
             bool inside = x >= 15 && x < 25 && y >= 15 && y < 25;
             float want = inside ? 1.f : sa;
-            if (fabsf(want - (float)P(px, x, y)[3] / 255.f) > 0.04f) bad++;
+            if(fabsf(want - (float)P(px, x, y)[3] / 255.f) > 0.04f) {
+                bad++;
+            }
         }
+    }
     CHECK(px && bad == 0, "filter: feDropShadow: %d pixels differ from the shape over a half-opaque blurred shadow", bad);
     CHECK(px && is_red(P(px, 20, 20)) && P(px, 27, 24)[3] > 100 && P(px, 27, 24)[0] < 8, "filter: the shape on top, the shadow black beside it");
     free(px);
 
     /* the same built by hand from primitives, with named results: blur -> offset -> flood -> in -> merge */
-    uint8_t *hand = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'>"
-                         "<feGaussianBlur in='SourceAlpha' stdDeviation='2' result='b'/><feOffset in='b' dx='6' dy='4' result='o'/>"
-                         "<feFlood flood-color='#000' flood-opacity='0.5' result='c'/><feComposite in='c' in2='o' operator='in' result='s'/>"
-                         "<feMerge><feMergeNode in='s'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs>" RECT10 TAIL);
+    uint8_t* hand = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'>"
+                              "<feGaussianBlur in='SourceAlpha' stdDeviation='2' result='b'/><feOffset in='b' dx='6' dy='4' result='o'/>"
+                              "<feFlood flood-color='#000' flood-opacity='0.5' result='c'/><feComposite in='c' in2='o' operator='in' result='s'/>"
+                              "<feMerge><feMergeNode in='s'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs>" RECT10 TAIL);
     px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feDropShadow dx='6' dy='4' stdDeviation='2' flood-color='#000' flood-opacity='0.5'/></filter></defs>" RECT10 TAIL);
     CHECK(px && hand && differ(px, hand, 3) == 0, "filter: feDropShadow is blur, offset, flood, composite in, merge (%d pixels differ)", px && hand ? differ(px, hand, 3) : -1);
     free(px);
@@ -575,50 +688,65 @@ static void test_filter(void) {
     free(px);
 
     /* the composite operators on two shapes (a red box and a blue flood of the left half): over, in, out, atop, xor, arithmetic */
-    const char *ops[] = { "over", "in", "out", "atop", "xor" };
-    for (int o = 0; o < 5; o++) {
+    const char* ops[] = { "over", "in", "out", "atop", "xor" };
+    for(int o = 0; o < 5; o++) {
         char doc[900];
         snprintf(doc, sizeof doc, HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feFlood flood-color='#00f' result='fl'/>"
-                                      "<feOffset in='SourceGraphic' dx='5' result='sh'/><feComposite in='sh' in2='SourceGraphic' operator='%s'/></filter></defs>" RECT10 TAIL, ops[o]);
+                                       "<feOffset in='SourceGraphic' dx='5' result='sh'/><feComposite in='sh' in2='SourceGraphic' operator='%s'/></filter></defs>" RECT10 TAIL,
+            ops[o]);
         px = draw(doc);
         /* sh is the box moved 5 right (20..30), SourceGraphic is 15..25: a = sh, b = source */
         bool in_a = false, in_b = false;
         int ok = px != NULL;
-        for (int x = 12; px && x < 34; x++) {
+        for(int x = 12; px && x < 34; x++) {
             in_a = x >= 20 && x < 30;
             in_b = x >= 15 && x < 25;
             float alpha = (float)P(px, x, 20)[3] / 255.f, want = 0;
-            if (o == 0) want = in_a || in_b;
-            else if (o == 1) want = in_a && in_b;
-            else if (o == 2) want = in_a && !in_b;
-            else if (o == 3) want = in_a && in_b ? 1.f : in_b && !in_a ? 1.f : 0.f;   /* atop: a where b is, plus b where a is not (b has a = 1 there) */
-            else want = in_a != in_b;
-            if (o == 3) want = in_b ? 1.f : 0.f;
-            if (fabsf(alpha - want) > 0.03f) ok = 0;
+            if(o == 0) {
+                want = in_a || in_b;
+            } else if(o == 1) {
+                want = in_a && in_b;
+            } else if(o == 2) {
+                want = in_a && !in_b;
+            } else if(o == 3) {
+                want = in_a && in_b ? 1.f : in_b && !in_a ? 1.f
+                                                          : 0.f; /* atop: a where b is, plus b where a is not (b has a = 1 there) */
+            } else {
+                want = in_a != in_b;
+            }
+            if(o == 3) {
+                want = in_b ? 1.f : 0.f;
+            }
+            if(fabsf(alpha - want) > 0.03f) {
+                ok = 0;
+            }
         }
         CHECK(ok, "filter: feComposite operator %s", ops[o]);
         free(px);
     }
-    {   /* operators that care which is which, with two colors: a blue flood (everywhere) and the red box */
-        struct { const char *op; bool blue_in, red_in, blue_out, red_out; } cases[] = {
+    { /* operators that care which is which, with two colors: a blue flood (everywhere) and the red box */
+        struct
+        {
+            const char* op;
+            bool blue_in, red_in, blue_out, red_out;
+        } cases[] = {
             /* where: inside the box, outside it */
-            { "atop", true, false, false, false },   /* blue where the box is, nothing else */
-            { "out", false, false, true, false },    /* blue where the box is not */
-            { "in", true, false, false, false },
-            { "xor", false, false, true, false },    /* blue outside, nothing inside (both opaque there) */
+            { "atop",  true, false, false, false }, /* blue where the box is, nothing else */
+            {  "out", false, false,  true, false }, /* blue where the box is not */
+            {   "in",  true, false, false, false },
+            {  "xor", false, false,  true, false }, /* blue outside, nothing inside (both opaque there) */
         };
-        for (size_t k = 0; k < sizeof cases / sizeof *cases; k++) {
+        for(size_t k = 0; k < sizeof cases / sizeof *cases; k++) {
             char doc[900];
             snprintf(doc, sizeof doc, HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feFlood flood-color='#00f' result='fl'/>"
-                                          "<feComposite in='fl' in2='SourceGraphic' operator='%s'/></filter></defs>" RECT10 TAIL, cases[k].op);
+                                           "<feComposite in='fl' in2='SourceGraphic' operator='%s'/></filter></defs>" RECT10 TAIL,
+                cases[k].op);
             px = draw(doc);
             bool inside_blue = px && is_blue(P(px, 20, 20)), outside_blue = px && is_blue(P(px, 5, 5));
             bool inside_red = px && is_red(P(px, 20, 20)), outside_clear = px && is_clear(P(px, 5, 5));
             bool inside_clear = px && is_clear(P(px, 20, 20));
             bool ok = (cases[k].blue_in ? inside_blue : inside_clear) && (cases[k].blue_out ? outside_blue : outside_clear) && !inside_red;
-            CHECK(ok, "filter: feComposite %s of a blue flood and the red box (inside %d %d %d %d, outside %d %d %d %d)", cases[k].op,
-                  px ? P(px, 20, 20)[0] : -1, px ? P(px, 20, 20)[1] : -1, px ? P(px, 20, 20)[2] : -1, px ? P(px, 20, 20)[3] : -1,
-                  px ? P(px, 5, 5)[0] : -1, px ? P(px, 5, 5)[1] : -1, px ? P(px, 5, 5)[2] : -1, px ? P(px, 5, 5)[3] : -1);
+            CHECK(ok, "filter: feComposite %s of a blue flood and the red box (inside %d %d %d %d, outside %d %d %d %d)", cases[k].op, px ? P(px, 20, 20)[0] : -1, px ? P(px, 20, 20)[1] : -1, px ? P(px, 20, 20)[2] : -1, px ? P(px, 20, 20)[3] : -1, px ? P(px, 5, 5)[0] : -1, px ? P(px, 5, 5)[1] : -1, px ? P(px, 5, 5)[2] : -1, px ? P(px, 5, 5)[3] : -1);
             free(px);
         }
         px = draw(FILTER("<feFlood flood-color='#00f' result='fl'/><feComposite in='SourceGraphic' in2='fl' operator='arithmetic' k1='0' k2='1' k3='0' k4='0'/>") RECT10 TAIL);
@@ -670,8 +798,8 @@ static void test_filter(void) {
     free(px);
 
     /* linearRGB against sRGB: a blur of two colors side by side mixes lighter in linear light */
-    uint8_t *lr = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
-    uint8_t *sr = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
+    uint8_t* lr = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
+    uint8_t* sr = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
     CHECK(lr && sr && P(lr, 20, 20)[0] > P(sr, 20, 20)[0] + 20, "filter: blurring white next to black is lighter in the middle in linear light (%d against %d)", lr ? P(lr, 20, 20)[0] : -1, sr ? P(sr, 20, 20)[0] : -1);
     free(lr);
     free(sr);
@@ -688,7 +816,7 @@ static void test_filter(void) {
     free(px);
 
     /* what cannot be used passes through */
-    uint8_t *plain = draw(HEAD "<rect x='15' y='15' width='10' height='10' fill='#f00'/>" TAIL);
+    uint8_t* plain = draw(HEAD "<rect x='15' y='15' width='10' height='10' fill='#f00'/>" TAIL);
     px = draw(FILTER("<feNothingLikeThis/>") RECT10 TAIL);
     CHECK(px && plain && differ(px, plain, 0) == 0, "filter: a primitive that is not known passes its input on");
     free(px);
@@ -707,9 +835,10 @@ static void test_filter(void) {
     free(plain);
 }
 
-static void test_plain_untouched(void) {
+static void test_plain_untouched(void)
+{
     /* a document with none of it goes through nanosvg as it always did */
-    uint8_t *px = draw(HEAD "<rect width='10' height='10' fill='#f00'/>" TAIL);
+    uint8_t* px = draw(HEAD "<rect width='10' height='10' fill='#f00'/>" TAIL);
     CHECK(px && is_red(P(px, 5, 5)) && is_clear(P(px, 20, 20)), "a plain document");
     free(px);
     /* the word is in an attribute value or a comment, not a use or a clip: still right */
@@ -721,13 +850,17 @@ static void test_plain_untouched(void) {
     free(px);
 }
 
-int main(void) {
+int main(void)
+{
     test_use();
     test_clip();
     test_mask();
     test_filter();
     g_ts = gp_text_system_new();
-    { gp_glyph_pos gg[4]; g_ts_has_font = gp_text_shape(g_ts, 400, 16.f, "H", 1, gg, 4, NULL) >= 1 && gg[0].glyph != 0; }
+    {
+        gp_glyph_pos gg[4];
+        g_ts_has_font = gp_text_shape(g_ts, 400, 16.f, "H", 1, gg, 4, NULL) >= 1 && gg[0].glyph != 0;
+    }
     test_text();
     test_registry();
     test_plain_untouched();

@@ -11,69 +11,70 @@
 #define GL_GLEXT_PROTOTYPES 1 /* declarations only: they give the table its types */
 #include <SDL3/SDL_opengl.h>
 
-#define GL_FUNCS(X)                                                                       \
-    X(glActiveTexture)                                                                    \
-    X(glBindTexture)                                                                      \
-    X(glBlendFunc)                                                                        \
-    X(glClear)                                                                            \
-    X(glClearColor)                                                                       \
-    X(glDeleteTextures)                                                                   \
-    X(glEnable)                                                                           \
-    X(glGenTextures)                                                                      \
-    X(glPixelStorei)                                                                      \
-    X(glReadPixels)                                                                       \
-    X(glTexImage2D)                                                                       \
-    X(glTexParameteri)                                                                    \
-    X(glTexSubImage2D)                                                                    \
-    X(glViewport)                                                                         \
-    X(glGenVertexArrays)                                        \
-    X(glBindVertexArray)                                        \
-    X(glDeleteVertexArrays)                                  \
-    X(glGenBuffers)                                                  \
-    X(glDeleteBuffers)                                            \
-    X(glBindBuffer)                                                  \
-    X(glBufferData)                                                  \
-    X(glEnableVertexAttribArray)                        \
-    X(glVertexAttribPointer)                                \
-    X(glVertexAttribDivisor)                                \
-    X(glCreateShader)                                              \
-    X(glShaderSource)                                              \
-    X(glCompileShader)                                            \
-    X(glGetShaderiv)                                                \
-    X(glGetShaderInfoLog)                                      \
-    X(glDeleteShader)                                              \
-    X(glCreateProgram)                                            \
-    X(glAttachShader)                                              \
-    X(glLinkProgram)                                                \
-    X(glGetProgramiv)                                              \
-    X(glGetProgramInfoLog)                                    \
-    X(glDeleteProgram)                                            \
-    X(glUseProgram)                                                  \
-    X(glGetUniformLocation)                                  \
-    X(glUniform1f)                                                    \
-    X(glUniform1i)                                                    \
-    X(glUniform2f)                                                    \
-    X(glGenerateMipmap)                                                 \
-    X(glGenFramebuffers)                                                \
-    X(glDeleteFramebuffers)                                             \
-    X(glBindFramebuffer)                                                \
-    X(glFramebufferTexture2D)                                           \
-    X(glCheckFramebufferStatus)                                         \
-    X(glScissor)                                                        \
-    X(glDisable)                                                        \
-    X(glCopyTexSubImage2D)                                              \
-    X(glFinish)                                                         \
-    X(glGetString)                                                      \
+#define GL_FUNCS(X)              \
+    X(glActiveTexture)           \
+    X(glBindTexture)             \
+    X(glBlendFunc)               \
+    X(glClear)                   \
+    X(glClearColor)              \
+    X(glDeleteTextures)          \
+    X(glEnable)                  \
+    X(glGenTextures)             \
+    X(glPixelStorei)             \
+    X(glReadPixels)              \
+    X(glTexImage2D)              \
+    X(glTexParameteri)           \
+    X(glTexSubImage2D)           \
+    X(glViewport)                \
+    X(glGenVertexArrays)         \
+    X(glBindVertexArray)         \
+    X(glDeleteVertexArrays)      \
+    X(glGenBuffers)              \
+    X(glDeleteBuffers)           \
+    X(glBindBuffer)              \
+    X(glBufferData)              \
+    X(glEnableVertexAttribArray) \
+    X(glVertexAttribPointer)     \
+    X(glVertexAttribDivisor)     \
+    X(glCreateShader)            \
+    X(glShaderSource)            \
+    X(glCompileShader)           \
+    X(glGetShaderiv)             \
+    X(glGetShaderInfoLog)        \
+    X(glDeleteShader)            \
+    X(glCreateProgram)           \
+    X(glAttachShader)            \
+    X(glLinkProgram)             \
+    X(glGetProgramiv)            \
+    X(glGetProgramInfoLog)       \
+    X(glDeleteProgram)           \
+    X(glUseProgram)              \
+    X(glGetUniformLocation)      \
+    X(glUniform1f)               \
+    X(glUniform1i)               \
+    X(glUniform2f)               \
+    X(glGenerateMipmap)          \
+    X(glGenFramebuffers)         \
+    X(glDeleteFramebuffers)      \
+    X(glBindFramebuffer)         \
+    X(glFramebufferTexture2D)    \
+    X(glCheckFramebufferStatus)  \
+    X(glScissor)                 \
+    X(glDisable)                 \
+    X(glCopyTexSubImage2D)       \
+    X(glFinish)                  \
+    X(glGetString)               \
     X(glDrawArraysInstanced)
 
 /* The headers declare these as prototypes; calls go through `gl.name` instead. */
-static struct {
+static struct
+{
 #define X(name) __typeof__(&name) name;
     GL_FUNCS(X)
 #undef X
 } gl;
 
-static const char *vs_src =
+static const char* vs_src =
     "#version 330 core\n"
     "layout(location=0) in vec4 a_bounds;\n"
     "layout(location=1) in vec4 a_clip;\n"
@@ -86,9 +87,9 @@ static const char *vs_src =
     "layout(location=8) in vec4 a_s1;\n"
     "layout(location=9) in vec4 a_s2;\n"
     "layout(location=10) in vec4 a_bsty;\n"
-    "layout(location=11) in vec4 a_xf0;\n"   /* the transform: (a - 1, b, c, d - 1) */
-    "layout(location=12) in vec4 a_xf1;\n"   /* (tx, ty, g, h) */
-    "layout(location=13) in vec4 a_xf2;\n"   /* (w1, -, -, -): w = g x + h y + 1 + w1 (all 0: no perspective) */
+    "layout(location=11) in vec4 a_xf0;\n" /* the transform: (a - 1, b, c, d - 1) */
+    "layout(location=12) in vec4 a_xf1;\n" /* (tx, ty, g, h) */
+    "layout(location=13) in vec4 a_xf2;\n" /* (w1, -, -, -): w = g x + h y + 1 + w1 (all 0: no perspective) */
     "uniform vec2 u_viewport;\n"
     "uniform float u_scale;\n"
     "flat out vec4 v_bounds, v_clip, v_color, v_border, v_radii, v_params, v_uvr, v_s0, v_s1, v_s2, v_bsty;\n"
@@ -104,13 +105,13 @@ static const char *vs_src =
     /* a glyph under a transform that is more than a move: a pixel of the window spans parts of several texels, so it is sampled between them (fs: glyph_texel), and its
      * quad grows by a pixel so that the ink fades out at the bitmap's edge instead of being cut by the quad's (where a pixel's centre on that edge decides) */
     "  bool turned_glyph = (kind == 2.0 || kind == 3.0 || kind == 4.0) && (a_xf0 != vec4(0.0) || a_xf1.z != 0.0 || a_xf1.w != 0.0 || a_xf2.x != 0.0);\n"
-    "  if (turned_glyph) pad = max(1.0, 1.0 / max(sqrt(abs((1.0 + a_xf0.x) * (1.0 + a_xf0.w) - a_xf0.y * a_xf0.z)), 0.01)) / u_scale;\n"   /* (a pixel where it is seen) */
+    "  if (turned_glyph) pad = max(1.0, 1.0 / max(sqrt(abs((1.0 + a_xf0.x) * (1.0 + a_xf0.w) - a_xf0.y * a_xf0.z)), 0.01)) / u_scale;\n" /* (a pixel where it is seen) */
     "  vec2 size = a_bounds.zw + 2.0 * pad;\n"
-    "  vec2 pos0 = a_bounds.xy - pad + corner * size;\n"   /* where it is in the layout, before the transform */
+    "  vec2 pos0 = a_bounds.xy - pad + corner * size;\n"                                                                                 /* where it is in the layout, before the transform */
     "  vec2 pos = pos0 + vec2(a_xf0.x * pos0.x + a_xf0.z * pos0.y + a_xf1.x, a_xf0.y * pos0.x + a_xf0.w * pos0.y + a_xf1.y);\n"
-    "  float w = a_xf1.z * pos0.x + a_xf1.w * pos0.y + 1.0 + a_xf2.x;\n"   /* in perspective: the position is homogeneous, and what is interpolated across is too */
+    "  float w = a_xf1.z * pos0.x + a_xf1.w * pos0.y + 1.0 + a_xf2.x;\n"                                                                 /* in perspective: the position is homogeneous, and what is interpolated across is too */
     "  v_pos = pos / w;\n"
-    "  v_mag = sqrt(abs((1.0 + a_xf0.x) * (1.0 + a_xf0.w) - a_xf0.y * a_xf0.z));\n"   /* how much it magnifies (affine) */
+    "  v_mag = sqrt(abs((1.0 + a_xf0.x) * (1.0 + a_xf0.w) - a_xf0.y * a_xf0.z));\n"                                                      /* how much it magnifies (affine) */
     "  v_xf0 = a_xf0; v_xf1 = a_xf1; v_xf2 = a_xf2;\n"
     "  v_local = pos0 - (a_bounds.xy + a_bounds.zw * 0.5);\n"
     "  v_uv = turned_glyph ? a_uv.xy + (pos0 - a_bounds.xy) / max(a_bounds.zw, vec2(1e-6)) * a_uv.zw : a_uv.xy + corner * a_uv.zw;\n"
@@ -120,7 +121,7 @@ static const char *vs_src =
     "  gl_Position = vec4(pos.x / u_viewport.x * 2.0 - w, w - pos.y / u_viewport.y * 2.0, 0.0, w);\n"
     "}\n";
 
-static const char *fs_src =
+static const char* fs_src =
     "#version 330 core\n"
     "flat in vec4 v_bounds, v_clip, v_color, v_border, v_radii, v_params, v_uvr, v_s0, v_s1, v_s2, v_bsty;\n"
     "flat in float v_mag;\n"
@@ -136,9 +137,9 @@ static const char *fs_src =
     "uniform sampler2D u_lcd_atlas;\n"
     "uniform sampler2D u_ramps;\n"
     "uniform sampler2D u_image;\n"
-    "uniform sampler2D u_layer;\n"   /* a layer (or a filter pass's input) */
-    "uniform sampler2D u_aux;\n"     /* a drop shadow's blurred copy; at a layer's end, its mask */
-    "uniform sampler2D u_backdrop;\n" /* at the end of a layer with a blend mode: what was under it */
+    "uniform sampler2D u_layer;\n"                         /* a layer (or a filter pass's input) */
+    "uniform sampler2D u_aux;\n"                           /* a drop shadow's blurred copy; at a layer's end, its mask */
+    "uniform sampler2D u_backdrop;\n"                      /* at the end of a layer with a blend mode: what was under it */
     "layout(location = 0, index = 0) out vec4 frag;\n"
     "layout(location = 0, index = 1) out vec4 frag_cov;\n" /* what each channel of the destination keeps: 1 - this */
     "float sd_rounded(vec2 p, vec2 half_size, vec4 r4) {\n"
@@ -214,7 +215,7 @@ static const char *fs_src =
     /* filter passes and layers: pixels of the window-sized textures; a pixel is read only inside the layer's region (v_clip), outside it is transparent */
     "bool in_region(ivec2 q) {\n"
     "  vec2 c = (vec2(q) + 0.5) / u_scale;\n"
-    "  c.y = u_viewport.y - c.y;\n"   /* (GL's rows go up, the layout's down) */
+    "  c.y = u_viewport.y - c.y;\n" /* (GL's rows go up, the layout's down) */
     "  return c.x >= v_clip.x && c.y >= v_clip.y && c.x < v_clip.x + v_clip.z && c.y < v_clip.y + v_clip.w;\n"
     "}\n"
     /* inside the region, past the window's edge, the edge's pixel (nothing was drawn there: it goes on as it was) */
@@ -234,7 +235,7 @@ static const char *fs_src =
     "float blend1(int m, float b, float s) {\n"
     "  if (m == 1) return b * s;\n"
     "  if (m == 2) return b + s - b * s;\n"
-    "  if (m == 3) return b <= 0.5 ? s * 2.0 * b : s + (2.0 * b - 1.0) - s * (2.0 * b - 1.0);\n"   /* overlay: hard light with the two swapped */
+    "  if (m == 3) return b <= 0.5 ? s * 2.0 * b : s + (2.0 * b - 1.0) - s * (2.0 * b - 1.0);\n" /* overlay: hard light with the two swapped */
     "  if (m == 4) return min(b, s);\n"
     "  if (m == 5) return max(b, s);\n"
     "  if (m == 6) return b <= 0.0 ? 0.0 : (s >= 1.0 ? 1.0 : min(1.0, b / (1.0 - s)));\n"
@@ -271,18 +272,18 @@ static const char *fs_src =
     "}\n"
     "void main() {\n"
     "  float us = u_scale * v_mag;\n"
-    "  if (v_xf1.z != 0.0 || v_xf1.w != 0.0 || v_xf2.x != 0.0) {\n"   /* in perspective the magnification is not one number: what one pixel spans of the element, here */
+    "  if (v_xf1.z != 0.0 || v_xf1.w != 0.0 || v_xf2.x != 0.0) {\n" /* in perspective the magnification is not one number: what one pixel spans of the element, here */
     "    float lpp = 0.5 * (length(dFdx(v_local)) + length(dFdy(v_local)));\n"
     "    us = lpp > 1e-6 ? 1.0 / lpp : 1e6;\n"
     "  }\n"
-    "  vec2 sp = vec2(gl_FragCoord.x, u_viewport.y * u_scale - gl_FragCoord.y) / u_scale;\n"   /* the pixel's center in the window: the clip is there */
+    "  vec2 sp = vec2(gl_FragCoord.x, u_viewport.y * u_scale - gl_FragCoord.y) / u_scale;\n" /* the pixel's center in the window: the clip is there */
     "  if (sp.x < v_clip.x || sp.y < v_clip.y ||\n"
     "      sp.x > v_clip.x + v_clip.z || sp.y > v_clip.y + v_clip.w) discard;\n"
     "  float kind = v_params.y;\n"
     "  vec2 half_size = v_bounds.zw * 0.5;\n"
     "  vec4 lcd_cov = vec4(0.0);\n"
-    "  bool turned = v_xf0 != vec4(0.0) || v_xf1.z != 0.0 || v_xf1.w != 0.0 || v_xf2.x != 0.0;\n"   /* (a glyph so: sampled between texels, see glyph_texel) */
-    "  if (kind == 4.0) {\n" /* LCD text: a coverage per channel, blended per channel */
+    "  bool turned = v_xf0 != vec4(0.0) || v_xf1.z != 0.0 || v_xf1.w != 0.0 || v_xf2.x != 0.0;\n" /* (a glyph so: sampled between texels, see glyph_texel) */
+    "  if (kind == 4.0) {\n"                                                                      /* LCD text: a coverage per channel, blended per channel */
     "    vec3 cov = (turned ? glyph_texel(u_lcd_atlas, v_uv, v_uvr) : texture(u_lcd_atlas, v_uv)).rgb;\n"
     "    float lt = dot(v_color.rgb, vec3(0.2126, 0.7152, 0.0722));\n"
     "    cov = vec3(tone(cov.r, lt), tone(cov.g, lt), tone(cov.b, lt));\n"
@@ -294,7 +295,7 @@ static const char *fs_src =
     "    vec2 uv = v_uvr.xy + q * v_uvr.zw;\n"
     "    float blur = v_params.z >= 500.0 ? v_params.z - 1000.0 : v_params.z;\n" /* params.z: the blur radius, plus 1000 for pixelated */
     "    vec4 t;\n"
-    "    if (blur > 0.0) {\n" /* a 3x3 tap blur of a coarser mip level, wide enough to cover the radius */
+    "    if (blur > 0.0) {\n"                                                    /* a 3x3 tap blur of a coarser mip level, wide enough to cover the radius */
     "      vec2 ruv = blur * v_uvr.zw / v_bounds.zw;\n"
     "      float lod = max(log2(max(ruv.x * float(textureSize(u_image, 0).x), 1.0)) - 1.0, 0.0);\n"
     "      t = vec4(0.0);\n"
@@ -318,11 +319,11 @@ static const char *fs_src =
     "  } else if (kind == 2.0) {\n"
     "    float a = tone((turned ? glyph_texel(u_atlas, v_uv, v_uvr) : texture(u_atlas, v_uv)).r, dot(v_color.rgb, vec3(0.2126, 0.7152, 0.0722)));\n"
     "    frag = premul(v_color) * a;\n"
-    "  } else if (kind == 9.0) {\n" /* a piece of a stroke: the capsule of segment a-b (v_uvr), half width v_radii.x, the style of its two ends in v_radii.yz (0 round, 1 miter, 2 flat),
-                                      the planes that divide it from its neighbours in v_s0 (a normal pointing out of this piece's side; zero: none) */
+    "  } else if (kind == 9.0) {\n"                                                                                          /* a piece of a stroke: the capsule of segment a-b (v_uvr), half width v_radii.x, the style of its two ends in v_radii.yz (0 round, 1 miter, 2 flat),
+                                                                                                                               the planes that divide it from its neighbours in v_s0 (a normal pointing out of this piece's side; zero: none) */
     "    vec2 a = v_uvr.xy, b = v_uvr.zw, p = v_local, na = v_s0.xy, nb = v_s0.zw;\n"
     "    float hw = v_radii.x, cov = 0.0, u = 0.0;\n"
-    "    bool mine = !((dot(na, na) > 0.0 && dot(p - a, na) >= -0.001) || (dot(nb, nb) > 0.0 && dot(p - b, nb) > 0.001));\n"   /* (a point on the plane is the A piece's: a hair of slack, so the two pieces' rounding cannot make it both's or neither's) */
+    "    bool mine = !((dot(na, na) > 0.0 && dot(p - a, na) >= -0.001) || (dot(nb, nb) > 0.0 && dot(p - b, nb) > 0.001));\n" /* (a point on the plane is the A piece's: a hair of slack, so the two pieces' rounding cannot make it both's or neither's) */
     "    if (mine) {\n"
     "      vec2 ba = b - a, pa = p - a;\n"
     "      float L = length(ba), d;\n"
@@ -340,8 +341,8 @@ static const char *fs_src =
     "    }\n"
     "    vec4 sc = v_bsty.z > 0.0 ? texture(u_ramps, vec2(mix(v_border.x, v_border.y, u), v_bsty.z)) * v_color.a : premul(v_color);\n" /* along a gradient: v_border.xy the piece's ends on it */
     "    frag = sc * cov;\n"
-    "  } else if (kind == 10.0) {\n" /* a triangle (corners v_uvr.xy, v_uvr.zw, v_s0.xy); each edge (v_radii.xyz) soft (0), hard on a line shared with a neighbour (1: a pixel on
-                                      the line is this one's, -1: the neighbour's), or an arrowhead's base (2 / -2: hard where the stroke meets it, within v_radii.w of its middle) */
+    "  } else if (kind == 10.0) {\n"                                                                                                   /* a triangle (corners v_uvr.xy, v_uvr.zw, v_s0.xy); each edge (v_radii.xyz) soft (0), hard on a line shared with a neighbour (1: a pixel on
+                                                                                                                                        the line is this one's, -1: the neighbour's), or an arrowhead's base (2 / -2: hard where the stroke meets it, within v_radii.w of its middle) */
     /* the pixel's center in the window, then in the layout: the same numbers for every instance, so two triangles sharing an edge see one line */
     "    vec3 ph = inverse(mat3(1.0 + v_xf0.x, v_xf0.y, v_xf1.z, v_xf0.z, 1.0 + v_xf0.w, v_xf1.w, v_xf1.x, v_xf1.y, 1.0 + v_xf2.x)) * vec3(sp, 1.0);\n"
     "    vec2 p = ph.xy / ph.z;\n"
@@ -356,24 +357,24 @@ static const char *fs_src =
     "      vec2 nn = vec2(e.y, -e.x) / le;\n"
     "      float d = dot(p - a, nn), mode = v_radii[i];\n"
     "      if (dot(c - a, nn) > 0.0) d = -d;\n" /* positive outside this triangle */
-    "      if (abs(mode) > 1.5) {\n" /* an arrowhead's base: shared with a stroke piece, which divides by its own plane, with a hair of slack either way */
+    "      if (abs(mode) > 1.5) {\n"            /* an arrowhead's base: shared with a stroke piece, which divides by its own plane, with a hair of slack either way */
     "        if (abs(dot(p - (a + b) * 0.5, e / le)) < v_radii.w + 0.5 / us) { if (d >= (mode > 0.0 ? 0.001 : -0.001)) cov = 0.0; continue; }\n"
     "        mode = 0.0;\n"
     "      }\n"
-    "      if (mode > 0.0) { if (d > 0.0) cov = 0.0; }\n"   /* a line on the line is the owner's: exactly one of the two takes it */
+    "      if (mode > 0.0) { if (d > 0.0) cov = 0.0; }\n"                                                                         /* a line on the line is the owner's: exactly one of the two takes it */
     "      else if (mode < 0.0) { if (d >= 0.0) cov = 0.0; }\n"
     "      else if (d > 0.0 || abs(dot(p - (a + b) * 0.5, e / le)) <= le * 0.5) cov = min(cov, clamp(0.5 - d * us, 0.0, 1.0));\n" /* (inside, the edge's line past its ends is not the outline: another piece's edge is) */
     "    }\n"
     "    frag = premul(v_color) * cov;\n"
-    "  } else if (kind == 12.0) {\n" /* the end of a layer: its texture, which is the window's size, at this very pixel, cut by its mask, at the layer's opacity, blended */
+    "  } else if (kind == 12.0) {\n"                                                                                              /* the end of a layer: its texture, which is the window's size, at this very pixel, cut by its mask, at the layer's opacity, blended */
     "    ivec2 q = ivec2(gl_FragCoord.xy);\n"
     "    vec4 sc = texelFetch(u_layer, q, 0);\n"
-    "    if (v_uvr.y > 0.5) {\n"   /* masked: by the mask layer's alpha, or (2) its luminance times its alpha */
+    "    if (v_uvr.y > 0.5) {\n"                                                                                                  /* masked: by the mask layer's alpha, or (2) its luminance times its alpha */
     "      vec4 m = texelFetch(u_aux, q, 0);\n"
     "      sc *= v_uvr.y < 1.5 ? m.a : (m.a > 0.0 ? dot(m.rgb / m.a, vec3(0.2126, 0.7152, 0.0722)) * m.a : 0.0);\n"
     "    }\n"
     "    sc *= v_color.a;\n"
-    "    if (v_uvr.x > 0.5) {\n"   /* a blend mode: the result in full (blending is off for this quad), from what is under it */
+    "    if (v_uvr.x > 0.5) {\n" /* a blend mode: the result in full (blending is off for this quad), from what is under it */
     "      vec4 db = texelFetch(u_backdrop, q, 0);\n"
     "      vec3 cs = sc.a > 0.0 ? sc.rgb / sc.a : vec3(0.0), cb = db.a > 0.0 ? db.rgb / db.a : vec3(0.0);\n"
     "      vec3 bl = clamp(blend3(int(v_uvr.x + 0.5), cb, cs), 0.0, 1.0);\n"
@@ -410,31 +411,31 @@ static const char *fs_src =
     "      float t;\n"
     "      if (kind == 5.0) t = dot(v_local, v_color.xy) / v_color.z + 0.5;\n"
     "      else if (kind == 6.0) t = length(v_local - v_color.xy) / v_color.z;\n"
-    "      else { vec2 d = v_local - v_color.xy; t = fract((atan(d.x, -d.y) - v_color.z) / 6.28318530718); }\n" /* conic: clockwise from up */
-    "      if (v_params.z > 0.0) t = fract((t - v_params.w) * v_params.z);\n" /* repeating: params.z = 1 / period, params.w = where it starts */
+    "      else { vec2 d = v_local - v_color.xy; t = fract((atan(d.x, -d.y) - v_color.z) / 6.28318530718); }\n"   /* conic: clockwise from up */
+    "      if (v_params.z > 0.0) t = fract((t - v_params.w) * v_params.z);\n"                                     /* repeating: params.z = 1 / period, params.w = where it starts */
     "      col = texture(u_ramps, vec2(clamp(t, 0.0, 1.0), v_uvr.x)) * v_color.w;\n"
     "      float dither = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) - 0.5;\n" /* hides 8-bit banding */
     "      col.rgb = clamp(col.rgb + dither / 255.0 * col.a, 0.0, col.a);\n"
     "    }\n"
-    "    float bl = v_params.x, bt = v_uvr.y, br = v_uvr.z, bb = v_uvr.w;\n" /* the border's width on each side */
+    "    float bl = v_params.x, bt = v_uvr.y, br = v_uvr.z, bb = v_uvr.w;\n"                                      /* the border's width on each side */
     "    if (bl + bt + br + bb > 0.0) {\n"
-    "      vec2 ihalf = max(half_size - vec2(bl + br, bt + bb) * 0.5, vec2(0.0));\n" /* the padding box: the box less its borders */
+    "      vec2 ihalf = max(half_size - vec2(bl + br, bt + bb) * 0.5, vec2(0.0));\n"                              /* the padding box: the box less its borders */
     "      vec2 ictr = vec2(bl - br, bt - bb) * 0.5;\n"
     "      vec4 ir = max(v_radii - vec4(bl + bt, br + bt, br + bb, bl + bb) * 0.5, 0.0);\n"
     "      float di = sd_rounded(v_local - ictr, ihalf, ir);\n"
     "      float inner = clamp(0.5 - di * us, 0.0, 1.0);\n"
     "      vec4 ring = premul(v_border);\n"
-    "      if (v_bsty.x > 0.5 || v_bsty.y > 0.5 || v_bsty.z > 0.0) {\n" /* sides of their own colors, a gradient, dashes or dots */
+    "      if (v_bsty.x > 0.5 || v_bsty.y > 0.5 || v_bsty.z > 0.0) {\n"                                                      /* sides of their own colors, a gradient, dashes or dots */
     "        vec2 p = v_local;\n"
     "        float d[4] = float[4](bl > 0.0 ? (p.x + half_size.x) / bl : 1e9, bt > 0.0 ? (p.y + half_size.y) / bt : 1e9,\n"
-    "                              br > 0.0 ? (half_size.x - p.x) / br : 1e9, bb > 0.0 ? (half_size.y - p.y) / bb : 1e9);\n"   /* how far in from each side (left, top, right, bottom), in units of its width */
-    "        int sa = 0, sb = 1;\n"   /* the side this pixel is nearest to (the mitre divides the sides), and the next nearest */
+    "                              br > 0.0 ? (half_size.x - p.x) / br : 1e9, bb > 0.0 ? (half_size.y - p.y) / bb : 1e9);\n" /* how far in from each side (left, top, right, bottom), in units of its width */
+    "        int sa = 0, sb = 1;\n"                                                                                          /* the side this pixel is nearest to (the mitre divides the sides), and the next nearest */
     "        if (d[sb] < d[sa]) { sa = 1; sb = 0; }\n"
     "        for (int i = 2; i < 4; i++) { if (d[i] < d[sa]) { sb = sa; sa = i; } else if (d[i] < d[sb]) sb = i; }\n"
     "        vec4 wv = vec4(bl, bt, br, bb);\n"
     "        vec2 ga = side_grad(sa, wv), gb = side_grad(sb, wv);\n"
-    "        float e = (d[sb] - d[sa]) / max(length(gb - ga), 1e-6);\n"   /* how far from the mitre, in units of length (the difference of the two grows at |grad|) */
-    "        float k = clamp(0.5 + e * us, 0.0, 1.0);\n"   /* the join antialiased over a pixel: on the mitre itself half and half, whichever way rounding put the pixel */
+    "        float e = (d[sb] - d[sa]) / max(length(gb - ga), 1e-6);\n" /* how far from the mitre, in units of length (the difference of the two grows at |grad|) */
+    "        float k = clamp(0.5 + e * us, 0.0, 1.0);\n"                /* the join antialiased over a pixel: on the mitre itself half and half, whichever way rounding put the pixel */
     "        ring = k < 1.0 ? mix(side_ring(sb, p, half_size, wv, col, us), side_ring(sa, p, half_size, wv, col, us), k) : side_ring(sa, p, half_size, wv, col, us);\n"
     "      }\n"
     "      col = mix(ring, col, inner);\n"
@@ -446,25 +447,35 @@ static const char *fs_src =
 
 /* the window-sized targets: one layer per depth, then two for filter passes to go back and forth between, one aside (a drop shadow's blurred shape),
  * and one for what is under a layer with a blend mode */
-enum { T_FX0 = GP_MAX_LAYERS, T_FX1, T_AUX, T_BACKDROP, T_COUNT };
+enum { T_FX0 = GP_MAX_LAYERS,
+    T_FX1,
+    T_AUX,
+    T_BACKDROP,
+    T_COUNT,
+};
 
-struct gp_renderer {
+struct gp_renderer
+{
     GLuint prog, vao, vbo, atlas, color_atlas, lcd_atlas, ramps;
     GLint u_viewport, u_scale, u_gamma, u_atlas, u_color_atlas, u_lcd_atlas, u_ramps, u_image, u_layer, u_aux, u_backdrop;
     size_t vbo_cap;
-    bool finish_before_copy;   /* Mesa's llvmpipe: see backdrop_copy */
+    bool finish_before_copy; /* Mesa's llvmpipe: see backdrop_copy */
     /* offscreen targets (made when first needed, again when the window's size changes) */
-    struct { GLuint fbo, tex; } layers[T_COUNT];
+    struct
+    {
+        GLuint fbo, tex;
+    } layers[T_COUNT];
     int layer_w, layer_h;
 };
 
-static GLuint compile(GLenum type, const char *src) {
+static GLuint compile(GLenum type, const char* src)
+{
     GLuint s = gl.glCreateShader(type);
     gl.glShaderSource(s, 1, &src, NULL);
     gl.glCompileShader(s);
     GLint ok = 0;
     gl.glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
+    if(!ok) {
         char log[2048];
         gl.glGetShaderInfoLog(s, sizeof log, NULL, log);
         fprintf(stderr, "gpuic: shader compile failed:\n%s\n", log);
@@ -473,25 +484,32 @@ static GLuint compile(GLenum type, const char *src) {
     return s;
 }
 
-gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
-#define X(name)                                                                           \
-    gl.name = (__typeof__(gl.name))get_proc(#name);                                       \
-    if (!gl.name) { fprintf(stderr, "gpuic: missing GL function %s\n", #name); return NULL; }
+gp_renderer* gp_renderer_new(void* (*get_proc)(const char*))
+{
+#define X(name)                                                    \
+    gl.name = (__typeof__(gl.name))get_proc(#name);                \
+    if(!gl.name) {                                                 \
+        fprintf(stderr, "gpuic: missing GL function %s\n", #name); \
+        return NULL;                                               \
+    }
     GL_FUNCS(X)
 #undef X
 
-    gp_renderer *r = calloc(1, sizeof *r);
-    const char *renderer = (const char *)gl.glGetString(GL_RENDERER);
-    r->finish_before_copy = renderer && strstr(renderer, "llvmpipe");   /* (see backdrop_copy) */
+    gp_renderer* r = calloc(1, sizeof *r);
+    const char* renderer = (const char*)gl.glGetString(GL_RENDERER);
+    r->finish_before_copy = renderer && strstr(renderer, "llvmpipe"); /* (see backdrop_copy) */
     GLuint vs = compile(GL_VERTEX_SHADER, vs_src), fs = compile(GL_FRAGMENT_SHADER, fs_src);
-    if (!vs || !fs) { free(r); return NULL; }
+    if(!vs || !fs) {
+        free(r);
+        return NULL;
+    }
     r->prog = gl.glCreateProgram();
     gl.glAttachShader(r->prog, vs);
     gl.glAttachShader(r->prog, fs);
     gl.glLinkProgram(r->prog);
     GLint ok = 0;
     gl.glGetProgramiv(r->prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
+    if(!ok) {
         char log[2048];
         gl.glGetProgramInfoLog(r->prog, sizeof log, NULL, log);
         fprintf(stderr, "gpuic: program link failed:\n%s\n", log);
@@ -516,19 +534,17 @@ gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
     gl.glBindVertexArray(r->vao);
     gl.glGenBuffers(1, &r->vbo);
     gl.glBindBuffer(GL_ARRAY_BUFFER, r->vbo);
-    for (GLuint i = 0; i < 14; i++) {
+    for(GLuint i = 0; i < 14; i++) {
         /* gp_instance is fourteen consecutive vec4s */
         gl.glEnableVertexAttribArray(i);
-        gl.glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, sizeof(gp_instance),
-                              (const void *)(uintptr_t)(i * 4 * sizeof(float)));
+        gl.glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, sizeof(gp_instance), (const void*)(uintptr_t)(i * 4 * sizeof(float)));
         gl.glVertexAttribDivisor(i, 1);
     }
 
     gl.glGenTextures(1, &r->atlas);
     gl.glBindTexture(GL_TEXTURE_2D, r->atlas);
     gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, GP_ATLAS_SIZE, GP_ATLAS_SIZE, 0, GL_RED,
-                 GL_UNSIGNED_BYTE, NULL);
+    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, GP_ATLAS_SIZE, GP_ATLAS_SIZE, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -537,8 +553,7 @@ gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
     gl.glGenTextures(1, &r->color_atlas);
     gl.glActiveTexture(GL_TEXTURE1);
     gl.glBindTexture(GL_TEXTURE_2D, r->color_atlas);
-    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GP_COLOR_ATLAS_SIZE, GP_COLOR_ATLAS_SIZE, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, NULL);
+    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GP_COLOR_ATLAS_SIZE, GP_COLOR_ATLAS_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -555,8 +570,7 @@ gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
     gl.glGenTextures(1, &r->lcd_atlas);
     gl.glActiveTexture(GL_TEXTURE2);
     gl.glBindTexture(GL_TEXTURE_2D, r->lcd_atlas);
-    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GP_LCD_ATLAS_SIZE, GP_LCD_ATLAS_SIZE, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, NULL);
+    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, GP_LCD_ATLAS_SIZE, GP_LCD_ATLAS_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -565,18 +579,29 @@ gp_renderer *gp_renderer_new(void *(*get_proc)(const char *)) {
     return r;
 }
 
-void gp_renderer_free(gp_renderer *r, gp_gfx *gfx) {
-    if (!r) return;
-    {   /* the images' textures go with the context; they are made again if a new renderer draws them */
+void gp_renderer_free(gp_renderer* r, gp_gfx* gfx)
+{
+    if(!r) {
+        return;
+    }
+    { /* the images' textures go with the context; they are made again if a new renderer draws them */
         uint32_t tex[64];
         size_t n;
-        while (gfx && (n = gp_gfx_take_all_textures(gfx, tex, 64)) > 0) gl.glDeleteTextures((GLsizei)n, tex);
+        while(gfx && (n = gp_gfx_take_all_textures(gfx, tex, 64)) > 0) {
+            gl.glDeleteTextures((GLsizei)n, tex);
+        }
         uint32_t dead[64];
-        while (gfx && (n = gp_gfx_take_dead_textures(gfx, dead, 64)) > 0) gl.glDeleteTextures((GLsizei)n, dead);
+        while(gfx && (n = gp_gfx_take_dead_textures(gfx, dead, 64)) > 0) {
+            gl.glDeleteTextures((GLsizei)n, dead);
+        }
     }
-    for (int i = 0; i < T_COUNT; i++) {
-        if (r->layers[i].fbo) gl.glDeleteFramebuffers(1, &r->layers[i].fbo);
-        if (r->layers[i].tex) gl.glDeleteTextures(1, &r->layers[i].tex);
+    for(int i = 0; i < T_COUNT; i++) {
+        if(r->layers[i].fbo) {
+            gl.glDeleteFramebuffers(1, &r->layers[i].fbo);
+        }
+        if(r->layers[i].tex) {
+            gl.glDeleteTextures(1, &r->layers[i].tex);
+        }
     }
     gl.glDeleteProgram(r->prog);
     gl.glDeleteBuffers(1, &r->vbo);
@@ -592,33 +617,46 @@ void gp_renderer_free(gp_renderer *r, gp_gfx *gfx) {
 /* What the target being drawn on (bound now) holds over the pixel region x0..x1, y0..y1 (rows from the top), into the texture bound now (the backdrop) at
  * the same place. Mesa's llvmpipe with its rasterizer threads (26.2 here) could copy the region before all the drawing queued into it had landed: a blend
  * then saw part of what was under it, a different part each run (a blit did the same). Waiting for the drawing first fixes it there; GPUs need no wait. */
-static void backdrop_copy(gp_renderer *r, int px_h, int x0, int y0, int x1, int y1) {
-    if (x1 <= x0 || y1 <= y0) return;
-    if (r->finish_before_copy) gl.glFinish();
+static void backdrop_copy(gp_renderer* r, int px_h, int x0, int y0, int x1, int y1)
+{
+    if(x1 <= x0 || y1 <= y0) {
+        return;
+    }
+    if(r->finish_before_copy) {
+        gl.glFinish();
+    }
     gl.glCopyTexSubImage2D(GL_TEXTURE_2D, 0, x0, px_h - y1, x0, px_h - y1, x1 - x0, y1 - y0);
 }
 
-static void draw_run(gp_renderer *r, const gp_scene *scene, size_t first, size_t count) {
+static void draw_run(gp_renderer* r, const gp_scene* scene, size_t first, size_t count)
+{
     (void)scene;
-    for (GLuint a = 0; a < 14; a++)
-        gl.glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, sizeof(gp_instance),
-                                 (const void *)(uintptr_t)(first * sizeof(gp_instance) + a * 4 * sizeof(float)));
+    for(GLuint a = 0; a < 14; a++) {
+        gl.glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, sizeof(gp_instance), (const void*)(uintptr_t)(first * sizeof(gp_instance) + a * 4 * sizeof(float)));
+    }
     gl.glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, (GLsizei)count);
     (void)r;
 }
 
 /* Target d (a layer for depth d, or T_*), the size of the window: made when first needed; all of them made again when the window's size changed. */
-static bool layer_target(gp_renderer *r, int d, int px_w, int px_h) {
-    if (r->layer_w != px_w || r->layer_h != px_h) {
-        for (int i = 0; i < T_COUNT; i++) {
-            if (r->layers[i].fbo) gl.glDeleteFramebuffers(1, &r->layers[i].fbo);
-            if (r->layers[i].tex) gl.glDeleteTextures(1, &r->layers[i].tex);
+static bool layer_target(gp_renderer* r, int d, int px_w, int px_h)
+{
+    if(r->layer_w != px_w || r->layer_h != px_h) {
+        for(int i = 0; i < T_COUNT; i++) {
+            if(r->layers[i].fbo) {
+                gl.glDeleteFramebuffers(1, &r->layers[i].fbo);
+            }
+            if(r->layers[i].tex) {
+                gl.glDeleteTextures(1, &r->layers[i].tex);
+            }
             r->layers[i].fbo = r->layers[i].tex = 0;
         }
         r->layer_w = px_w;
         r->layer_h = px_h;
     }
-    if (r->layers[d].fbo) return true;
+    if(r->layers[d].fbo) {
+        return true;
+    }
     GLuint tex, fbo;
     gl.glGenTextures(1, &tex);
     gl.glActiveTexture(GL_TEXTURE5);
@@ -634,9 +672,12 @@ static bool layer_target(gp_renderer *r, int d, int px_w, int px_h) {
     gl.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
     bool ok = gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-    if (!ok) {
+    if(!ok) {
         static bool warned;
-        if (!warned) { warned = true; fprintf(stderr, "gpuic: an offscreen layer could not be made: layers are drawn straight onto the window\n"); }
+        if(!warned) {
+            warned = true;
+            fprintf(stderr, "gpuic: an offscreen layer could not be made: layers are drawn straight onto the window\n");
+        }
         gl.glDeleteFramebuffers(1, &fbo);
         gl.glDeleteTextures(1, &tex);
         return false;
@@ -647,9 +688,12 @@ static bool layer_target(gp_renderer *r, int d, int px_w, int px_h) {
 }
 
 /* The texture of an image, made when it is first drawn: its pixels, with mipmaps for when it is shown smaller. */
-static void upload_image(gp_renderer *r, gp_gfx_image *im) {
+static void upload_image(gp_renderer* r, gp_gfx_image* im)
+{
     (void)r;
-    if (im->gl_tex) return;
+    if(im->gl_tex) {
+        return;
+    }
     GLuint tex;
     gl.glGenTextures(1, &tex);
     gl.glActiveTexture(GL_TEXTURE4);
@@ -666,64 +710,65 @@ static void upload_image(gp_renderer *r, gp_gfx_image *im) {
     im->gl_tex = tex;
 }
 
-void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene, int px_w,
-                      int px_h, float scale, gp_color clear) {
+void gp_renderer_draw(gp_renderer* r, gp_text_system* ts, const gp_scene* scene, int px_w,
+    int px_h, float scale, gp_color clear)
+{
     gl.glViewport(0, 0, px_w, px_h);
     gl.glClearColor(clear.r, clear.g, clear.b, clear.a);
     gl.glClear(GL_COLOR_BUFFER_BIT);
 
-    {   /* textures of images that were released */
-        gp_gfx *g = gp_text_gfx(ts);
+    { /* textures of images that were released */
+        gp_gfx* g = gp_text_gfx(ts);
         uint32_t dead[32];
         size_t n;
-        while (g && (n = gp_gfx_take_dead_textures(g, dead, 32)) > 0) gl.glDeleteTextures((GLsizei)n, dead);
+        while(g && (n = gp_gfx_take_dead_textures(g, dead, 32)) > 0) {
+            gl.glDeleteTextures((GLsizei)n, dead);
+        }
     }
 
     /* upload any glyphs rasterized since the last frame */
     gl.glActiveTexture(GL_TEXTURE0);
     gl.glBindTexture(GL_TEXTURE_2D, r->atlas);
     int dx, dy, dw, dh;
-    if (gp_text_atlas_take_dirty(ts, &dx, &dy, &dw, &dh)) {
+    if(gp_text_atlas_take_dirty(ts, &dx, &dy, &dw, &dh)) {
         gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, GP_ATLAS_SIZE);
-        gl.glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh, GL_RED, GL_UNSIGNED_BYTE,
-                        gp_text_atlas(ts) + (size_t)dy * GP_ATLAS_SIZE + (size_t)dx);
+        gl.glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh, GL_RED, GL_UNSIGNED_BYTE, gp_text_atlas(ts) + (size_t)dy * GP_ATLAS_SIZE + (size_t)dx);
         gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
     gl.glActiveTexture(GL_TEXTURE1);
     gl.glBindTexture(GL_TEXTURE_2D, r->color_atlas);
-    if (gp_text_color_atlas_take_dirty(ts, &dx, &dy, &dw, &dh)) {
+    if(gp_text_color_atlas_take_dirty(ts, &dx, &dy, &dw, &dh)) {
         gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, GP_COLOR_ATLAS_SIZE);
-        gl.glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh, GL_RGBA, GL_UNSIGNED_BYTE,
-                        gp_text_color_atlas(ts) + ((size_t)dy * GP_COLOR_ATLAS_SIZE + (size_t)dx) * 4);
+        gl.glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh, GL_RGBA, GL_UNSIGNED_BYTE, gp_text_color_atlas(ts) + ((size_t)dy * GP_COLOR_ATLAS_SIZE + (size_t)dx) * 4);
         gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
     gl.glActiveTexture(GL_TEXTURE2);
     gl.glBindTexture(GL_TEXTURE_2D, r->lcd_atlas);
-    if (gp_text_lcd_atlas_take_dirty(ts, &dx, &dy, &dw, &dh)) {
+    if(gp_text_lcd_atlas_take_dirty(ts, &dx, &dy, &dw, &dh)) {
         gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, GP_LCD_ATLAS_SIZE);
-        gl.glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh, GL_RGBA, GL_UNSIGNED_BYTE,
-                        gp_text_lcd_atlas(ts) + ((size_t)dy * GP_LCD_ATLAS_SIZE + (size_t)dx) * 4);
+        gl.glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, dw, dh, GL_RGBA, GL_UNSIGNED_BYTE, gp_text_lcd_atlas(ts) + ((size_t)dy * GP_LCD_ATLAS_SIZE + (size_t)dx) * 4);
         gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
     gl.glActiveTexture(GL_TEXTURE3);
     gl.glBindTexture(GL_TEXTURE_2D, r->ramps);
     {
-        gp_gfx *gfx = gp_text_gfx(ts);
+        gp_gfx* gfx = gp_text_gfx(ts);
         int row0, row1;
-        if (gfx && gp_gfx_gradient_take_dirty(gfx, &row0, &row1)) {
+        if(gfx && gp_gfx_gradient_take_dirty(gfx, &row0, &row1)) {
             gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, row0, GP_GRAD_W, row1 - row0, GL_RGBA, GL_UNSIGNED_BYTE,
-                               gp_gfx_gradient_data(gfx) + (size_t)row0 * GP_GRAD_W * 4);
+            gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, row0, GP_GRAD_W, row1 - row0, GL_RGBA, GL_UNSIGNED_BYTE, gp_gfx_gradient_data(gfx) + (size_t)row0 * GP_GRAD_W * 4);
         }
     }
     gl.glActiveTexture(GL_TEXTURE0);
-    if (scene->len == 0) return;
+    if(scene->len == 0) {
+        return;
+    }
 
     gl.glEnable(GL_BLEND);
-    gl.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC1_COLOR);   /* dual-source: LCD text keeps a different share of each channel */
+    gl.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC1_COLOR); /* dual-source: LCD text keeps a different share of each channel */
     gl.glUseProgram(r->prog);
     gl.glUniform2f(r->u_viewport, (float)px_w / scale, (float)px_h / scale);
     gl.glUniform1f(r->u_scale, scale);
@@ -745,26 +790,38 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
     /* Everything but images and layers is one instanced draw. An image has a texture of its own, so it splits the scene: the run
      * before it, then the image alone, then on. A layer's BEGIN sends what follows into the layer's texture (only its region cleared), and its END
      * goes back to where it was and composites the region (the END is that quad). Order is kept, which is what painting needs. */
-    gp_gfx *gfx = gp_text_gfx(ts);
+    gp_gfx* gfx = gp_text_gfx(ts);
     size_t run = 0;
-    int depth = 0;       /* layers open */
-    int skipped = 0;     /* ... of which these could not be made, inside the open ones: drawn straight on what is under them */
-    int cur = -1;        /* where the layer about to end is now, after the filter passes so far (-1: its own target) */
-    GLuint mask_tex = 0; /* the mask of the layer about to end */
-    bool backdrop = false;   /* between a BACKDROP and its END: the passes are over the copy of what is under it */
-    for (size_t i = 0; i < scene->len; i++) {
-        const gp_instance *in = &scene->items[i];
+    int depth = 0;         /* layers open */
+    int skipped = 0;       /* ... of which these could not be made, inside the open ones: drawn straight on what is under them */
+    int cur = -1;          /* where the layer about to end is now, after the filter passes so far (-1: its own target) */
+    GLuint mask_tex = 0;   /* the mask of the layer about to end */
+    bool backdrop = false; /* between a BACKDROP and its END: the passes are over the copy of what is under it */
+    for(size_t i = 0; i < scene->len; i++) {
+        const gp_instance* in = &scene->items[i];
         int kind = (int)in->kind;
-        if (kind == GP_PRIM_BACKDROP) {   /* what is under the region, out of the target being drawn on (bound now), into the backdrop texture */
-            if (i > run) draw_run(r, scene, run, i - run);
+        if(kind == GP_PRIM_BACKDROP) { /* what is under the region, out of the target being drawn on (bound now), into the backdrop texture */
+            if(i > run) {
+                draw_run(r, scene, run, i - run);
+            }
             run = i + 1;
-            if (!layer_target(r, T_BACKDROP, px_w, px_h)) continue;
+            if(!layer_target(r, T_BACKDROP, px_w, px_h)) {
+                continue;
+            }
             int x0 = (int)floorf(in->bounds[0] * scale + 0.5f), x1 = (int)floorf((in->bounds[0] + in->bounds[2]) * scale + 0.5f);
             int y0 = (int)floorf(in->bounds[1] * scale + 0.5f), y1 = (int)floorf((in->bounds[1] + in->bounds[3]) * scale + 0.5f);
-            if (x0 < 0) x0 = 0;
-            if (y0 < 0) y0 = 0;
-            if (x1 > px_w) x1 = px_w;
-            if (y1 > px_h) y1 = px_h;
+            if(x0 < 0) {
+                x0 = 0;
+            }
+            if(y0 < 0) {
+                y0 = 0;
+            }
+            if(x1 > px_w) {
+                x1 = px_w;
+            }
+            if(y1 > px_h) {
+                y1 = px_h;
+            }
             gl.glActiveTexture(GL_TEXTURE7);
             gl.glBindTexture(GL_TEXTURE_2D, r->layers[T_BACKDROP].tex);
             backdrop_copy(r, px_h, x0, y0, x1, y1);
@@ -774,10 +831,14 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             backdrop = true;
             continue;
         }
-        if (kind == GP_PRIM_BACKDROP_END) {   /* back on the target, the result drawn in the box */
-            if (i > run) draw_run(r, scene, run, i - run);
+        if(kind == GP_PRIM_BACKDROP_END) { /* back on the target, the result drawn in the box */
+            if(i > run) {
+                draw_run(r, scene, run, i - run);
+            }
             run = i + 1;
-            if (!backdrop) continue;
+            if(!backdrop) {
+                continue;
+            }
             backdrop = false;
             gl.glBindFramebuffer(GL_FRAMEBUFFER, depth ? r->layers[depth - 1].fbo : 0);
             gl.glActiveTexture(GL_TEXTURE5);
@@ -790,21 +851,27 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             cur = -1;
             continue;
         }
-        if (kind == GP_PRIM_FX_MATRIX || kind == GP_PRIM_FX_BLUR || kind == GP_PRIM_FX_SHADOW) {
+        if(kind == GP_PRIM_FX_MATRIX || kind == GP_PRIM_FX_BLUR || kind == GP_PRIM_FX_SHADOW) {
             /* a pass over the open layer: from where it is now into the other of the two pass targets (a shadow's first pass: into the aside one) */
-            if (i > run) draw_run(r, scene, run, i - run);
+            if(i > run) {
+                draw_run(r, scene, run, i - run);
+            }
             run = i + 1;
-            if (!backdrop && (skipped || !depth)) continue;
+            if(!backdrop && (skipped || !depth)) {
+                continue;
+            }
             int src = cur >= 0 ? cur : depth - 1;
             int dst = kind == GP_PRIM_FX_BLUR && in->side[0][1] > 0.5f ? T_AUX : (cur == T_FX0 ? T_FX1 : T_FX0);
-            if (!layer_target(r, dst, px_w, px_h)) continue;
+            if(!layer_target(r, dst, px_w, px_h)) {
+                continue;
+            }
             gl.glBindFramebuffer(GL_FRAMEBUFFER, r->layers[dst].fbo);
             gl.glActiveTexture(GL_TEXTURE5);
             gl.glBindTexture(GL_TEXTURE_2D, r->layers[src].tex);
             gl.glActiveTexture(GL_TEXTURE6);
             gl.glBindTexture(GL_TEXTURE_2D, kind == GP_PRIM_FX_SHADOW ? r->layers[T_AUX].tex : 0);
             gl.glActiveTexture(GL_TEXTURE0);
-            gl.glDisable(GL_BLEND);   /* (a pass writes its result whole) */
+            gl.glDisable(GL_BLEND); /* (a pass writes its result whole) */
             draw_run(r, scene, i, 1);
             gl.glEnable(GL_BLEND);
             gl.glActiveTexture(GL_TEXTURE5);
@@ -812,33 +879,55 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             gl.glActiveTexture(GL_TEXTURE6);
             gl.glBindTexture(GL_TEXTURE_2D, 0);
             gl.glActiveTexture(GL_TEXTURE0);
-            if (dst != T_AUX) cur = dst;
+            if(dst != T_AUX) {
+                cur = dst;
+            }
             continue;
         }
-        if (kind == GP_PRIM_MASK_END) {   /* the mask's layer is done: it is kept for the END that follows (its own layer goes on being the open one) */
-            if (i > run) draw_run(r, scene, run, i - run);
+        if(kind == GP_PRIM_MASK_END) { /* the mask's layer is done: it is kept for the END that follows (its own layer goes on being the open one) */
+            if(i > run) {
+                draw_run(r, scene, run, i - run);
+            }
             run = i + 1;
-            if (skipped) { skipped--; continue; }
-            if (!depth) continue;
+            if(skipped) {
+                skipped--;
+                continue;
+            }
+            if(!depth) {
+                continue;
+            }
             depth--;
             mask_tex = r->layers[depth].tex;
             gl.glBindFramebuffer(GL_FRAMEBUFFER, depth ? r->layers[depth - 1].fbo : 0);
             continue;
         }
-        if (kind == GP_PRIM_LAYER_BEGIN) {
-            if (i > run) draw_run(r, scene, run, i - run);
+        if(kind == GP_PRIM_LAYER_BEGIN) {
+            if(i > run) {
+                draw_run(r, scene, run, i - run);
+            }
             run = i + 1;
-            if (skipped || depth >= GP_MAX_LAYERS || !layer_target(r, depth, px_w, px_h)) { skipped++; continue; }
+            if(skipped || depth >= GP_MAX_LAYERS || !layer_target(r, depth, px_w, px_h)) {
+                skipped++;
+                continue;
+            }
             gl.glBindFramebuffer(GL_FRAMEBUFFER, r->layers[depth].fbo);
             int x0 = (int)floorf(in->bounds[0] * scale + 0.5f), x1 = (int)floorf((in->bounds[0] + in->bounds[2]) * scale + 0.5f);
             int y0 = (int)floorf(in->bounds[1] * scale + 0.5f), y1 = (int)floorf((in->bounds[1] + in->bounds[3]) * scale + 0.5f);
-            if (x0 < 0) x0 = 0;
-            if (y0 < 0) y0 = 0;
-            if (x1 > px_w) x1 = px_w;
-            if (y1 > px_h) y1 = px_h;
-            if (x1 > x0 && y1 > y0) {
+            if(x0 < 0) {
+                x0 = 0;
+            }
+            if(y0 < 0) {
+                y0 = 0;
+            }
+            if(x1 > px_w) {
+                x1 = px_w;
+            }
+            if(y1 > px_h) {
+                y1 = px_h;
+            }
+            if(x1 > x0 && y1 > y0) {
                 gl.glEnable(GL_SCISSOR_TEST);
-                gl.glScissor(x0, px_h - y1, x1 - x0, y1 - y0);   /* (GL counts rows from the bottom) */
+                gl.glScissor(x0, px_h - y1, x1 - x0, y1 - y0); /* (GL counts rows from the bottom) */
                 gl.glClearColor(0, 0, 0, 0);
                 gl.glClear(GL_COLOR_BUFFER_BIT);
                 gl.glDisable(GL_SCISSOR_TEST);
@@ -846,11 +935,18 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             depth++;
             continue;
         }
-        if (kind == GP_PRIM_LAYER_END) {
-            if (i > run) draw_run(r, scene, run, i - run);
+        if(kind == GP_PRIM_LAYER_END) {
+            if(i > run) {
+                draw_run(r, scene, run, i - run);
+            }
             run = i + 1;
-            if (skipped) { skipped--; continue; }
-            if (!depth) continue;
+            if(skipped) {
+                skipped--;
+                continue;
+            }
+            if(!depth) {
+                continue;
+            }
             depth--;
             gl.glBindFramebuffer(GL_FRAMEBUFFER, depth ? r->layers[depth - 1].fbo : 0);
             gl.glActiveTexture(GL_TEXTURE5);
@@ -858,13 +954,21 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             gl.glActiveTexture(GL_TEXTURE6);
             gl.glBindTexture(GL_TEXTURE_2D, in->uv[1] > 0.5f ? mask_tex : 0);
             bool blended = in->uv[0] > 0.5f && layer_target(r, T_BACKDROP, px_w, px_h);
-            if (blended) {   /* what is under it, over the region, into the backdrop texture: the quad computes the blend and writes it whole */
+            if(blended) { /* what is under it, over the region, into the backdrop texture: the quad computes the blend and writes it whole */
                 int x0 = (int)floorf(in->bounds[0] * scale + 0.5f), x1 = (int)floorf((in->bounds[0] + in->bounds[2]) * scale + 0.5f);
                 int y0 = (int)floorf(in->bounds[1] * scale + 0.5f), y1 = (int)floorf((in->bounds[1] + in->bounds[3]) * scale + 0.5f);
-                if (x0 < 0) x0 = 0;
-                if (y0 < 0) y0 = 0;
-                if (x1 > px_w) x1 = px_w;
-                if (y1 > px_h) y1 = px_h;
+                if(x0 < 0) {
+                    x0 = 0;
+                }
+                if(y0 < 0) {
+                    y0 = 0;
+                }
+                if(x1 > px_w) {
+                    x1 = px_w;
+                }
+                if(y1 > px_h) {
+                    y1 = px_h;
+                }
                 gl.glActiveTexture(GL_TEXTURE7);
                 gl.glBindTexture(GL_TEXTURE_2D, r->layers[T_BACKDROP].tex);
                 backdrop_copy(r, px_h, x0, y0, x1, y1);
@@ -872,8 +976,10 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             }
             gl.glActiveTexture(GL_TEXTURE0);
             draw_run(r, scene, i, 1);
-            if (blended) gl.glEnable(GL_BLEND);
-            for (GLenum u = GL_TEXTURE5; u <= GL_TEXTURE7; u++) {   /* (none bound while it is drawn into again) */
+            if(blended) {
+                gl.glEnable(GL_BLEND);
+            }
+            for(GLenum u = GL_TEXTURE5; u <= GL_TEXTURE7; u++) { /* (none bound while it is drawn into again) */
                 gl.glActiveTexture(u);
                 gl.glBindTexture(GL_TEXTURE_2D, 0);
             }
@@ -882,10 +988,16 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
             mask_tex = 0;
             continue;
         }
-        if (kind != GP_PRIM_IMAGE) continue;
-        gp_gfx_image *im = gp_gfx_image_get(gfx, (uint32_t)in->_pad, (uint32_t)in->border_color[0]);
-        if (!im) continue;   /* released since it was painted: nothing to draw (the next frame has no instance) */
-        if (i > run) draw_run(r, scene, run, i - run);
+        if(kind != GP_PRIM_IMAGE) {
+            continue;
+        }
+        gp_gfx_image* im = gp_gfx_image_get(gfx, (uint32_t)in->_pad, (uint32_t)in->border_color[0]);
+        if(!im) {
+            continue; /* released since it was painted: nothing to draw (the next frame has no instance) */
+        }
+        if(i > run) {
+            draw_run(r, scene, run, i - run);
+        }
         upload_image(r, im);
         gl.glActiveTexture(GL_TEXTURE4);
         gl.glBindTexture(GL_TEXTURE_2D, im->gl_tex);
@@ -894,17 +1006,23 @@ void gp_renderer_draw(gp_renderer *r, gp_text_system *ts, const gp_scene *scene,
         draw_run(r, scene, i, 1);
         run = i + 1;
     }
-    if (scene->len > run) draw_run(r, scene, run, scene->len - run);
-    if (depth) gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);   /* (a scene whose layers do not close: what was in them is lost, the window is what is shown) */
+    if(scene->len > run) {
+        draw_run(r, scene, run, scene->len - run);
+    }
+    if(depth) {
+        gl.glBindFramebuffer(GL_FRAMEBUFFER, 0); /* (a scene whose layers do not close: what was in them is lost, the window is what is shown) */
+    }
 }
 
-uint8_t *gp_renderer_read_pixels(int px_w, int px_h) {
-    uint8_t *raw = malloc((size_t)px_w * px_h * 3);
-    uint8_t *out = malloc((size_t)px_w * px_h * 3);
+uint8_t* gp_renderer_read_pixels(int px_w, int px_h)
+{
+    uint8_t* raw = malloc((size_t)px_w * px_h * 3);
+    uint8_t* out = malloc((size_t)px_w * px_h * 3);
     gl.glPixelStorei(GL_PACK_ALIGNMENT, 1);
     gl.glReadPixels(0, 0, px_w, px_h, GL_RGB, GL_UNSIGNED_BYTE, raw);
-    for (int y = 0; y < px_h; y++) /* GL origin is bottom-left */
+    for(int y = 0; y < px_h; y++) { /* GL origin is bottom-left */
         memcpy(out + (size_t)y * px_w * 3, raw + (size_t)(px_h - 1 - y) * px_w * 3, (size_t)px_w * 3);
+    }
     free(raw);
     return out;
 }

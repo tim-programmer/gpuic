@@ -7,12 +7,14 @@
 #include <cstdio>
 
 // (made while a view renders: compiled, not run)
-[[maybe_unused]] static gpuic::Element made() {
+[[maybe_unused]] static gpuic::Element made()
+{
     using namespace gpuic;
     return div().bg(rgb(0x102030)).child(curve(xy(0, 0), xy(1, 1), xy(2, 2), xy(3, 3)).stroke_color(rgb(0xff8000))).child(polyline({ xy(0, 0), xy(5, 5) }));
 }
 
-int main() {
+int main()
+{
     using namespace gpuic;
     gp_color c = gp_rgb(0xff8000);
     gp_color d = gp_rgba(0x00ff0080);

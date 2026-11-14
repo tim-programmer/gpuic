@@ -18,11 +18,18 @@
 
 #define MAX_CACHED_DEPTH 256
 
-static int64_t g_anim_clock;   /* gp_debug_anim_clock: the time animations see, or 0 for the clock's */
-void gp_debug_anim_clock(int64_t ns) { g_anim_clock = ns; }
-int64_t gp_anim_now(void) { return g_anim_clock ? g_anim_clock : gp_now_ns(); }
+static int64_t g_anim_clock; /* gp_debug_anim_clock: the time animations see, or 0 for the clock's */
+void gp_debug_anim_clock(int64_t ns)
+{
+    g_anim_clock = ns;
+}
+int64_t gp_anim_now(void)
+{
+    return g_anim_clock ? g_anim_clock : gp_now_ns();
+}
 
-void gp_anim_begin(gp_anim_table *t) {
+void gp_anim_begin(gp_anim_table* t)
+{
     t->pass++;
     t->running = false;
     t->now = gp_anim_now();
@@ -30,51 +37,65 @@ void gp_anim_begin(gp_anim_table *t) {
 
 /* An animation that was not met in the last layout is forgotten, so an element that went away starts over
  * when it returns. */
-void gp_anim_end(gp_anim_table *t) {
+void gp_anim_end(gp_anim_table* t)
+{
     size_t out = 0;
-    for (size_t i = 0; i < t->len; i++)
-        if (t->items[i].seen == t->pass) t->items[out++] = t->items[i];
+    for(size_t i = 0; i < t->len; i++) {
+        if(t->items[i].seen == t->pass) {
+            t->items[out++] = t->items[i];
+        }
+    }
     t->len = out;
 }
 
-void gp_anim_free(gp_anim_table *t) {
+void gp_anim_free(gp_anim_table* t)
+{
     free(t->items);
     gp_arena_free(&t->arena);
     t->items = NULL;
     t->len = t->cap = 0;
 }
 
-static gp_anim_state *state_for(gp_anim_table *t, uint64_t key) {
-    for (size_t i = 0; i < t->len; i++)
-        if (t->items[i].key == key) return &t->items[i];
-    if (t->len == t->cap) {
+static gp_anim_state* state_for(gp_anim_table* t, uint64_t key)
+{
+    for(size_t i = 0; i < t->len; i++) {
+        if(t->items[i].key == key) {
+            return &t->items[i];
+        }
+    }
+    if(t->len == t->cap) {
         t->cap = t->cap ? t->cap * 2 : 8;
         t->items = realloc(t->items, t->cap * sizeof *t->items);
-        if (!t->items) abort();
+        if(!t->items) {
+            abort();
+        }
     }
     t->items[t->len] = (gp_anim_state){ .key = key, .start_ns = t->now };
     return &t->items[t->len++];
 }
 
 /* Eased progress of `a` after `elapsed_ns`, and whether it is still going. */
-static float progress(const gp_animation *a, int64_t elapsed_ns, bool *running) {
+static float progress(const gp_animation* a, int64_t elapsed_ns, bool* running)
+{
     double el = (double)elapsed_ns / 1e9 - a->delay;
-    if (el < 0) {
-        *running = true;   /* waiting for its delay */
+    if(el < 0) {
+        *running = true; /* waiting for its delay */
         return 0;
     }
-    if (a->duration <= 0) {
+    if(a->duration <= 0) {
         *running = false;
         return 1;
     }
     double x = el / a->duration;
-    if (a->repeat) {
+    if(a->repeat) {
         *running = true;
         double whole = floor(x), f = x - whole;
-        if (a->ping_pong && ((long long)whole & 1)) f = 1 - f;
+        if(a->ping_pong && ((long long)whole & 1)) {
+            f = 1 - f;
+        }
         return gp_ease(a->easing, (float)f);
     }
-    if (x >= 1) {
+    if(x >= 1) {
         *running = false;
         return 1;
     }
@@ -82,36 +103,44 @@ static float progress(const gp_animation *a, int64_t elapsed_ns, bool *running) 
     return gp_ease(a->easing, (float)x);
 }
 
-typedef struct {
-    gp_anim_table *t;
-    gp_el *cached[MAX_CACHED_DEPTH];   /* the cached view roots on the way down */
+typedef struct
+{
+    gp_anim_table* t;
+    gp_el* cached[MAX_CACHED_DEPTH]; /* the cached view roots on the way down */
     int ncached;
 } walk;
 
-static void eval_element(walk *w, gp_el *n) {
-    gp_anim_table *t = w->t;
+static void eval_element(walk* w, gp_el* n)
+{
+    gp_anim_table* t = w->t;
     bool changed = false;
-    for (gp_anim *a = n->anim; a; a = a->next) {
-        gp_anim_state *st = state_for(t, a->key);
+    for(gp_anim* a = n->anim; a; a = a->next) {
+        gp_anim_state* st = state_for(t, a->key);
         st->seen = t->pass;
         bool running;
         a->cur_t = progress(&a->spec, t->now - st->start_ns, &running);
-        if (running) t->running = true;
-        if (!a->applied || a->applied_t != a->cur_t) changed = true;
+        if(running) {
+            t->running = true;
+        }
+        if(!a->applied || a->applied_t != a->cur_t) {
+            changed = true;
+        }
     }
-    if (!changed) return;
+    if(!changed) {
+        return;
+    }
 
-    gp_anim *head = n->anim;
-    bool before = head->applied;   /* this element was already showing an earlier progress */
-    if (!head->base_valid) {
+    gp_anim* head = n->anim;
+    bool before = head->applied; /* this element was already showing an earlier progress */
+    if(!head->base_valid) {
         head->base = n->style;
         head->base_valid = true;
     } else {
         n->style = head->base;
-        n->lstate_on = 0;   /* (a state style it was laid out in is gone with the rest: layout puts it back over what the animation sets) */
+        n->lstate_on = 0; /* (a state style it was laid out in is gone with the rest: layout puts it back over what the animation sets) */
     }
     gp_arena_reset(&t->arena);
-    for (gp_anim *a = n->anim; a; a = a->next) {
+    for(gp_anim* a = n->anim; a; a = a->next) {
         gp_build_ctx bc = { &t->arena, t->app, t->window, a->view, true };
         gp_el_apply_animation(n, a, &bc);
         a->applied = true;
@@ -121,21 +150,38 @@ static void eval_element(walk *w, gp_el *n) {
      * built again, and nothing else tells them this element changed. Without prep_valid, prepare walks the
      * subtree again (an inherited text size may have changed) and with it forgets that it was laid out, so
      * layout runs and the painted copy, which is tied to the layout, goes too. */
-    if (before)
-        for (int i = 0; i < w->ncached; i++) w->cached[i]->prep_valid = false;
+    if(before) {
+        for(int i = 0; i < w->ncached; i++) {
+            w->cached[i]->prep_valid = false;
+        }
+    }
 }
 
-static void walk_tree(walk *w, gp_el *n) {
-    if (!n->anim_below) return;
+static void walk_tree(walk* w, gp_el* n)
+{
+    if(!n->anim_below) {
+        return;
+    }
     bool root = n->cached_view.generation != 0 && w->ncached < MAX_CACHED_DEPTH;
-    if (root) w->cached[w->ncached++] = n;
-    if (n->anim) eval_element(w, n);
-    for (uint32_t i = 0; i < n->nchildren; i++) walk_tree(w, n->children[i]);
-    if (root) w->ncached--;
+    if(root) {
+        w->cached[w->ncached++] = n;
+    }
+    if(n->anim) {
+        eval_element(w, n);
+    }
+    for(uint32_t i = 0; i < n->nchildren; i++) {
+        walk_tree(w, n->children[i]);
+    }
+    if(root) {
+        w->ncached--;
+    }
 }
 
-void gp_anim_eval(gp_el *root, gp_anim_table *t) {
-    if (!root || !t) return;
+void gp_anim_eval(gp_el* root, gp_anim_table* t)
+{
+    if(!root || !t) {
+        return;
+    }
     walk w = { .t = t };
     walk_tree(&w, root);
 }
