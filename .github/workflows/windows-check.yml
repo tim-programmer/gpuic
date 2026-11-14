@@ -1,8 +1,7 @@
 name: Windows Check
 
 on:
-  push:
-    branches: [windows-check]
+  push:          # every branch: Windows is checked on every push
   workflow_dispatch:
 
 permissions:
