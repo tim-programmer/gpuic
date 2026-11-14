@@ -1896,7 +1896,7 @@ Roughly in the order I'd tackle them:
 
 1. COLRv1 emoji fonts (FreeType gives the paint graph, it would need an interpreter with gradients, transforms and blend modes of its own; it could be written
    out as an SVG document for the code that draws SVG fonts).
-2. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux; on Windows there are no watches at all yet).
+2. Watching pipes and sockets (`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest) on Windows, and an `epoll`-style edge-triggered mode on Linux: the descriptor watcher uses `poll(2)` and an eventfd, so it is Linux only. (Watching files and directories for changes, `gp_watch_path`, works on both.)
 3. A view with a scroller under the mouse is painted in full every frame (hover and scrollbars are evaluated, not cached), and a cached view that holds a scroller, a list or an overflow clip is
    painted in full when it or its scroller moves (their clip moves with them: only views without one are moved, see "Transforms" and `tests/paintshift_test.c`). The scene is still
    re-uploaded and drawn as a whole every frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
