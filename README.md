@@ -80,8 +80,8 @@ gpuic builds as a static library; there are no Windows DLL export macros yet.
 Linux is where gpuic is developed and tested. **Windows** builds (MSVC from Visual Studio 2022 17.9 on, or
 MinGW-w64/clang): coroutines run on fibers, the thread pool on Win32 threads, and fonts come from scanning
 `%WINDIR%\Fonts` and the per-user font directory. Two things are missing there: watching file descriptors
-(`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest are not declared; test for `GP_HAS_FD`), and two of the
-tests (`fd_test`, and `text_test`, which is written against POSIX and Linux font locations). So far the Windows
+(`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest are not declared; test for `GP_HAS_FD`; watching files and directories,
+`gp_watch_path`, works on both), and two of the tests (`fd_test`, and `text_test`, which is written against POSIX and Linux font locations). So far the Windows
 build has been cross-compiled with MinGW-w64 and run under Wine; `.github/workflows/windows-check.yml` builds and
 tests it with MSVC. macOS is untested: its font directories and the SDL-based GL loading follow SDL's own
 cross-platform APIs.
@@ -132,9 +132,9 @@ out: take two and subtract to measure one stretch (`tests/cables_bench.c` uses o
 `GPUIC_IGNORE_REAL_MOUSE=1` drops what the physical pointer does and keeps the injected events (the tests set it: a pointer resting over a test window changes hover and repaint behavior). `GPUIC_IGNORE_REAL_KEYS=1` does the same for the physical keyboard (keys and typed text); nothing sets it by default.
 
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
-and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
+and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fswatch_test.c` (watching files and directories), `tests/fd_test.c` (descriptor watches and
 awaits: pipes, sockets, a TCP echo through coroutines, closing and cancelling at awkward moments),
-`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/lstate_test.c` (state styles that lay out), `tests/layer_test.c` (offscreen layers: group opacity, translucent strokes), `tests/effects_test.c` (filters, blend modes, masks), `tests/shapes_test.c` (fill rules, markers, backdrop filters), `tests/xform3d_test.c` (3D transforms, keys), `tests/svgrelease_test.c` (releasing a drawing renders only its views), `tests/pointer_test.c` (a drag's modifiers, a drag whose element moves or goes, `gp_on_hover`), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/xform2_test.c` (skew, scrollers in transformed parents, a hover style's text color), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/stroke_test.c` (dashes, gradients along a stroke, arrowheads, fills, text on a path), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
+`tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/svgx2_test.c` (CSS, nested layers, group opacity, patterns, markers, images, text layout, filters) / `tests/svgfont_test.c` (OpenType SVG fonts) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/lstate_test.c` (state styles that lay out), `tests/layer_test.c` (offscreen layers: group opacity, translucent strokes), `tests/effects_test.c` (filters, blend modes, masks), `tests/shapes_test.c` (fill rules, markers, backdrop filters), `tests/xform3d_test.c` (3D transforms, keys), `tests/svgrelease_test.c` (releasing a drawing renders only its views), `tests/pointer_test.c` (a drag's modifiers, a drag whose element moves or goes, `gp_on_hover`), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/xform2_test.c` (skew, scrollers in transformed parents, a hover style's text color), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/stroke_test.c` (dashes, gradients along a stroke, arrowheads, fills, text on a path), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
 widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-height list, checked
 against a model), `tests/text_test.c` (fonts and shaping, against the fonts actually installed) and
 `tests/vlist_test.c` (the row-height index against a brute-force model). The first three need a
@@ -236,7 +236,7 @@ Link `gpuic::cpp` (CMake: `target_link_libraries(app PRIVATE gpuic::cpp)`; it is
   handler is run from simulated input with every parameter list, with captures, and so on, and entities and views with non-trivial state are
   constructed, grown, destroyed once, rendered as children and updated. About 50 mutants of the header and the generated file are all caught.
 * **Timers and background work** are methods of `Ctx`: `cx.after(seconds, f)`, `cx.every(seconds, f)`, `cx.next_frame(f)` (`f` may ask for the frame's
-  `double` time), `cx.animate(seconds, easing, f)` (a `float` t), `cx.background(work, done)`, `cx.spawn(f)` (a coroutine), `cx.watch_fd(fd, events, f)`
+  `double` time), `cx.animate(seconds, easing, f)` (a `float` t), `cx.background(work, done)`, `cx.spawn(f)` (a coroutine), `cx.watch_fd(fd, events, f)`, `cx.watch_path(path, flags, f)` (a `const gp_path_event&`)
   (`FdEvent{fd, events}`) and `cx.load_image(path, f)` (a `gp_image`). The callable names its parameters as a handler does (`Self&` is the state of
   the entity the ctx belongs to, `Ctx`, the extra) and, unlike a handler's, is **owned**: it is moved to the heap, kept until the task is over and
   then destroyed exactly once, whether it ran, was cancelled (`Task::cancel()`), lost its entity or window, or the app shut down, so it may capture
@@ -716,6 +716,41 @@ handler or a render function has one (`cx->window`); `gp_ctx_for_window(app, win
   following the first window. Work with no window follows the first one, as before.
 * The last window closing ends the app, which cancels the rest.
 
+### Watching files and directories
+
+On Linux (inotify) and Windows (`ReadDirectoryChangesW`):
+
+```c
+static void changed(void *self, gp_ctx *cx, const gp_path_event *ev, void *data) {
+    if (ev->kind == GP_PATH_RENAMED) printf("%s -> %s\n", ev->old_path, ev->path);
+    else printf("%d %s\n", ev->kind, ev->path);
+}
+gp_task t = gp_watch_path(cx, "/home/me/project", GP_WATCH_RECURSIVE, changed, NULL);   /* a directory, and everything below it */
+gp_task f = gp_watch_path(cx, "/home/me/settings.json", 0, reload, NULL);              /* one file */
+```
+
+* **Kinds:** `GP_PATH_CREATED`, `GP_PATH_MODIFIED` (contents or attributes), `GP_PATH_DELETED`, `GP_PATH_RENAMED` (within what is
+  watched: `old_path` to `path`; moved in from outside is CREATED, moved out is DELETED), `GP_PATH_OVERFLOW` (the system's queue
+  overflowed and events were lost: look again) and `GP_PATH_GONE` (the watched directory itself was deleted or moved: the watch ends).
+  `path` is the watched path joined with the entry's name by `/`, valid during the callback.
+* **A directory** reports its entries; with `GP_WATCH_RECURSIVE`, the entries of every directory below it too, including directories made
+  or moved in later. What such a directory already holds when it is first seen is reported as CREATED, so a tree moved in arrives whole on
+  both systems.
+* **A file** is watched through its directory, keeping only its own name: so the watch survives what editors do (write a new file and rename
+  it over the old one, seen as CREATED), and the file being deleted and made again. A name that does not exist yet can be watched, as long as
+  its directory does.
+* **In order, folded where it does not matter:** events arrive in the order they happened; identical MODIFIED events that arrive together
+  are delivered once (a hundred quick writes are one or two events, not a hundred).
+* **Nothing polls.** One thread per app sleeps in the system's call and wakes the loop when there is something to say; an idle watch costs
+  nothing. Watches are tasks like the rest: `gp_cancel`, or the owning entity's release, ends them, and the system's watches go with them.
+  A path that cannot be watched gives a null task.
+* `tests/fswatch_test.c` (on both systems): each kind with its paths, the order, folding, recursion (made later, moved in with contents,
+  renamed with contents), file watches (other names ignored, replaced by a rename, deleted and made again, not there yet), two watches of
+  one directory, cancelling from inside a callback, entity release, the loop woken by a write from another thread with nothing else
+  pending, nothing left held afterwards, the directory deleted (GONE; Linux); 24 mutants, all caught but five that change nothing the
+  system lets one observe (a defensive wait for a rename's second half, a separator for the root `/`, two guards repeated elsewhere).
+  Under Wine, a recursive watch sees only one level down (Wine's emulation); Windows itself sees the whole tree.
+
 ### Watching file descriptors
 
 (Not on Windows: these calls exist where the header defines `GP_HAS_FD`.)
@@ -926,7 +961,7 @@ translate; nested ones compose. They are made for `gp_with_animation` (which cou
     that is animated through every size. Above 256 px a transform does not make bitmaps bigger (one glyph must fit an atlas): they are stretched the rest of the way.
   * A scale that is **animated** therefore draws its text on the pixel grid in every frame (it steps by a pixel now and then, as in a browser) rather than gliding as a
     stretched picture; text inputs, being made of text elements, get all of this (their caret and selection are boxes under the transform, within a pixel of the glyphs).
-  * Not done: an SVG drawing (`gp_svg`) is still rasterized for the window's scale only and stretched by a transform above it.
+  * An SVG drawing (`gp_svg`) under a scale is rasterized for its size on the screen too (see "SVG and paths").
   `tests/textscale_test.c`: a text under scales of 1, 2, 0.5, 1.3 and 2.5 against the same text set at that size where the first is seen (the same layout box at every
   scale, the scene's glyphs are the cache's for the size on the screen at the transformed origins, and the frame's ink is the reference's: under 3 % of the inked pixels
   differ, against 35 % and more for stretched bitmaps), turned text, and a cached view whose scale changes (5 mutants, all caught).
@@ -1200,8 +1235,11 @@ Text in any script just works if a font for it is installed: there is nothing to
   glyphs that did not fit, both atlases are cleared, and the window repaints (verified
   pixel-identical to a run with no resets).
 * **Limits.** No vertical text. Color is
-  implemented and tested for fixed-size **CBDT** bitmap fonts (Noto Color Emoji) only; COLR/CPAL,
-  SVG and sbix fonts are not handled and would draw as plain outlines or not at all. When wrapping,
+  implemented and tested for fixed-size **CBDT** bitmap fonts (Noto Color Emoji) and for **OpenType SVG** fonts: when FreeType is built
+  with `FT_CONFIG_OPTION_SVG` (2.12 and later; `gp_text_svg_fonts()` says), gpuic gives it renderer hooks that draw a glyph's element
+  (`id="glyphN"`, cut out of the font's document, which may hold many) with the SVG code above at the size asked for, into the color atlas;
+  a glyph the table lacks is its outline (`tests/svgfont_test.c`, with a font made by `tools/gen_svg_font.py`). A color font is used for the text it covers
+  when the app names its family; otherwise color fonts serve emoji only. COLR/CPAL and sbix fonts are not handled and would draw as plain outlines or not at all. When wrapping,
   each word is measured separately while a line is painted as one shaped run, so kerning across a
   space can differ by a fraction of a pixel between the two. Text is never shaped across elements.
 
@@ -1552,32 +1590,67 @@ gp_svg arrow = gp_svg_from_path(app, "M0 0 L20 10 L0 20 Z", 20, 20, fill, stroke
   substituted in the text before parsing, once per raster.
 * **Supported:** paths with every command (arcs too), `rect` (with `rx`), `circle`, `ellipse`, `line`, `polyline`, `polygon`, groups and
   transforms, fill and stroke (color, opacity, fill-rule, width, joins, caps, dashes), linear and radial gradients with `<defs>`
-  and references, simple `<style>` class selectors, and, added in front of nanosvg by `src/svgx.c` (below), `<use>`, `<symbol>`, clip paths, masks, filters and `<text>`.
-  **Not supported:** patterns, markers, embedded images, `textPath`, CSS beyond simple classes. A document over 8 MB, empty, or over 100000 px is refused.
-* **`<use>`, `<symbol>`, clip paths, masks and text** (`src/svgx.c`; a document with none of them goes straight to nanosvg as before). The document is parsed into a small tree and
-  rewritten before nanosvg sees it:
-  * `<use href="#id">` (or `xlink:href`) is replaced by a `<g>` that carries the use's attributes (so `fill` and `stroke` pass down to a shape that sets none) and `transform` followed by
-    `translate(x y)`, holding a copy of what it points at; a `<symbol>` becomes a group scaled by its `viewBox` into the use's `width` and `height` (kept in proportion, centered), uses of
-    uses and of groups of uses work, and a document that points at itself or doubles at every step stops after a budget of copies.
-  * `clip-path` and `mask` (attribute or `style`) cannot be done in nanosvg's single pass, so the document is cut into **layers** in drawing order: a run of shapes with neither is one
-    layer, each element that has one (with everything in it) is a layer of its own. Each layer is a copy of the document holding only its shapes, drawn by nanosvg; the clip path becomes a
-    second document (its shapes solid black, whatever they are painted with, `clip-rule` as the fill rule, a `<use>` inside it fine) in the coordinates of the clipped element, so the
-    transforms of its ancestors and its own apply, and its alpha is the mask; a `<mask>` the same with luminance times alpha of what it draws (black, the default, hides). A layer is
-    multiplied by them and put over what is below, in premultiplied bytes. A clip or mask that is not there, is not what the reference says it is, or has `objectBoundingBox` units is
-    ignored (the element is drawn whole). Not done: the mask's region, a clip on something inside a clipped element (only the outermost counts), group opacity (nanosvg applies opacity per shape).
-  * `filter="url(#f)"` (attribute or `style`): the element is a layer of its own like a clipped one, and after nanosvg has drawn it, its layer goes through the filter's primitives in order,
-    each reading `in` / `in2` (`SourceGraphic`, `SourceAlpha`, a named `result`, by default the primitive before): `feGaussianBlur` (an exact gaussian, `stdDeviation` in user units times the raster's
-    scale, one or two numbers), `feOffset`, `feFlood`, `feComposite` (over, in, out, atop, xor, arithmetic), `feMerge`, `feBlend` (normal, multiply, screen, darken, lighten), `feColorMatrix`
-    (matrix, saturate, hueRotate, luminanceToAlpha) and `feDropShadow`. The work is in premultiplied floats in linear light, as SVG says, unless the filter says
-    `color-interpolation-filters="sRGB"`, and comes after drawing and before the clip and the mask. A primitive that is not supported passes its input on, a filter that is not there (or no filter) leaves the
-    element as it was, and the filter region is not applied (the filter works over the whole picture, so a big blur is not cut at the element's box + 10%). Not done: `feTurbulence`, `feImage`, lighting, `feMorphology`,
-    `feConvolveMatrix`, `feDisplacementMap`, `feComponentTransfer`, `filterUnits` / `primitiveUnits` in `objectBoundingBox`, CSS filter functions.
-  * `<text>` is drawn as the **outlines of its glyphs**: the text system shapes it (the fonts the app has: `font-family`, `font-size` in px, pt or em, `font-weight`, `font-style`) and FreeType's
-    outlines become path data, so text is a shape like any other (a clip cuts it, a use copies it, `fill`, `stroke` and transforms apply; synthetic bold and italic as in the UI).
-    `text-anchor`, `x`, `y`, `dx`, `dy`, tspans (with their own `x`, `y`, `dx`, `dy` and paint; the text's own text comes before its tspans), entities and white space as XML does. Not done: `textPath`,
-    `letter-spacing`, `rotate`, `textLength`, right-to-left and vertical text.
-  * `tests/svgx_test.c` (no display): the pixels of each against the same shapes drawn directly or against exact geometry (a circle clip equals the circle itself to 3 bytes, at 1x and 2x, through
-    group transforms), and about 80 mutants of the rewriting, the compositing, the filters and the text.
+  and references (nanosvg), and, by `src/svgx.c` and `src/svgfx.c` (below), CSS, `<use>`, `<symbol>`, clip paths, masks, filters, patterns, markers,
+  `<image>`, group opacity and `<text>`. **Not supported:** animation and scripting, `<foreignObject>`, nested `<svg>` viewports (drawn as groups),
+  images from files or URLs (only `data:` URLs), conic gradients. A document over 8 MB, empty, or over 100000 px is refused.
+* **How the rest is done** (`src/svgx.c`; a document that needs none of it goes straight to nanosvg). The document is parsed into a small tree and
+  rewritten, then cut into **layers**, a tree of them, put together in premultiplied bytes:
+  * **CSS:** the rules of `<style>` elements are written into each element's `style`, ahead of its own (which wins): type, class, id, attribute
+    (`[a]`, `[a=v]`), universal and `:first-child` selectors, compounds of them, descendant and child combinators, by specificity and then order;
+    at-rules are skipped and other pseudo-classes never match. So `clip-path`, `mask`, `filter` and the rest work from a rule too.
+  * **`<use>`, `<symbol>`:** the referenced element is copied in place, inside a `<g>` with the use's attributes and `translate(x y)`; a symbol is scaled by
+    its `viewBox` (and `preserveAspectRatio`) into the use's size. Uses of uses work; a document that points at itself or doubles at every step stops at a budget.
+  * **Layers:** an element with a clip, a mask, a filter or **group opacity** is a layer that holds the layers of what is in it, so they nest (a clip inside
+    a clipped group is the intersection, a filtered group of clipped shapes, a clip path with a `clip-path` of its own); a run of plain shapes is a layer
+    nanosvg draws (the whole document written with only those shapes, so transforms and gradients are as they are). A layer with effects is drawn into
+    a buffer of its own, filtered, cut by its clip, multiplied by its mask and its opacity, and put over what is below. Opacity on a group of two or more
+    things, or on a shape with both a fill and a stroke, is a layer (the overlap of two half-opaque shapes shows the top one at half); on one thing alone it
+    is multiplied into that thing's own.
+  * **Clips and masks** are documents of their own, drawn by all of this again (to a depth of 6), in the coordinates of the element with its ancestors'
+    transforms: a clip's shapes solid black (`clip-rule` as the fill rule, a `<use>` or text inside fine), its alpha the coverage; a mask's luminance times
+    alpha, or alpha with `mask-type="alpha"`, and nothing outside the mask's region (`x`, `y`, `width`, `height`; -10 % / 120 % of the box by default).
+    `clipPathUnits`, `maskUnits` and `maskContentUnits` in `objectBoundingBox` go through the element's box. What the content of a clip path, mask,
+    pattern or marker inherits is what is where it is defined, not where it is used.
+  * **Patterns:** a shape filled or stroked with one is a layer: the tile is drawn (a document of its own: patterns in patterns, clips in patterns) at
+    the resolution it has on the screen, and sampled under the shape's coverage, repeated, through `patternTransform`. `patternUnits`,
+    `patternContentUnits`, `viewBox`, `preserveAspectRatio` and `href` to another pattern (attributes and content inherited) are as SVG says.
+  * **Markers:** each vertex of a `path`, `line`, `polyline` or `polygon` with `marker-start` / `-mid` / `-end` (or `marker` in a style) gets a `<g>` after the
+    shape: the marker's content at the vertex, turned by `orient` (`auto` along the bisector of the two segments, `auto-start-reverse`, an angle),
+    scaled by `markerUnits` (the stroke width by default) and by its `viewBox` into `markerWidth` x `markerHeight` around `refX`, `refY`; cut to that
+    viewport unless `overflow` is visible (only when the content does reach out of it, so most markers cost no layer). The pieces nanosvg's arcs are
+    made of are not vertices.
+  * **`<image>`:** `data:` URLs of PNG, JPEG, GIF and BMP (stb_image) and of SVG (drawn by all of this, at the size it is shown), placed by `x`, `y`,
+    `width`, `height` (missing: its own size) and `preserveAspectRatio` (meet, slice cut to the box, none), under the element's transform, bilinear
+    (`image-rendering: pixelated` nearest), with its opacity.
+  * `tests/svgx_test.c` and `tests/svgx2_test.c` (no display): pixels against the same shapes drawn directly or against exact geometry: a circle clip equals the circle to 3 bytes; pattern tiles
+    pixel by pixel where the arithmetic puts them; a marker against the same triangle drawn with the transform it should have; a PNG's quadrants; selectors
+    and specificity; overlaps under group opacity; filters against their formulas and turbulence against librsvg. 70 mutants of this code (layers, CSS,
+    patterns, markers, images, filters, text, SVG fonts, rasters under a scale) were run: all caught but two that are equivalent for the values used.
+* **Filters** (`src/svgfx.c`): `filter="url(#f)"` (and a list of them, applied in turn) on any element; also the **CSS filter functions** (`blur()`,
+  `brightness()`, `contrast()`, `grayscale()`, `sepia()`, `saturate()`, `hue-rotate()`, `invert()`, `opacity()`, `drop-shadow()`), made into the
+  equivalent primitives, in sRGB as browsers do. The work is in premultiplied floats, in linear light unless `color-interpolation-filters` says
+  sRGB, per primitive (results are converted where a primitive in one space reads one made in the other). The **filter region** (`filterUnits`, -10 % /
+  120 % of the box by default) cuts the source and every result; a primitive's **subregion** (`x`, `y`, `width`, `height` in `primitiveUnits`) cuts its
+  own, and is the picture's edge for the kernels that have edges. Lengths are user units (or fractions of the box with
+  `primitiveUnits="objectBoundingBox"`), turned into device pixels by the element's transform (an offset under a rotation turns with it). Primitives:
+  `feGaussianBlur` (exact), `feOffset`, `feFlood`, `feComposite` (over, in, out, atop, xor, lighter, arithmetic), `feMerge`, `feBlend` (all sixteen CSS
+  blend modes), `feColorMatrix` (matrix, saturate, hueRotate, luminanceToAlpha), `feComponentTransfer` (identity, table, discrete, linear, gamma),
+  `feConvolveMatrix` (order, divisor, bias, target, edge modes, preserveAlpha), `feMorphology`, `feDisplacementMap`, `feTurbulence` (the specification's
+  reference code: the same values as librsvg; `stitchTiles` stitches truly, where the reference code's own masking would not), `feDiffuseLighting` and
+  `feSpecularLighting` (distant, point and spot lights; the specification's normals with the smaller kernels at the edges), `feImage` (an element, or a
+  `data:` picture), `feTile`, `feDropShadow`. A filter with no primitives draws nothing; a reference to one that is not there is ignored, with the rest of
+  its list. Not done: `kernelUnitLength` (kernels are in device pixels), `edgeMode` on blurs, `BackgroundImage`.
+* **`<text>`** is drawn as the **outlines of its glyphs**, placed **character by character**: the text system shapes it (the app's fonts: `font-family`,
+  `font-size` in px, pt or em, `font-weight`, `font-style`) and FreeType's outlines become paths, so text is a shape like any other (clipped, masked,
+  filtered, copied by a use, painted with a pattern). `x`, `y`, `dx`, `dy` and `rotate` **lists** (one value a character; the last rotation goes on),
+  on the text and on tspans (inner ones win); `letter-spacing` and `word-spacing`; `textLength` with `lengthAdjust` `spacing` or `spacingAndGlyphs`
+  (innermost element first); `text-anchor` per chunk (each absolutely placed run), flipped by `direction="rtl"`; `dominant-baseline` (middle,
+  central, hanging, text-before-edge, text-after-edge, ideographic, mathematical) and `baseline-shift` (super, sub, a length); tspans with their own
+  font and paint in document order with the text around them (entities and white space as XML does, `xml:space="preserve"`); **`textPath`** (`href`
+  to a path or basic shape under its own transform, or SVG 2's `path`, `startOffset`, `side="right"`): each character centered on the path where it
+  falls, turned with it, `dy` across it, what falls off the end not drawn; **vertical** writing modes (`tb`, `vertical-rl`, `vertical-lr`): CJK
+  upright, the rest turned. Right-to-left runs are set as the shaping sets them (visual order), from where their first character goes. Not done:
+  `text-decoration`, `font-variant`, `method="stretch"`, per-character positions inside a right-to-left run.
 * **A patch to nanosvg:** with gradient units `objectBoundingBox` (the SVG default) a plain number such as `x2="1"` is a fraction of
   the shape's box; upstream only treated percentages that way and read `1` as one pixel, so the commonest way of writing a gradient
   gave a flat color. `third_party/nanosvg/README.md` records the change and both hashes; `tests/svg_test.c` checks a gradient written
@@ -1588,7 +1661,10 @@ gp_svg arrow = gp_svg_from_path(app, "M0 0 L20 10 L0 20 Z", 20, 20, fill, stroke
 * **Tests:** `tests/svg_test.c` (display): shapes against supersampled coverage computed independently, strokes, fractional gradients,
   fill-opacity, viewBox scaling, transforms, even-odd, `currentColor` in two colors, object-fit and corners, the registry's refusals and
   stale handles, the raster cache (sharing, per color, per size), the budget overflow and repaint, releasing. `examples/svg.c`.
-* **Not done:** SVG animation and scripting, filters, `textPath`, loading from URLs, CSS `mask` / `clip-path` in `<style>` rules (the attribute and `style=""` work).
+* **Under a transform** a drawing is rasterized for the size it has on the screen: the scale of the transform above it (the square root of its determinant)
+  times the size, in steps of an eighth of an octave (a zoom that is animated makes a few rasters, not one a frame); in perspective, at the layout's size
+  and stretched. `tests/textscale_test.c` checks the raster of a 16 px drawing under a scale of 2.5.
+* **Not done:** SVG animation and scripting, loading from files or URLs (`data:` URLs only), nested `<svg>` viewports, `<foreignObject>`.
 
 ### Stroked curves: `gp_curve`, `gp_polyline`
 
@@ -1811,11 +1887,11 @@ mouse move/hover ─────────────────────
 
 Roughly in the order I'd tackle them:
 
-1. SVG / COLRv1 emoji fonts (FreeType gives the paint graph, it would need an interpreter with gradients, transforms and blend modes of its own).
-2. SVG patterns, markers and `textPath`; the rest of the filter primitives (turbulence, lighting, morphology, convolution, displacement, component transfer) and the filter region.
-3. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux; on Windows there are no watches at all yet).
-4. A view with a scroller under the mouse is painted in full every frame (hover and scrollbars are evaluated, not cached), and a cached view that holds a scroller, a list or an overflow clip is
+1. COLRv1 emoji fonts (FreeType gives the paint graph, it would need an interpreter with gradients, transforms and blend modes of its own; it could be written
+   out as an SVG document for the code that draws SVG fonts).
+2. `epoll`-style edge-triggered watches and file-descriptor readiness for other platforms (the watcher uses `poll(2)` and an eventfd: Linux; on Windows there are no watches at all yet).
+3. A view with a scroller under the mouse is painted in full every frame (hover and scrollbars are evaluated, not cached), and a cached view that holds a scroller, a list or an overflow clip is
    painted in full when it or its scroller moves (their clip moves with them: only views without one are moved, see "Transforms" and `tests/paintshift_test.c`). The scene is still
    re-uploaded and drawn as a whole every frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
-5. Native Wayland/X11 and Vulkan backends; multi-window polish.
-6. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
+4. Native Wayland/X11 and Vulkan backends; multi-window polish.
+5. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").

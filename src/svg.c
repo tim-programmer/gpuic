@@ -7,8 +7,8 @@
  *
  * What nanosvg understands: paths (all commands, arcs included), rect, circle, ellipse, line, polyline, polygon; groups and
  * transforms; fill and stroke (colors, opacity, linear and radial gradients, fill-rule, widths, joins, caps, dashes);
- * <defs> and gradient references; <style> with simple class selectors. svgx.c adds <use>, <symbol>, clip paths and masks by rewriting the
- * document into layers, and draws <text> as the outlines of its glyphs. What none of it does: filters, patterns, markers, images inside SVGs.
+ * <defs> and gradient references; <style> with simple class selectors. svgx.c does the rest (CSS, <use>, clips, masks, filters, patterns, markers,
+ * images, group opacity, <text>) by rewriting the document and putting layers drawn by nanosvg together; this file is what knows nanosvg.
  */
 #include "internal.h"
 
@@ -86,14 +86,17 @@ bool gp_svg_probe(const char *src, size_t len, float *w, float *h) {
     return true;
 }
 
-/* One document drawn at w x h (straight alpha, as nanosvg hands it back), or NULL. */
-static uint8_t *raster_doc(const char *doc, int w, int h, float intrinsic_w) {
-    NSVGimage *im = nsvgParse((char *)doc, "px", 96.f);   /* (nanosvg works in place: the caller's copy is modified, so it is a copy) */
+/* One document drawn at w x h, `scale` device pixels per unit of the document (straight alpha, as nanosvg hands it back), or NULL. */
+uint8_t *gp_svg_nsvg_raster(const char *doc, int w, int h, float scale) {
+    if (w <= 0 || h <= 0) return NULL;
+    char *copy = strdup(doc);   /* (nanosvg works in place) */
+    NSVGimage *im = copy ? nsvgParse(copy, "px", 96.f) : NULL;
+    free(copy);
     if (!im) return NULL;
     uint8_t *px = calloc((size_t)w * (size_t)h, 4);
     NSVGrasterizer *rast = px ? nsvgCreateRasterizer() : NULL;
     if (rast) {
-        nsvgRasterize(rast, im, 0, 0, (float)w / intrinsic_w, px, w, h, w * 4);
+        nsvgRasterize(rast, im, 0, 0, scale, px, w, h, w * 4);
     } else {
         free(px);
         px = NULL;
@@ -103,54 +106,54 @@ static uint8_t *raster_doc(const char *doc, int w, int h, float intrinsic_w) {
     return px;
 }
 
-static uint8_t *raster_text(const char *doc, int w, int h, float intrinsic_w) {
+/* What nanosvg makes of a document without drawing it: the union of its shapes' boxes (with half the stroke width when `stroke`), its size, and the first
+ * path's points 0, 3 and 6 (the ends of its first two segments: the probe path `M0 0L1 0L0 1` gives the transform it is under). Returns the number of shapes, -1 if
+ * it does not parse. */
+int gp_svg_nsvg_info(const char *doc, bool stroke, float bounds[4], float size[2], float first[6]) {
     char *copy = strdup(doc);
-    uint8_t *px = copy ? raster_doc(copy, w, h, intrinsic_w) : NULL;
+    NSVGimage *im = copy ? nsvgParse(copy, "px", 96.f) : NULL;
     free(copy);
-    return px;
-}
-
-/* A document with <use>, clip-path or mask: each layer is drawn, cut by its clip (the alpha of the clip document) and its mask (the luminance times the
- * alpha of the mask document), and put over what is below, all in premultiplied bytes. */
-static uint8_t *render_layers(struct svgx *x, int w, int h, float intrinsic_w) {
-    size_t n = (size_t)w * (size_t)h;
-    uint8_t *out = calloc(n, 4);
-    if (!out) return NULL;
-    for (int i = 0; i < gp_svgx_layers(x); i++) {
-        char *ld = gp_svgx_layer_doc(x, i), *cd = gp_svgx_clip_doc(x, i), *md = gp_svgx_mask_doc(x, i);
-        uint8_t *layer = ld ? raster_text(ld, w, h, intrinsic_w) : NULL;
-        uint8_t *clip = cd ? raster_text(cd, w, h, intrinsic_w) : NULL;
-        uint8_t *mask = md ? raster_text(md, w, h, intrinsic_w) : NULL;
-        if (layer) {
-            uint8_t *filtered = gp_svgx_apply_filter(x, i, layer, w, h, (float)w / intrinsic_w);   /* (before the clip and the mask) */
-            if (filtered) { free(layer); layer = filtered; }
-            for (size_t p = 0; p < n; p++) {
-                uint8_t *s = layer + p * 4, *o = out + p * 4;
-                unsigned a = s[3];
-                if (!a) continue;
-                if (clip) a = a * clip[p * 4 + 3] / 255;
-                if (mask) {
-                    const uint8_t *m = mask + p * 4;
-                    float lum = (0.2125f * (float)m[0] + 0.7154f * (float)m[1] + 0.0721f * (float)m[2]) * (float)m[3] / 255.f;   /* (straight color, alpha) */
-                    a = (unsigned)((float)a * lum / 255.f + 0.5f);
-                }
-                if (!a) continue;
-                unsigned r = s[0] * a / 255, g = s[1] * a / 255, b = s[2] * a / 255;   /* the layer, premultiplied */
-                unsigned inv = 255 - a;
-                o[0] = (uint8_t)(r + o[0] * inv / 255);
-                o[1] = (uint8_t)(g + o[1] * inv / 255);
-                o[2] = (uint8_t)(b + o[2] * inv / 255);
-                o[3] = (uint8_t)(a + o[3] * inv / 255);
+    if (!im) return -1;
+    int n = 0;
+    if (bounds) bounds[0] = bounds[1] = bounds[2] = bounds[3] = 0.f;
+    for (NSVGshape *sh = im->shapes; sh; sh = sh->next) {
+        float e = stroke && sh->stroke.type != NSVG_PAINT_NONE ? sh->strokeWidth * 0.5f : 0.f;
+        if (bounds) {
+            float b[4] = { sh->bounds[0] - e, sh->bounds[1] - e, sh->bounds[2] + e, sh->bounds[3] + e };
+            if (n == 0) memcpy(bounds, b, sizeof b);
+            else {
+                bounds[0] = fminf(bounds[0], b[0]);
+                bounds[1] = fminf(bounds[1], b[1]);
+                bounds[2] = fmaxf(bounds[2], b[2]);
+                bounds[3] = fmaxf(bounds[3], b[3]);
             }
         }
-        free(layer);
-        free(clip);
-        free(mask);
-        free(ld);
-        free(cd);
-        free(md);
+        if (n == 0 && first) {
+            const NSVGpath *pa = sh->paths;
+            if (pa && pa->npts >= 7) {
+                first[0] = pa->pts[0]; first[1] = pa->pts[1];
+                first[2] = pa->pts[6]; first[3] = pa->pts[7];
+                first[4] = pa->pts[12]; first[5] = pa->pts[13];
+            } else {
+                memset(first, 0, 6 * sizeof *first);
+            }
+        }
+        n++;
     }
-    return out;
+    if (size) { size[0] = im->width; size[1] = im->height; }
+    nsvgDelete(im);
+    return n;
+}
+
+/* A color name SVG knows (the CSS keywords), as 0xRRGGBB. */
+bool gp_svg_named_color(const char *name, size_t len, uint32_t *rgb) {
+    for (size_t i = 0; i < sizeof nsvg__colors / sizeof *nsvg__colors; i++)
+        if (strlen(nsvg__colors[i].name) == len && strncasecmp(nsvg__colors[i].name, name, len) == 0) {
+            unsigned c = nsvg__colors[i].color;   /* (nanosvg's order: r | g << 8 | b << 16) */
+            *rgb = (c & 255) << 16 | (c >> 8 & 255) << 8 | (c >> 16 & 255);
+            return true;
+        }
+    return false;
 }
 
 uint8_t *gp_svg_render(const char *src, size_t len, uint32_t rgb, int w, int h, float intrinsic_w, gp_text_system *ts) {
@@ -158,17 +161,8 @@ uint8_t *gp_svg_render(const char *src, size_t len, uint32_t rgb, int w, int h, 
     if (!(intrinsic_w > 0.f)) return NULL;
     char *copy = with_color(src, len, rgb);
     if (!copy) return NULL;
-    struct svgx *x = gp_svgx_parse(copy, strlen(copy), ts);
-    uint8_t *px;
-    if (x) {
-        px = render_layers(x, w, h, intrinsic_w);
-        gp_svgx_free(x);
-        free(copy);
-        return px;   /* (already premultiplied) */
-    }
-    px = raster_doc(copy, w, h, intrinsic_w);
+    uint8_t *px = gp_svgx_render_doc(copy, strlen(copy), w, h, (float)w / intrinsic_w, ts, 0);   /* (premultiplied) */
     free(copy);
-    if (px) gp_image_premultiply(px, (size_t)w * (size_t)h);   /* nanosvg hands back straight alpha */
     return px;
 }
 

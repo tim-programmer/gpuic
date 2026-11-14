@@ -502,6 +502,9 @@ void gp_gfx_free(gp_gfx *g);
 void gp_text_set_gfx(gp_text_system *ts, gp_gfx *g);
 /* The shapes of `text` as SVG path data in pixels (y down, the pen at x0, y0 on the baseline); *advance is its width. NULL if nothing has an outline. malloc'd. (SVG text.) */
 char *gp_text_outline_path(gp_text_system *ts, int64_t weight, float size, const char *text, size_t len, float x0, float y0, float *advance);
+bool gp_text_svg_fonts(void);   /* FreeType can draw OpenType SVG glyphs (through svgx.c) */
+typedef struct { char *d; float x, y, advance; int cluster; } gp_outline_glyph;
+int gp_text_outline_glyphs(gp_text_system *ts, int64_t sel, float size, const char *text, size_t len, int dir, gp_outline_glyph **out, float *advance);
 gp_gfx *gp_text_gfx(const gp_text_system *ts);
 
 /* Fills in `out` from user stops: positions defaulted, clamped, held monotonic; at most GP_GRAD_MAX_STOPS. */
@@ -544,15 +547,28 @@ void gp_gfx_set_text(gp_gfx *g, gp_text_system *ts);   /* SVG <text> is drawn wi
 void gp_gfx_svg_set_budget(gp_gfx *g, size_t bytes, int count);   /* when the rasters together pass it, the frame is cleared and repainted */
 bool gp_svg_probe(const char *src, size_t len, float *w, float *h);
 uint8_t *gp_svg_render(const char *src, size_t len, uint32_t rgb, int w, int h, float intrinsic_w, gp_text_system *ts);   /* ts: for <text> (may be NULL) */   /* premultiplied RGBA, malloc'd */
-/* svgx.c: <use>, <symbol>, clip-path and mask, by rewriting the document into layers (see there). NULL from gp_svgx_parse: the document needs none of it. */
-struct svgx;
-struct svgx *gp_svgx_parse(const char *src, size_t len, gp_text_system *ts);
-void gp_svgx_free(struct svgx *d);
-int gp_svgx_layers(const struct svgx *d);
-char *gp_svgx_layer_doc(const struct svgx *d, int i);   /* the document with only layer i's shapes; malloc'd text */
-char *gp_svgx_clip_doc(const struct svgx *d, int i);    /* layer i's clip path as a document of black shapes, or NULL */
-char *gp_svgx_mask_doc(const struct svgx *d, int i);    /* layer i's mask as a document, or NULL */
-uint8_t *gp_svgx_apply_filter(const struct svgx *d, int i, const uint8_t *straight_rgba, int w, int h, float scale);   /* layer i's filter applied to the layer (straight RGBA bytes); malloc'd, or NULL if it has none */
+/* fswatch.c: watching paths for exec.c's gp_watch_path jobs. A thread turns what the system reports into events queued for the main
+ * thread (it wakes the loop); exec.c takes them and runs the callbacks. */
+typedef struct { uint64_t job; int kind; char *path, *old_path; } gp_fsevent;
+bool gp_fswatch_add(gp_app *app, uint64_t job, const char *path, int flags);   /* false: cannot be watched */
+void gp_fswatch_remove(gp_app *app, uint64_t job);
+size_t gp_fswatch_take(gp_app *app, gp_fsevent **out);   /* what is queued (malloc'd array; free each path and old_path) */
+bool gp_fswatch_pending(gp_app *app);
+void gp_fswatch_shutdown(gp_app *app);
+void gp_fswatch_debug_counts(gp_app *app, int *watches, int *dirs);   /* for tests */
+
+/* svg.c: what knows nanosvg. A document drawn at w x h with `scale` px per unit (straight RGBA, malloc'd); what it makes of one without drawing it
+ * (shape count, -1 if it does not parse; the union of the shapes' boxes; its size; the first path's points 0, 3, 6); the CSS color keywords. */
+uint8_t *gp_svg_nsvg_raster(const char *doc, int w, int h, float scale);
+int gp_svg_nsvg_info(const char *doc, bool stroke, float bounds[4], float size[2], float first[6]);
+bool gp_svg_named_color(const char *name, size_t len, uint32_t *rgb);
+/* svgx.c: a document drawn with everything nanosvg lacks (CSS, <use>, clips, masks, filters, patterns, markers, images, group opacity, text), by rewriting it
+ * and putting layers together: premultiplied RGBA, malloc'd, or NULL. depth: how deep in documents made from documents (masks, patterns) this one is. */
+uint8_t *gp_svgx_render_doc(const char *doc, size_t len, int w, int h, float scale, gp_text_system *ts, int depth);
+/* a glyph of an SVG font (the element glyph<gid> of the font's document), for FreeType's SVG hooks: its box in pixels at sx x sy pixels per font unit, and
+ * drawn into a picture with that box's top left at (left, top) */
+bool gp_svgx_glyph_box(const char *doc, size_t len, unsigned gid, float sx, float sy, float box[4]);
+uint8_t *gp_svgx_glyph_render(const char *doc, size_t len, unsigned gid, float sx, float sy, int left, int top, int w, int h);
 
 /* Decoding (image.c), also used off the main thread: straight RGBA8 -> premultiplied, in place. */
 uint8_t *gp_image_decode(const void *data, size_t size, int *w, int *h);    /* malloc'd premultiplied RGBA, or NULL */
@@ -1069,6 +1085,7 @@ struct gp_app {
     float smooth_scroll_s; /* gp_set_smooth_scrolling: seconds a wheel scroll takes to arrive, 0 = jump */
     bool primary_ours;     /* the platform would not take it, so this is the primary selection until the platform has one */
     struct gp_exec *exec;   /* timers, tasks, background pool (exec.c) */
+    struct gp_fswatch *fswatch;   /* the thread that watches files and directories (fswatch.c), once one is watched */
 
     gp_sub *subs;
     uint32_t nsubs, cap_subs, free_sub;

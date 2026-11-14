@@ -7,9 +7,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  push:          # every branch, as the Windows check
   workflow_dispatch:
 
 permissions:

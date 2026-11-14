@@ -191,7 +191,7 @@ static void test_clip(void) {
 
     /* what cannot be used is ignored: the shape is drawn whole */
     px = draw(HEAD "<defs><clipPath id='b' clipPathUnits='objectBoundingBox'><circle cx='.5' cy='.5' r='.2'/></clipPath></defs><rect width='40' height='40' fill='#f00' clip-path='url(#b)'/>" TAIL);
-    CHECK(px && is_red(P(px, 2, 2)) && is_red(P(px, 37, 37)), "clip: objectBoundingBox units are not supported: no clip");
+    CHECK(px && is_clear(P(px, 2, 2)) && is_clear(P(px, 37, 37)) && is_red(P(px, 20, 20)) && is_clear(P(px, 20, 11)), "clip: objectBoundingBox units: a circle of 0.2 of the box (8 px)");
     free(px);
     px = draw(HEAD "<rect width='40' height='40' fill='#f00' clip-path='url(#missing)'/>" TAIL);
     CHECK(px && is_red(P(px, 2, 2)), "clip: a clip that is not there: no clip");
@@ -502,7 +502,7 @@ static float blurred_box(float x0, float x1, float y0, float y1, float sd, int x
 
 static float srgb_of_linear(float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * powf(c, 1.f / 2.4f) - 0.055f; }
 
-#define FILTER(body) HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'>" body "</filter></defs>"
+#define FILTER(body) HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'>" body "</filter></defs>"
 #define RECT10 "<rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#f)'/>"
 
 static void test_filter(void) {
@@ -543,7 +543,7 @@ static void test_filter(void) {
     free(px);
 
     /* a drop shadow: the shape on top, a black half-opaque blurred copy below it, moved */
-    px = draw(HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feDropShadow dx='6' dy='4' stdDeviation='2' flood-color='#000' flood-opacity='0.5'/></filter></defs>" RECT10 TAIL);
+    px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feDropShadow dx='6' dy='4' stdDeviation='2' flood-color='#000' flood-opacity='0.5'/></filter></defs>" RECT10 TAIL);
     bad = 0;
     for (int y = 5; px && y < 38; y++)
         for (int x = 5; x < 38; x++) {
@@ -557,11 +557,11 @@ static void test_filter(void) {
     free(px);
 
     /* the same built by hand from primitives, with named results: blur -> offset -> flood -> in -> merge */
-    uint8_t *hand = draw(HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'>"
+    uint8_t *hand = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'>"
                          "<feGaussianBlur in='SourceAlpha' stdDeviation='2' result='b'/><feOffset in='b' dx='6' dy='4' result='o'/>"
                          "<feFlood flood-color='#000' flood-opacity='0.5' result='c'/><feComposite in='c' in2='o' operator='in' result='s'/>"
                          "<feMerge><feMergeNode in='s'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs>" RECT10 TAIL);
-    px = draw(HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feDropShadow dx='6' dy='4' stdDeviation='2' flood-color='#000' flood-opacity='0.5'/></filter></defs>" RECT10 TAIL);
+    px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feDropShadow dx='6' dy='4' stdDeviation='2' flood-color='#000' flood-opacity='0.5'/></filter></defs>" RECT10 TAIL);
     CHECK(px && hand && differ(px, hand, 3) == 0, "filter: feDropShadow is blur, offset, flood, composite in, merge (%d pixels differ)", px && hand ? differ(px, hand, 3) : -1);
     free(px);
     free(hand);
@@ -578,7 +578,7 @@ static void test_filter(void) {
     const char *ops[] = { "over", "in", "out", "atop", "xor" };
     for (int o = 0; o < 5; o++) {
         char doc[900];
-        snprintf(doc, sizeof doc, HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feFlood flood-color='#00f' result='fl'/>"
+        snprintf(doc, sizeof doc, HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feFlood flood-color='#00f' result='fl'/>"
                                       "<feOffset in='SourceGraphic' dx='5' result='sh'/><feComposite in='sh' in2='SourceGraphic' operator='%s'/></filter></defs>" RECT10 TAIL, ops[o]);
         px = draw(doc);
         /* sh is the box moved 5 right (20..30), SourceGraphic is 15..25: a = sh, b = source */
@@ -609,7 +609,7 @@ static void test_filter(void) {
         };
         for (size_t k = 0; k < sizeof cases / sizeof *cases; k++) {
             char doc[900];
-            snprintf(doc, sizeof doc, HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feFlood flood-color='#00f' result='fl'/>"
+            snprintf(doc, sizeof doc, HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feFlood flood-color='#00f' result='fl'/>"
                                           "<feComposite in='fl' in2='SourceGraphic' operator='%s'/></filter></defs>" RECT10 TAIL, cases[k].op);
             px = draw(doc);
             bool inside_blue = px && is_blue(P(px, 20, 20)), outside_blue = px && is_blue(P(px, 5, 5));
@@ -635,7 +635,7 @@ static void test_filter(void) {
         CHECK(px && is_red(P(px, 20, 20)) && P(px, 26, 26)[3] > 250 && P(px, 26, 26)[0] == 0 && is_clear(P(px, 14, 14)), "filter: feDropShadow with no offset given moves the shadow (2, 2)");
         free(px);
         /* colors survive the trip through linear light unchanged when nothing is done to them */
-        px = draw(HEAD "<defs><filter id='f'><feFlood flood-color='#808080'/></filter></defs>" RECT10 TAIL);
+        px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5'><feFlood flood-color='#808080'/></filter></defs>" RECT10 TAIL);
         CHECK(px && abs(P(px, 5, 5)[0] - 128) <= 1 && abs(P(px, 5, 5)[1] - 128) <= 1, "filter: a gray flood in linear light comes out the same gray (%d)", px ? P(px, 5, 5)[0] : -1);
         free(px);
     }
@@ -655,7 +655,7 @@ static void test_filter(void) {
     px = draw(FILTER("<feColorMatrix type='saturate' values='0'/>") RECT10 TAIL);
     CHECK(px && abs(P(px, 20, 20)[0] - 54) <= 2 && abs(P(px, 20, 20)[1] - 54) <= 2 && abs(P(px, 20, 20)[2] - 54) <= 2, "filter: saturate 0 in sRGB is a gray of 0.213 (%d)", px ? P(px, 20, 20)[0] : -1);
     free(px);
-    px = draw(HEAD "<defs><filter id='f'><feColorMatrix type='saturate' values='0'/></filter></defs>" RECT10 TAIL);
+    px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5'><feColorMatrix type='saturate' values='0'/></filter></defs>" RECT10 TAIL);
     int lin = (int)lroundf(255.f * srgb_of_linear(0.213f));
     CHECK(px && abs(P(px, 20, 20)[0] - lin) <= 2, "filter: the default is linearRGB: the gray is %d (got %d)", lin, px ? P(px, 20, 20)[0] : -1);
     free(px);
@@ -670,27 +670,27 @@ static void test_filter(void) {
     free(px);
 
     /* linearRGB against sRGB: a blur of two colors side by side mixes lighter in linear light */
-    uint8_t *lr = draw(HEAD "<defs><filter id='f'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
-    uint8_t *sr = draw(HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
+    uint8_t *lr = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
+    uint8_t *sr = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='5' width='15' height='30' fill='#fff'/><rect x='20' y='5' width='15' height='30' fill='#000'/></g>" TAIL);
     CHECK(lr && sr && P(lr, 20, 20)[0] > P(sr, 20, 20)[0] + 20, "filter: blurring white next to black is lighter in the middle in linear light (%d against %d)", lr ? P(lr, 20, 20)[0] : -1, sr ? P(sr, 20, 20)[0] : -1);
     free(lr);
     free(sr);
 
     /* a filter on a group filters the group as a whole (the two boxes blur together) */
-    px = draw(HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='15' width='10' height='10' fill='#f00'/><rect x='20' y='15' width='10' height='10' fill='#f00'/></g>" TAIL);
+    px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter></defs><g filter='url(#f)'><rect x='5' y='15' width='10' height='10' fill='#f00'/><rect x='20' y='15' width='10' height='10' fill='#f00'/></g>" TAIL);
     CHECK(px && P(px, 17, 20)[3] > 90 && P(px, 17, 20)[3] < 200, "filter: on a group, the gap between two shapes is filled by both blurs (%d)", px ? P(px, 17, 20)[3] : -1);
     free(px);
 
     /* the order: filter, then clip: the blur is cut at the clip */
-    px = draw(HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter><clipPath id='c'><rect x='0' y='0' width='22' height='40'/></clipPath></defs>"
+    px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feGaussianBlur stdDeviation='3'/></filter><clipPath id='c'><rect x='0' y='0' width='22' height='40'/></clipPath></defs>"
                    "<rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#f)' clip-path='url(#c)'/>" TAIL);
     CHECK(px && P(px, 21, 20)[3] > 100 && is_clear(P(px, 23, 20)) && is_clear(P(px, 27, 20)), "filter: the clip cuts the blurred shape at x = 22 (%d, %d)", px ? P(px, 21, 20)[3] : -1, px ? P(px, 23, 20)[3] : -1);
     free(px);
 
     /* what cannot be used passes through */
     uint8_t *plain = draw(HEAD "<rect x='15' y='15' width='10' height='10' fill='#f00'/>" TAIL);
-    px = draw(FILTER("<feTurbulence baseFrequency='0.1'/>") RECT10 TAIL);
-    CHECK(px && plain && differ(px, plain, 0) == 0, "filter: a primitive that is not supported passes its input on");
+    px = draw(FILTER("<feNothingLikeThis/>") RECT10 TAIL);
+    CHECK(px && plain && differ(px, plain, 0) == 0, "filter: a primitive that is not known passes its input on");
     free(px);
     px = draw(HEAD "<rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#nothing)'/>" TAIL);
     CHECK(px && plain && differ(px, plain, 0) == 0, "filter: a filter that is not there: drawn plain");
@@ -698,10 +698,10 @@ static void test_filter(void) {
     px = draw(HEAD "<defs><clipPath id='c'><rect width='5' height='5'/></clipPath></defs><rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#c)'/>" TAIL);
     CHECK(px && plain && differ(px, plain, 0) == 0, "filter: a reference to something that is no filter: drawn plain");
     free(px);
-    px = draw(HEAD "<defs><filter id='f'></filter></defs><rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#f)'/>" TAIL);
-    CHECK(px && plain && differ(px, plain, 0) == 0, "filter: a filter with no primitives changes nothing");
+    px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5'></filter></defs><rect x='15' y='15' width='10' height='10' fill='#f00' filter='url(#f)'/>" TAIL);
+    CHECK(px && is_clear(P(px, 20, 20)), "filter: a filter with no primitives draws nothing (as SVG says)");
     free(px);
-    px = draw(HEAD "<defs><filter id='f' color-interpolation-filters='sRGB'><feOffset dx='5'/></filter></defs><rect x='15' y='15' width='10' height='10' fill='#f00' style='filter:url(#f)'/>" TAIL);
+    px = draw(HEAD "<defs><filter id='f' x='-2' y='-2' width='5' height='5' color-interpolation-filters='sRGB'><feOffset dx='5'/></filter></defs><rect x='15' y='15' width='10' height='10' fill='#f00' style='filter:url(#f)'/>" TAIL);
     CHECK(px && is_red(P(px, 27, 20)) && is_clear(P(px, 17, 20)), "filter: in the style attribute");
     free(px);
     free(plain);

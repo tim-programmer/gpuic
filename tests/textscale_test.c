@@ -34,6 +34,7 @@ static const float tops[NZ] = { 0.f, 40.f, 110.f, 150.f, 210.f };
 #define TURNED_TOP 400.f
 
 static gp_app *app;
+static gp_svg dot;
 static gp_co *co_;
 static gp_entity root_view, inner_view;
 static float zc = 1.f;   /* the scale the cached view is under */
@@ -60,7 +61,10 @@ static gp_node *render(void *self, gp_ctx *cx) {
         gp_div(gp_absolute(), gp_left(0), gp_top(CACHED_TOP), gp_w(300), gp_h(30), gp_scale(zc), gp_transform_origin(0, 0), gp_child_view_cached(inner_view)),
         gp_text("Cached view", gp_text_size(SIZE * 2), gp_absolute(), gp_left(HALF + 20), gp_top(CACHED_TOP + 10)),
         gp_div(gp_absolute(), gp_left(40), gp_top(TURNED_TOP), gp_w(300), gp_h(30), gp_scale(2), gp_rotate(20), gp_transform_origin(0, 0),
-               gp_text("Turned", gp_text_size(SIZE), gp_absolute(), gp_left(10), gp_top(5))));
+               gp_text("Turned", gp_text_size(SIZE), gp_absolute(), gp_left(10), gp_top(5))),
+        /* a drawing of 16 px under a scale of 2.5, and one unscaled */
+        gp_div(gp_absolute(), gp_left(600), gp_top(460), gp_w(20), gp_h(20), gp_scale(2.5f), gp_transform_origin(0, 0), gp_svg_img(dot, gp_w(16), gp_h(16))),
+        gp_div(gp_absolute(), gp_left(700), gp_top(460), gp_w(20), gp_h(20), gp_svg_img(dot, gp_w(16), gp_h(16))));
 }
 
 static uint8_t *frame(void) {
@@ -204,6 +208,21 @@ static void run(void) {
         CHECK(ink_box(f, 0, (int)(TURNED_TOP * s), (int)(HALF * s), app->capture_h, b), "and it is drawn");
     }
 
+    /* ---- a drawing under a scale is rasterized for the size it has on the screen (an eighth of an octave: 2.5 -> 2^(11/8)), not stretched */
+    {
+        const gp_scene *sc = &win()->scene;
+        int widths[2] = { 0, 0 }, n = 0;
+        for (size_t m = 0; m < sc->len && n < 2; m++) {
+            const gp_instance *in = &sc->items[m];
+            if (in->kind != GP_PRIM_IMAGE) continue;
+            gp_gfx_image *im = gp_gfx_image_get(app->gfx, (uint32_t)in->_pad, (uint32_t)in->border_color[0]);
+            if (im) widths[n++] = im->w;
+        }
+        int want = (int)ceilf(16.f * s * exp2f(11.f / 8.f) - 0.001f), plain = (int)ceilf(16.f * s - 0.001f);
+        CHECK(n == 2 && widths[0] == want && widths[1] == plain, "a 16 px drawing under a scale of 2.5 is a raster %d wide (wanted %d), the unscaled one %d (wanted %d)",
+              widths[0], want, widths[1], plain);
+    }
+
     /* ---- a cached view: what was kept for one scale is not used under another, and its render function is not what makes it so */
     {
         int differ, inked;
@@ -240,6 +259,8 @@ static void driver(gp_co *co, void *self, gp_ctx *cx, void *data) {
 
 static void ready(gp_app *a, void *userdata) {
     app = a;
+    static const char doc[] = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><circle cx='8' cy='8' r='7' fill='#fff'/></svg>";
+    dot = gp_svg_load_memory(app, doc, sizeof doc - 1);
     inner_view = gp_view_new(app, 1, &(char){ 0 }, inner, NULL);
     root_view = gp_view_new(app, 1, &(char){ 0 }, render, NULL);
     gp_open_window(app, &(gp_window_options){ .title = "textscale_test", .width = 2 * HALF, .height = 520 }, root_view);

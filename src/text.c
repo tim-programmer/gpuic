@@ -31,6 +31,11 @@
 #include FT_MULTIPLE_MASTERS_H
 #include FT_TRUETYPE_IDS_H
 #include FT_LCD_FILTER_H
+#ifdef FT_CONFIG_OPTION_SVG
+#include FT_MODULE_H
+#include FT_OTSVG_H
+#define GP_HAVE_OTSVG 1
+#endif
 #ifdef GPUIC_HAVE_FONTCONFIG
 #include <fontconfig/fontconfig.h>
 #endif
@@ -76,6 +81,7 @@ typedef struct {
     bool color;
     float upem, ascent, descent;   /* font units */
     bool bitmap_only;              /* only fixed-size strikes (e.g. CBDT emoji) */
+    bool svg;                      /* has an 'SVG ' table: color glyphs drawn by svgx.c through FreeType's hooks */
 } gp_font;
 
 /* A shelf-packed texture atlas with a dirty rectangle for the renderer to upload. */
@@ -412,6 +418,9 @@ static int font_open(gp_text_system *ts, const char *path, int index, void *data
     f->family = face_family(face);
     f->italic = (face->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
     f->color = FT_HAS_COLOR(face) != 0;
+#ifdef GP_HAVE_OTSVG
+    f->svg = FT_HAS_SVG(face) != 0;
+#endif
     if (index >> 16) hb_font_set_var_named_instance(f->hb_font, (unsigned)(index >> 16) - 1);   /* an instance of a variable font */
     read_axes(ts->ft, face, f);
     f->var_id = 0;
@@ -1218,15 +1227,15 @@ static int style_id(gp_text_system *ts, int64_t sel) {
 }
 
 /* The registered text font of family `fam` whose weight CSS matching prefers for `weight`; the earliest
- * registered wins a tie. */
-static int registered_family_best(const gp_text_system *ts, const char *fam, int req) {
+ * registered wins a tie. Color fonts only when `color` (a family the app names itself: an SVG font, say). */
+static int registered_family_best(const gp_text_system *ts, const char *fam, int req, bool color) {
     int weight = req_weight(req);
     bool italic = req_italic(req);
     int best = -1, best_rank = 0;
     for (int i = 0; i < ts->nregistered; i++) {
         int id = ts->registered[i];
         const gp_font *f = &ts->fonts[id];
-        if (f->color || strcasecmp(f->family, fam) != 0) continue;
+        if (f->color != color || strcasecmp(f->family, fam) != 0) continue;
         int r = weight_rank(weight, f->weight) + (f->italic != italic ? 10000 : 0);
         if (best < 0 || r < best_rank) { best = id; best_rank = r; }
     }
@@ -1270,7 +1279,8 @@ static int system_family(gp_text_system *ts, const char *name, int generic, int 
  * system's. Generic names mean the app's registered default, or the system's. */
 static int find_named(gp_text_system *ts, const char *name, int generic, int req) {
     const char *reg = generic == GEN_SANS ? registered_sans_family(ts) : name;
-    int id = reg ? registered_family_best(ts, reg, req) : -1;
+    int id = reg ? registered_family_best(ts, reg, req, false) : -1;
+    if (id < 0 && reg && generic == GEN_NONE) id = registered_family_best(ts, reg, req, true);   /* (a color font is used for text when it is named) */
     if (id < 0 && !ts->no_system) id = system_family(ts, name, generic, req);
     return id;
 }
@@ -1449,12 +1459,76 @@ static char *locale_language(void) {
     return NULL;
 }
 
+#ifdef GP_HAVE_OTSVG
+/* ---------------------------------------------------------------- SVG fonts: FreeType asks these to size and draw a glyph of an 'SVG ' table */
+
+static FT_Error svg_hook_init(FT_Pointer *state) { *state = NULL; return 0; }
+static void svg_hook_free(FT_Pointer *state) { (void)state; }
+static void svg_scales(const FT_SVG_DocumentRec *d, float *sx, float *sy) {
+    *sx = (float)d->metrics.x_scale / 65536.f / 64.f;   /* (font units -> 26.6 pixels, so -> pixels) */
+    *sy = (float)d->metrics.y_scale / 65536.f / 64.f;
+}
+static FT_Error svg_hook_preset(FT_GlyphSlot slot, FT_Bool cache, FT_Pointer *state) {
+    (void)cache;
+    (void)state;
+    const FT_SVG_DocumentRec *d = (const FT_SVG_DocumentRec *)slot->other;
+    float sx, sy, box[4];
+    svg_scales(d, &sx, &sy);
+    int w = 0, h = 0;
+    if (gp_svgx_glyph_box((const char *)d->svg_document, d->svg_document_length, slot->glyph_index, sx, sy, box)) {
+        w = (int)(box[2] - box[0]);
+        h = (int)(box[3] - box[1]);
+        if ((double)w * h > 4096.0 * 4096.0) w = h = 0;
+    }
+    if (!w || !h) box[0] = box[1] = 0;
+    slot->bitmap_left = (FT_Int)box[0];
+    slot->bitmap_top = (FT_Int)-box[1];
+    slot->bitmap.rows = (unsigned)h;
+    slot->bitmap.width = (unsigned)w;
+    slot->bitmap.pitch = w * 4;
+    slot->bitmap.pixel_mode = FT_PIXEL_MODE_BGRA;
+    slot->bitmap.num_grays = 256;
+    slot->metrics.width = (FT_Pos)w * 64;
+    slot->metrics.height = (FT_Pos)h * 64;
+    slot->metrics.horiBearingX = (FT_Pos)box[0] * 64;
+    slot->metrics.horiBearingY = (FT_Pos)-box[1] * 64;
+    if (slot->metrics.vertAdvance == 0) slot->metrics.vertAdvance = (FT_Pos)((float)h * 1.2f * 64.f);
+    return 0;
+}
+static FT_Error svg_hook_render(FT_GlyphSlot slot, FT_Pointer *state) {
+    (void)state;
+    const FT_SVG_DocumentRec *d = (const FT_SVG_DocumentRec *)slot->other;
+    float sx, sy;
+    svg_scales(d, &sx, &sy);
+    int w = (int)slot->bitmap.width, h = (int)slot->bitmap.rows;
+    if (!w || !h) return 0;
+    uint8_t *px = gp_svgx_glyph_render((const char *)d->svg_document, d->svg_document_length, slot->glyph_index, sx, sy, slot->bitmap_left, -slot->bitmap_top, w, h);
+    if (!px) return FT_Err_Invalid_Argument;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {   /* premultiplied RGBA -> premultiplied BGRA */
+            const uint8_t *q = px + ((size_t)y * (size_t)w + (size_t)x) * 4;
+            uint8_t *o = slot->bitmap.buffer + (size_t)y * (size_t)slot->bitmap.pitch + (size_t)x * 4;
+            o[0] = q[2];
+            o[1] = q[1];
+            o[2] = q[0];
+            o[3] = q[3];
+        }
+    free(px);
+    slot->format = FT_GLYPH_FORMAT_BITMAP;
+    return 0;
+}
+static const SVG_RendererHooks svg_hooks = { svg_hook_init, svg_hook_free, svg_hook_render, svg_hook_preset };
+#endif
+
 gp_text_system *gp_text_system_new(void) {
     gp_text_system *ts = calloc(1, sizeof *ts);
     if (FT_Init_FreeType(&ts->ft) != 0) {
         free(ts);
         return NULL;
     }
+#ifdef GP_HAVE_OTSVG
+    FT_Property_Set(ts->ft, "ot-svg", "svg-hooks", &svg_hooks);
+#endif
 #ifdef GPUIC_HAVE_FONTCONFIG
     FcInit();
 #endif
@@ -2233,6 +2307,51 @@ char *gp_text_outline_path(gp_text_system *ts, int64_t weight, float size, const
     return o.p;
 }
 
+/* The same, glyph by glyph: each glyph's outline with its origin at (0, 0), its place from the shaping (pen x and offsets, in visual order) and its cluster
+ * (the byte where its text starts). Glyphs without an outline get d = NULL. Returns the count; *out is malloc'd (free each d, then it). dir: GP_BIDI_*. */
+int gp_text_outline_glyphs(gp_text_system *ts, int64_t sel, float size, const char *text, size_t len, int dir, gp_outline_glyph **out, float *advance) {
+    *out = NULL;
+    if (advance) *advance = 0;
+    if (!ts || !text || !len || !(size > 0.f)) return 0;
+    int cap = (int)len + 8;
+    gp_glyph_pos *g = malloc((size_t)cap * sizeof *g);
+    if (!g) return 0;
+    float width = 0;
+    int n = gp_text_shape_dir(ts, sel, size, text, len, dir, g, cap, &width);
+    if (n > cap) {
+        cap = n;
+        g = realloc(g, (size_t)cap * sizeof *g);
+        n = gp_text_shape_dir(ts, sel, size, text, len, dir, g, cap, &width);
+    }
+    if (advance) *advance = width;
+    gp_outline_glyph *o = calloc((size_t)(n ? n : 1), sizeof *o);
+    if (!o) { free(g); return 0; }
+    FT_Outline_Funcs fn = { ol_move, ol_line, ol_conic, ol_cubic, 0, 0 };
+    for (int i = 0; i < n; i++) {
+        o[i].x = g[i].x;
+        o[i].y = g[i].y;
+        o[i].advance = g[i].advance;
+        o[i].cluster = (int)g[i].cluster;
+        if (g[i].font >= ts->nfonts) continue;
+        gp_font *f = &ts->fonts[g[i].font];
+        if (f->bitmap_only) continue;
+        FT_Set_Char_Size(f->face, 0, (FT_F26Dot6)(size * 64.f + 0.5f), 72, 72);
+        if (FT_Load_Glyph(f->face, g[i].glyph, FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING) != 0 || f->face->glyph->format != FT_GLYPH_FORMAT_OUTLINE) continue;
+        if (f->oblique) {
+            FT_Matrix slant = { 0x10000, (FT_Fixed)(SYNTHETIC_OBLIQUE_SHEAR * 65536.f), 0, 0x10000 };
+            FT_Outline_Transform(&f->face->glyph->outline, &slant);
+        }
+        if (f->embolden) FT_Outline_Embolden(&f->face->glyph->outline, (FT_Pos)(size * SYNTHETIC_BOLD_STRENGTH * 64.f + 0.5f));
+        outline_out ol = { 0 };
+        FT_Outline_Decompose(&f->face->glyph->outline, &fn, &ol);
+        if (ol.open) ol_put(&ol, "Z");
+        o[i].d = ol.p;
+    }
+    free(g);
+    *out = o;
+    return n;
+}
+
 void gp_text_set_gfx(gp_text_system *ts, gp_gfx *g) {
     ts->gfx = g;
     if (g) gp_gfx_set_text(g, ts);
@@ -2252,6 +2371,37 @@ void gp_text_snap_x(gp_text_system *ts, int font_id, float px_size, float x, int
     if (b >= GP_SUBPIXEL_BINS) { b = 0; whole += 1; }   /* nearer the next pixel than its last bin */
     *pixel = (int)whole;
     *bin = b;
+}
+
+/* Whether this FreeType draws SVG fonts (built with FT_CONFIG_OPTION_SVG, 2.12 and later): without it their glyphs are their outlines. */
+bool gp_text_svg_fonts(void) {
+#ifdef GP_HAVE_OTSVG
+    return true;
+#else
+    return false;
+#endif
+}
+
+/* A glyph of an SVG font: FreeType loads its document and our hooks draw it (BGRA, premultiplied), as a color glyph. False if the glyph is not in
+ * the 'SVG ' table (then it is drawn from its outline). */
+static bool svg_glyph(gp_text_system *ts, gp_font *f, uint32_t glyph, float px_size, gp_glyph_entry *e, bool *cache) {
+#ifdef GP_HAVE_OTSVG
+    FT_Set_Char_Size(f->face, 0, (FT_F26Dot6)(px_size * 64.f + 0.5f), 72, 72);
+    if (FT_Load_Glyph(f->face, glyph, FT_LOAD_COLOR | FT_LOAD_NO_HINTING) != 0 || f->face->glyph->format != FT_GLYPH_FORMAT_SVG) return false;
+    if (FT_Render_Glyph(f->face->glyph, FT_RENDER_MODE_NORMAL) != 0 || f->face->glyph->bitmap.pixel_mode != FT_PIXEL_MODE_BGRA) return false;
+    FT_GlyphSlot g = f->face->glyph;
+    int w = (int)g->bitmap.width, h = (int)g->bitmap.rows, x, y;
+    if (w <= 0 || h <= 0) return true;   /* (nothing to draw: an empty entry) */
+    if (!atlas_alloc(&ts->color, w, h, &x, &y)) { *cache = false; return true; }
+    for (int row = 0; row < h; row++)
+        memcpy(ts->color.data + ((size_t)(y + row) * ts->color.w + (size_t)x) * 4, g->bitmap.buffer + (size_t)row * (size_t)g->bitmap.pitch, (size_t)w * 4);
+    atlas_mark_dirty(&ts->color, x, y, w, h);
+    *e = (gp_glyph_entry){ (float)x, (float)y, (float)w, (float)h, (float)g->bitmap_left, (float)g->bitmap_top, true, false };
+    return true;
+#else
+    (void)ts; (void)f; (void)glyph; (void)px_size; (void)e; (void)cache;
+    return false;
+#endif
 }
 
 gp_glyph_entry gp_text_glyph_lcd(gp_text_system *ts, int font_id, uint32_t glyph, float px_size, int bin, int lcd) {
@@ -2303,6 +2453,8 @@ gp_glyph_entry gp_text_glyph_lcd(gp_text_system *ts, int font_id, uint32_t glyph
                 cache = false; /* atlas full: retried after the reset */
             }
         }
+    } else if (f->svg && svg_glyph(ts, f, glyph, px_size, &e, &cache)) {
+        /* (a glyph of the 'SVG ' table, drawn into the color atlas) */
     } else {
         FT_Set_Char_Size(f->face, 0, (FT_F26Dot6)(px_size * 64.f + 0.5f), 72, 72);
         bool loaded = FT_Load_Glyph(f->face, glyph, FT_LOAD_TARGET_LIGHT) == 0;

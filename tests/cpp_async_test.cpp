@@ -15,6 +15,12 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #include <thread>
 
 using namespace gpuic;
@@ -245,6 +251,46 @@ static void test_coroutines(Co& co, Ctx cx) {
         close(fds[1]);
     }
 #endif
+    {   /* watching a directory: the closure is called with the event and destroyed once */
+        char dir[512];
+        const char* tmp = getenv("TEMP") ? getenv("TEMP") : getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
+        #ifdef _WIN32
+        snprintf(dir, sizeof dir, "%s/gpuic-cpp-watch-%d", tmp, (int)_getpid());
+#else
+        snprintf(dir, sizeof dir, "%s/gpuic-cpp-watch-%d", tmp, (int)getpid());
+#endif
+#ifdef _WIN32
+        _mkdir(dir);
+#else
+        mkdir(dir, 0755);
+#endif
+        Tok tok3 = make_tok();
+        std::string seen;
+        int kind = 0;
+        Task pw = mc.watch_path(dir, 0, [tok3, &seen, &kind](Model& self, const gp_path_event& ev) {
+            kind |= ev.kind;   /* (Windows follows CREATED with MODIFIED) */
+            seen = ev.path;
+            self.fired++;
+        });
+        CHECK(pw.active(), "watch_path made a watch");
+        std::string file = std::string(dir) + "/made.txt";
+        FILE* f = fopen(file.c_str(), "wb");
+        if (f) fclose(f);
+        for (int i = 0; i < 200 && seen.empty(); i++) co.sleep(0.01);
+        CHECK((kind & GP_PATH_CREATED) && seen.size() >= 8 && seen.compare(seen.size() - 8, 8, "made.txt") == 0, "watch_path called back (%d '%s')", kind, seen.c_str());
+        pw.cancel();
+        co.sleep(0.05);
+        CHECK(tok3.use_count() == 1, "a cancelled path watch's closure is destroyed (use_count %ld)", tok3.use_count());
+        Tok tok4 = make_tok();
+        Task bad = mc.watch_path("/no/such/dir/at/all/x", 0, [tok4](Model&, const gp_path_event&) {});
+        CHECK(!bad.active() && tok4.use_count() == 1, "a path that cannot be watched: a null task, its closure destroyed at once");
+        remove(file.c_str());
+#ifdef _WIN32
+        _rmdir(dir);
+#else
+        rmdir(dir);
+#endif
+    }
     app.release(m.id);
 }
 
