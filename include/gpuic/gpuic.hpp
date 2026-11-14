@@ -429,6 +429,9 @@ public:
     /** `f(Self&, Ctx, FdEvent)` while `fd` is ready for `events` (GP_FD_*); level-triggered, as poll(2). Not on Windows. */
     template <class F> Task watch_fd(int fd, int events, F&& f) const;
 #endif
+    /** `f(Self&, Ctx, const gp_path_event&)` as `path` (a directory, or a file) changes; flags: GP_WATCH_RECURSIVE. Linux and Windows. A null
+     *  Task if the path cannot be watched. */
+    template <class F> Task watch_path(const char* path, int flags, F&& f) const;
     /** Decodes on a pool thread; `f(Self&, Ctx, gp_image)` gets GP_IMAGE_NULL if it failed. */
     template <class F> Task load_image(const char* path, F&& f) const;
 
@@ -1044,6 +1047,7 @@ template <class D> void task_tramp(void* self, gp_ctx* cx, void* data) { Ctx ctx
 template <class D> void frame_tramp(void* self, gp_ctx* cx, double time, void* data) { Ctx ctx(cx); call(*static_cast<D*>(data), self, ctx, cx, time); }
 template <class D> void anim_fn_tramp(void* self, gp_ctx* cx, float t, void* data) { Ctx ctx(cx); call(*static_cast<D*>(data), self, ctx, cx, t); }
 template <class D> void fd_tramp(void* self, gp_ctx* cx, int fd, int events, void* data) { Ctx ctx(cx); FdEvent ev{ fd, events }; call(*static_cast<D*>(data), self, ctx, cx, ev); }
+template <class D> void path_tramp(void* self, gp_ctx* cx, const gp_path_event* ev, void* data) { Ctx ctx(cx); call(*static_cast<D*>(data), self, ctx, cx, *ev); }
 template <class D> void image_tramp(void* self, gp_ctx* cx, gp_image image, void* data) { Ctx ctx(cx); call(*static_cast<D*>(data), self, ctx, cx, image); }
 template <class D> void co_tramp(gp_co* co, void* self, gp_ctx* cx, void* data) { Co c(co); Ctx ctx(cx); call(*static_cast<D*>(data), self, c, ctx, cx); }
 template <class D> void observe_tramp(void* self, gp_ctx* cx, gp_entity observed, void* data) { Ctx ctx(cx); call(*static_cast<D*>(data), self, ctx, cx, observed); }
@@ -1153,6 +1157,13 @@ template <class F> Task Ctx::watch_fd(int fd, int events, F&& f) const {
     return t;
 }
 #endif
+template <class F> Task Ctx::watch_path(const char* path, int flags, F&& f) const {
+    using D = std::decay_t<F>;
+    D* d = detail::own<D>(std::forward<F>(f));
+    Task t(c_->app, gp_watch_path(c_, path, flags, &detail::path_tramp<D>, d));
+    gp_task_on_drop(c_->app, t.raw(), &detail::drop_box<D>, d);   /* (a null task: dropped at once) */
+    return t;
+}
 template <class F> Task Ctx::load_image(const char* path, F&& f) const {
     using D = std::decay_t<F>;
     D* d = detail::own<D>(std::forward<F>(f));

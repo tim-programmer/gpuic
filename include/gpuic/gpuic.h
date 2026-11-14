@@ -593,6 +593,42 @@ gp_task gp_watch_fd(gp_ctx *cx, int fd, int events, gp_fd_fn fn, void *data);
 bool gp_fd_set_nonblocking(int fd);
 #endif
 
+/* ---- watching files and directories ----------------------------------------------------- */
+
+/* On Linux (inotify) and Windows (ReadDirectoryChangesW).
+ *
+ *   gp_task t = gp_watch_path(cx, "/home/me/project", GP_WATCH_RECURSIVE, changed, data);
+ *   static void changed(void *self, gp_ctx *cx, const gp_path_event *ev, void *data) { ... ev->kind, ev->path ... }
+ *
+ * A directory: what happens to the entries in it (and in every directory below it with
+ * GP_WATCH_RECURSIVE; directories made later are watched as they appear). A file (or a name in a
+ * directory that exists, for a file that does not yet): only what happens to that name, so an editor
+ * that saves by writing a new file and renaming it over the old one is seen (as GP_PATH_CREATED), and
+ * the watch goes on after the file is deleted. Events come on the main thread, like every callback
+ * here, in the order they happened; `path` is the watched path joined with the entry's name by '/'
+ * (valid during the callback only). Several identical MODIFIED events that arrive together are
+ * delivered once.
+ *
+ *   GP_PATH_CREATED   an entry appeared (made, or moved in from outside what is watched)
+ *   GP_PATH_MODIFIED  a file's contents or attributes changed
+ *   GP_PATH_DELETED   an entry went (removed, or moved out of what is watched)
+ *   GP_PATH_RENAMED   moved within what is watched: from `old_path` to `path`
+ *   GP_PATH_OVERFLOW  events were lost (the system's queue was full): look again at what you know
+ *   GP_PATH_GONE      the watched directory itself is gone (deleted or moved): the watch ends
+ *
+ * A null task (gp_task_active false) if the path cannot be watched: it does not exist (nor does its
+ * directory), or the system refuses. Owned like any task: cancelled with gp_cancel or when the
+ * entity in `cx` is released. Nothing polls: a thread sleeps until the system has something to say. */
+enum { GP_PATH_CREATED = 1, GP_PATH_MODIFIED = 2, GP_PATH_DELETED = 4, GP_PATH_RENAMED = 8, GP_PATH_OVERFLOW = 16, GP_PATH_GONE = 32 };
+enum { GP_WATCH_RECURSIVE = 1 };
+typedef struct {
+    int kind;               /* GP_PATH_* */
+    const char *path;
+    const char *old_path;   /* GP_PATH_RENAMED: where it was; otherwise NULL */
+} gp_path_event;
+typedef void (*gp_path_fn)(void *self, gp_ctx *cx, const gp_path_event *ev, void *data);
+gp_task gp_watch_path(gp_ctx *cx, const char *path, int flags, gp_path_fn fn, void *data);
+
 /* ---- coroutines: async/await for C ------------------------------------------------------ */
 
 /* A coroutine is sequential code that may suspend at await points while the event loop keeps

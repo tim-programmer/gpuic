@@ -80,8 +80,8 @@ gpuic builds as a static library; there are no Windows DLL export macros yet.
 Linux is where gpuic is developed and tested. **Windows** builds (MSVC from Visual Studio 2022 17.9 on, or
 MinGW-w64/clang): coroutines run on fibers, the thread pool on Win32 threads, and fonts come from scanning
 `%WINDIR%\Fonts` and the per-user font directory. Two things are missing there: watching file descriptors
-(`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest are not declared; test for `GP_HAS_FD`), and two of the
-tests (`fd_test`, and `text_test`, which is written against POSIX and Linux font locations). So far the Windows
+(`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest are not declared; test for `GP_HAS_FD`; watching files and directories,
+`gp_watch_path`, works on both), and two of the tests (`fd_test`, and `text_test`, which is written against POSIX and Linux font locations). So far the Windows
 build has been cross-compiled with MinGW-w64 and run under Wine; `.github/workflows/windows-check.yml` builds and
 tests it with MSVC. macOS is untested: its font directories and the SDL-based GL loading follow SDL's own
 cross-platform APIs.
@@ -132,7 +132,7 @@ out: take two and subtract to measure one stretch (`tests/cables_bench.c` uses o
 `GPUIC_IGNORE_REAL_MOUSE=1` drops what the physical pointer does and keeps the injected events (the tests set it: a pointer resting over a test window changes hover and repaint behavior). `GPUIC_IGNORE_REAL_KEYS=1` does the same for the physical keyboard (keys and typed text); nothing sets it by default.
 
 `ctest` (in the build dir) runs `tests/exec_test.c` (executors), `tests/window_test.c` (what belongs to a window
-and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fd_test.c` (descriptor watches and
+and ends with it), `tests/autohide_test.c` (fading scrollbars, with the clock jumped), `tests/fswatch_test.c` (watching files and directories), `tests/fd_test.c` (descriptor watches and
 awaits: pipes, sockets, a TCP echo through coroutines, closing and cancelling at awkward moments),
 `tests/anim_test.c` (animations, with the clock jumped), `tests/fonts_test.c` (families, weights, italic and features through layout and cached views), `tests/lcd_test.c` (pixels read back for each antialiasing mode), `tests/gfx_test.c` / `tests/gradient_test.c` / `tests/image_test.c` / `tests/svg_test.c` / `tests/svgx_test.c` (SVG use, clip, mask, text) / `tests/svgx2_test.c` (CSS, nested layers, group opacity, patterns, markers, images, text layout, filters) / `tests/svgfont_test.c` (OpenType SVG fonts) / `tests/box_test.c` (gradients, images, SVG, corners and borders), `tests/flex_test.c` (auto margins, wrapped lines), `tests/minwidth_test.c` (the automatic minimum width of row items), `tests/reveal_test.c` (scroll into view), `tests/track_test.c` (track clicks), `tests/smooth_test.c` (smooth scrolling), `tests/keys_test.c` (chords, key-up, payloads), `tests/bigdoc_test.c` (a 14 MB document in the text input), `tests/grapheme_test.c` (where a character ends), `tests/variations_test.c` (variable-font axes through layout), `tests/gamma_test.c` (linear-light text blending), `tests/touch_test.c` (touch drags and flings), `tests/sticky_test.c` (pinned list headers), `tests/hlist_test.c` (horizontal lists), `tests/hvlist_test.c` (horizontal gp_list: items of different widths), `tests/border_style_test.c` (per-side border colors, dashes, dots, gradient borders), `tests/state_style_test.c` (hover, pressed and focus styles), `tests/lstate_test.c` (state styles that lay out), `tests/layer_test.c` (offscreen layers: group opacity, translucent strokes), `tests/effects_test.c` (filters, blend modes, masks), `tests/shapes_test.c` (fill rules, markers, backdrop filters), `tests/xform3d_test.c` (3D transforms, keys), `tests/svgrelease_test.c` (releasing a drawing renders only its views), `tests/pointer_test.c` (a drag's modifiers, a drag whose element moves or goes, `gp_on_hover`), `tests/paintshift_test.c` (moved painted copies), `tests/transform_test.c` (rotate, scale, translate: pixels, pointer, clips, animation), `tests/xform2_test.c` (skew, scrollers in transformed parents, a hover style's text color), `tests/curve_test.c` (stroked curves: pixels against exact geometry, hit testing, transforms, cached views), `tests/stroke_test.c` (dashes, gradients along a stroke, arrowheads, fills, text on a path), `tests/wheel_test.c` (`gp_on_wheel`), `tests/shutdown_test.c` (what runs, and in which order, when the app ends), `tests/cpp_pedantic.cpp` (the header as ISO C++ under `-Wpedantic -Werror`), `tests/cables_bench.c` (not a test: the cost of a draw with a hundred cables), `tests/cpp_test.cpp` (the C++ layer), `tests/cpp_async_test.cpp` (its timers, coroutines, observers, text fields and loaders: closures destroyed once), `tests/cpp_input_test.cpp` (its scroll and focus handles, key bindings, actions and clipboard), `tests/ime_wrap_test.c` (a composition in a soft-wrapped field), `tests/wrapedit_test.c` (rows kept up to date through edits), `tests/lazywrap_test.c` (a big soft-wrapped document wrapped only where it is looked at, the view anchored to text), `tests/longline_test.c` (very long lines: segments without wrap, pieces with it), `tests/dualcaret_test.c` (the second caret at a direction change), `tests/input_test.c` (the text input
 widget, end to end through `gp_simulate_*`), `tests/list_test.c` (the variable-height list, checked
@@ -236,7 +236,7 @@ Link `gpuic::cpp` (CMake: `target_link_libraries(app PRIVATE gpuic::cpp)`; it is
   handler is run from simulated input with every parameter list, with captures, and so on, and entities and views with non-trivial state are
   constructed, grown, destroyed once, rendered as children and updated. About 50 mutants of the header and the generated file are all caught.
 * **Timers and background work** are methods of `Ctx`: `cx.after(seconds, f)`, `cx.every(seconds, f)`, `cx.next_frame(f)` (`f` may ask for the frame's
-  `double` time), `cx.animate(seconds, easing, f)` (a `float` t), `cx.background(work, done)`, `cx.spawn(f)` (a coroutine), `cx.watch_fd(fd, events, f)`
+  `double` time), `cx.animate(seconds, easing, f)` (a `float` t), `cx.background(work, done)`, `cx.spawn(f)` (a coroutine), `cx.watch_fd(fd, events, f)`, `cx.watch_path(path, flags, f)` (a `const gp_path_event&`)
   (`FdEvent{fd, events}`) and `cx.load_image(path, f)` (a `gp_image`). The callable names its parameters as a handler does (`Self&` is the state of
   the entity the ctx belongs to, `Ctx`, the extra) and, unlike a handler's, is **owned**: it is moved to the heap, kept until the task is over and
   then destroyed exactly once, whether it ran, was cancelled (`Task::cancel()`), lost its entity or window, or the app shut down, so it may capture
@@ -715,6 +715,41 @@ handler or a render function has one (`cx->window`); `gp_ctx_for_window(app, win
 * **Frames are paced per window**, by the refresh rate of the display that window is on, instead of everything
   following the first window. Work with no window follows the first one, as before.
 * The last window closing ends the app, which cancels the rest.
+
+### Watching files and directories
+
+On Linux (inotify) and Windows (`ReadDirectoryChangesW`):
+
+```c
+static void changed(void *self, gp_ctx *cx, const gp_path_event *ev, void *data) {
+    if (ev->kind == GP_PATH_RENAMED) printf("%s -> %s\n", ev->old_path, ev->path);
+    else printf("%d %s\n", ev->kind, ev->path);
+}
+gp_task t = gp_watch_path(cx, "/home/me/project", GP_WATCH_RECURSIVE, changed, NULL);   /* a directory, and everything below it */
+gp_task f = gp_watch_path(cx, "/home/me/settings.json", 0, reload, NULL);              /* one file */
+```
+
+* **Kinds:** `GP_PATH_CREATED`, `GP_PATH_MODIFIED` (contents or attributes), `GP_PATH_DELETED`, `GP_PATH_RENAMED` (within what is
+  watched: `old_path` to `path`; moved in from outside is CREATED, moved out is DELETED), `GP_PATH_OVERFLOW` (the system's queue
+  overflowed and events were lost: look again) and `GP_PATH_GONE` (the watched directory itself was deleted or moved: the watch ends).
+  `path` is the watched path joined with the entry's name by `/`, valid during the callback.
+* **A directory** reports its entries; with `GP_WATCH_RECURSIVE`, the entries of every directory below it too, including directories made
+  or moved in later. What such a directory already holds when it is first seen is reported as CREATED, so a tree moved in arrives whole on
+  both systems.
+* **A file** is watched through its directory, keeping only its own name: so the watch survives what editors do (write a new file and rename
+  it over the old one, seen as CREATED), and the file being deleted and made again. A name that does not exist yet can be watched, as long as
+  its directory does.
+* **In order, folded where it does not matter:** events arrive in the order they happened; identical MODIFIED events that arrive together
+  are delivered once (a hundred quick writes are one or two events, not a hundred).
+* **Nothing polls.** One thread per app sleeps in the system's call and wakes the loop when there is something to say; an idle watch costs
+  nothing. Watches are tasks like the rest: `gp_cancel`, or the owning entity's release, ends them, and the system's watches go with them.
+  A path that cannot be watched gives a null task.
+* `tests/fswatch_test.c` (on both systems): each kind with its paths, the order, folding, recursion (made later, moved in with contents,
+  renamed with contents), file watches (other names ignored, replaced by a rename, deleted and made again, not there yet), two watches of
+  one directory, cancelling from inside a callback, entity release, the loop woken by a write from another thread with nothing else
+  pending, nothing left held afterwards, the directory deleted (GONE; Linux); 24 mutants, all caught but five that change nothing the
+  system lets one observe (a defensive wait for a rename's second half, a separator for the root `/`, two guards repeated elsewhere).
+  Under Wine, a recursive watch sees only one level down (Wine's emulation); Windows itself sees the whole tree.
 
 ### Watching file descriptors
 

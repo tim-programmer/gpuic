@@ -547,6 +547,16 @@ void gp_gfx_set_text(gp_gfx *g, gp_text_system *ts);   /* SVG <text> is drawn wi
 void gp_gfx_svg_set_budget(gp_gfx *g, size_t bytes, int count);   /* when the rasters together pass it, the frame is cleared and repainted */
 bool gp_svg_probe(const char *src, size_t len, float *w, float *h);
 uint8_t *gp_svg_render(const char *src, size_t len, uint32_t rgb, int w, int h, float intrinsic_w, gp_text_system *ts);   /* ts: for <text> (may be NULL) */   /* premultiplied RGBA, malloc'd */
+/* fswatch.c: watching paths for exec.c's gp_watch_path jobs. A thread turns what the system reports into events queued for the main
+ * thread (it wakes the loop); exec.c takes them and runs the callbacks. */
+typedef struct { uint64_t job; int kind; char *path, *old_path; } gp_fsevent;
+bool gp_fswatch_add(gp_app *app, uint64_t job, const char *path, int flags);   /* false: cannot be watched */
+void gp_fswatch_remove(gp_app *app, uint64_t job);
+size_t gp_fswatch_take(gp_app *app, gp_fsevent **out);   /* what is queued (malloc'd array; free each path and old_path) */
+bool gp_fswatch_pending(gp_app *app);
+void gp_fswatch_shutdown(gp_app *app);
+void gp_fswatch_debug_counts(gp_app *app, int *watches, int *dirs);   /* for tests */
+
 /* svg.c: what knows nanosvg. A document drawn at w x h with `scale` px per unit (straight RGBA, malloc'd); what it makes of one without drawing it
  * (shape count, -1 if it does not parse; the union of the shapes' boxes; its size; the first path's points 0, 3, 6); the CSS color keywords. */
 uint8_t *gp_svg_nsvg_raster(const char *doc, int w, int h, float scale);
@@ -1075,6 +1085,7 @@ struct gp_app {
     float smooth_scroll_s; /* gp_set_smooth_scrolling: seconds a wheel scroll takes to arrive, 0 = jump */
     bool primary_ours;     /* the platform would not take it, so this is the primary selection until the platform has one */
     struct gp_exec *exec;   /* timers, tasks, background pool (exec.c) */
+    struct gp_fswatch *fswatch;   /* the thread that watches files and directories (fswatch.c), once one is watched */
 
     gp_sub *subs;
     uint32_t nsubs, cap_subs, free_sub;

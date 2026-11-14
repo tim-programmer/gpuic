@@ -22,7 +22,7 @@
 #include <unistd.h>
 #endif
 
-enum { JOB_TIMER = 1, JOB_FRAME, JOB_ANIM, JOB_BG, JOB_CORO, JOB_FD };
+enum { JOB_TIMER = 1, JOB_FRAME, JOB_ANIM, JOB_BG, JOB_CORO, JOB_FD, JOB_PATH };
 
 struct gp_job {
     uint64_t id;
@@ -53,6 +53,8 @@ struct gp_job {
     gp_fd_fn fd_fn;                          /* callback watch; a coroutine's await has co_job instead */
     int *revents_out;                        /* await: where to store what happened (0 = timed out) */
     bool oneshot;                            /* await: finished after one delivery */
+
+    gp_path_fn path_fn;                      /* JOB_PATH */
 };
 
 typedef struct { gp_entity entity; gp_task_fn fn; void *data; } post_item;
@@ -675,6 +677,47 @@ uint64_t gp_exec_wake_fd(gp_app *app, uint64_t co_job, int fd, int events, int64
 
 #endif   /* GP_HAS_FD */
 
+/* ---------------------------------------------------------------- files and directories */
+
+gp_task gp_watch_path(gp_ctx *cx, const char *path, int flags, gp_path_fn fn, void *data) {
+    if (!cx || !path || !*path || !fn) return (gp_task){ 0 };
+    gp_job *j = new_job(cx->app, JOB_PATH, cx);
+    j->path_fn = fn;
+    j->data = data;
+    if (!gp_fswatch_add(cx->app, j->id, path, flags)) {
+        j->finished = true;   /* (swept; the handle is null) */
+        return (gp_task){ 0 };
+    }
+    return (gp_task){ j->id };
+}
+
+static bool same_str(const char *a, const char *b) { return a == b || (a && b && strcmp(a, b) == 0); }
+
+static void drain_paths(gp_app *app) {
+    gp_fsevent *ev = NULL;
+    size_t n = gp_fswatch_take(app, &ev);
+    for (size_t i = 0; i < n; i++) {
+        bool dup = false;   /* the same MODIFIED again in this batch: once is enough */
+        for (size_t k = 0; ev[i].kind == GP_PATH_MODIFIED && k < i && !dup; k++)
+            dup = ev[k].job == ev[i].job && ev[k].kind == GP_PATH_MODIFIED && same_str(ev[k].path, ev[i].path);
+        gp_job *j = find_job(app->exec, ev[i].job);
+        if (!dup && j && job_active(j)) {
+            if (!owner_alive(app, j)) j->cancelled = true;
+            else {
+                gp_ctx cx;
+                void *self;
+                job_ctx(app, j, &cx, &self);
+                gp_path_event pe = { ev[i].kind, ev[i].path, ev[i].old_path };
+                j->path_fn(self, &cx, &pe, j->data);
+                if (ev[i].kind == GP_PATH_GONE) j->finished = true;
+                gp_effects_flush(app);
+            }
+        }
+    }
+    for (size_t i = 0; i < n; i++) { free(ev[i].path); free(ev[i].old_path); }
+    free(ev);
+}
+
 /* ---------------------------------------------------------------- running */
 
 static void wake_co(gp_app *app, uint64_t co_job) {
@@ -909,6 +952,7 @@ static void sweep(gp_exec *ex) {
 #ifdef GP_HAS_FD
             if (j->kind == JOB_FD) watch_remove(ex, j->id);
 #endif
+            if (j->kind == JOB_PATH) gp_fswatch_remove(ex->app, j->id);
             if (j->co) gp_co_free(j->co);
             if (j->drop) VEC_PUSH(drops, ndrops, cap_drops, ((pending_drop){ j->drop, j->drop_data }));
             free(j);
@@ -933,6 +977,7 @@ void gp_exec_run(gp_app *app) {
 #ifdef GP_HAS_FD
     drain_fds(app);
 #endif
+    drain_paths(app);
     run_timers(app);
     run_frames(app);
     sweep(app->exec);
@@ -943,7 +988,7 @@ int gp_exec_timeout_ms(gp_app *app) {
     gp_mutex_lock(&ex->lock);
     bool pending = ex->nposts || ex->ncompleted || ex->nfd_ready;
     gp_mutex_unlock(&ex->lock);
-    if (pending) return 0;
+    if (pending || gp_fswatch_pending(app)) return 0;
 
     int64_t now = gp_now_ns(), best = INT64_MAX;
     for (size_t i = 0; i < ex->njobs; i++) {
@@ -1003,6 +1048,7 @@ void gp_exec_shutdown(gp_app *app) {
         ex->poller_started = false;
     }
 #endif
+    gp_fswatch_shutdown(app);   /* (its watches were cancelled above) */
     for (size_t i = 0; i < ex->nqueue; i++)
         VEC_PUSH(ex->completed, ex->ncompleted, ex->cap_completed, ex->queue[i].job_id);
     ex->nqueue = 0;
