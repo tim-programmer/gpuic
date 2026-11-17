@@ -34,7 +34,20 @@
 # include <unistd.h>
 #endif
 
-#define CO_STACK_SIZE (256 * 1024)
+/* AddressSanitizer pads every frame and says a program may need up to three times its stack under it: coroutines get four times as much
+ * there (a test painting a tree 16 deep from a coroutine overflowed 256 KB under clang's). The pages are only taken as they are touched. */
+#if defined(__SANITIZE_ADDRESS__)
+# define GP_ASAN 1
+#elif defined(__has_feature)
+# if __has_feature(address_sanitizer)
+#  define GP_ASAN 1
+# endif
+#endif
+#ifdef GP_ASAN
+# define CO_STACK_SIZE (1024 * 1024)
+#else
+# define CO_STACK_SIZE (256 * 1024)
+#endif
 #define CO_GUARD_SIZE 4096
 
 enum { CO_NEW,
