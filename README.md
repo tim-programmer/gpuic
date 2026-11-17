@@ -181,20 +181,32 @@ gp_app_free(app);                                 /* the view closes: windows, t
   or not at all (Windows). So a press in an embedded window takes the focus (`XSetInputFocus`, falling back to the parent when the window
   goes; `SetFocus`), as plugin views do; the host gets it back when the user clicks the host. SDL also gives a window the focus when it opens.
 * **`examples/clap_view.c`** is all of this as a CLAP plugin: a stereo effect that passes audio through, whose editor is a gpuic view
-  with a text field and a button, stepped from the host's timer (`clap.timer-support`) and embedded with `gui.set_parent`. Build it with
+  with a text field and a button, stepped from the host's timer (`clap.timer-support`) and embedded with `gui.set_parent`. What the user
+  changes (the text, the clicks) lives in the plugin, not the editor, which the host frees whenever it hides it: it is saved with the
+  project (`clap.state`), the host is told of each change (`clap.host-state`'s `mark_dirty`), and a load while the editor is open shows in
+  it (tried in REAPER: a project's state loaded, shown, and saved back unchanged, also with the editor open). Build it with
   `cmake -B build -DGPUIC_BUILD_CLAP_EXAMPLE=ON` (fetches the CLAP headers; gpuic and its dependencies are then compiled position-independent,
   and on Linux everything but `clap_entry` stays inside the plugin, so another plugin's SDL does not meet this one's) and copy
   `clap_view.clap` to `~/.clap`. In REAPER 7 on Linux (X11 through XWayland) it scans, opens in a floating FX window at the editor's
   size, takes clicks, takes the keyboard focus on a click and types into its field; the host's own window, menus and shortcuts are unchanged.
-  That test found that SDL put a reparented window where it would have centered it on the screen, now inside the parent: it is moved to the
-  parent's corner, and `tests/host_test.c` checks where it sits after opening and after a resize.
+  The first test found that SDL put a reparented window where it would have centered it on the screen, now inside the parent; the docked FX
+  chain then showed that SDL does it again on every resize (it keeps a window's place in screen coordinates and applies it parent-relative),
+  which left the editor off in a corner of REAPER's area, unrepainted. So an embedded X11 window is resized by gpuic itself
+  (`XMoveResizeWindow`, at the parent's corner), not by SDL, and opens without waiting for the server (no `SDL_SyncWindow`): about 0.18 s
+  from `gui.create` to the first frame. `tests/host_test.c` checks where the window sits after opening and after two resizes. Tried in
+  REAPER in a floating FX window and docked in the FX chain, resized there several times. Closing the editor and opening it again (or
+  removing the plugin and adding it back) then showed nothing and froze REAPER for 5 to 10 s: an app destroyed its last window before its
+  OpenGL context, and NVIDIA's driver then waits about 5 s in the first swap of every window made after two such ends (pure SDL does the
+  same in that order). The context now goes first; `tests/host_test.c` makes and frees an app four times and checks no step stalls, and in
+  REAPER four opens, closes, a removal and a re-add each take under 0.11 s.
 * Not done: native backends without SDL, and macOS.
 
 `tests/host_test.c` steps two apps by hand: timers and drawing through steps, a click on one app's window taken by the other's step, one
 app freed while the other goes on, and a window embedded in another (its native parent checked) and resized; then, with the focus on the
 parent, a press in an embedded window takes it, and on X11 a real key typed through the X server (XTest) reaches the window's key handler.
-It runs on X11 and Windows. (A desktop's XWayland may drop XTest's keys: the test tries a window of its own first, and judges only if
-they arrive. A private X server, `Xwayland :77` then `DISPLAY=:77`, or Xvfb as CI uses, does not drop them.)
+It runs on X11 and Windows. The real key is not tried under a Wayland desktop (its XWayland asks the user, through a portal, before it
+takes XTest's input: a box pops up); a private X server (`Xwayland :77`, then run the test with `DISPLAY=:77` and `WAYLAND_DISPLAY` unset)
+or Xvfb, as CI uses, tries it. Where it is tried, the test types into a window of its own first and judges only if keys arrive there.
 
 ## How GPUI's model maps to C
 
@@ -1971,7 +1983,7 @@ mouse move/hover ─────────────────────
 Roughly in the order I'd tackle them:
 
 1. Plugins, the rest (see "Running inside a host"): the CLAP example in a real host on Windows (it was tried in REAPER on Linux only), in
-   other hosts (Bitwig), and inside REAPER's FX chain window (docked) as well as the floating one; what a host's own shortcuts take before
+   other hosts (Bitwig); what a host's own shortcuts take before
    the plugin's view sees a key; and the example built in CI.
 2. Native Wayland/X11 backends without SDL (what a plugin host would rather not have in its process: SDL's process-wide state and event
    pumping) and a Vulkan renderer. Nothing needs Vulkan yet: OpenGL 3.3 works everywhere gpuic runs. Multi-window polish.

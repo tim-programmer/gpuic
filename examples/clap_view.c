@@ -8,6 +8,10 @@
  * The parts that matter: the editor is an app the host runs (gp_app_new in gui.create, gp_app_free in gui.destroy), stepped from the host's
  * timer (clap.timer-support: gp_app_step every 16 ms), and its window opens inside the host's (gui.set_parent: gp_window_options.parent).
  * On Linux the host's window is an X11 one, so SDL is pointed at its x11 driver before the app starts.
+ *
+ * What the user changes lives in the plugin, not the editor, so it outlives the editor and is saved with the host's project (clap.state:
+ * the clicks and the text, in a small versioned format). The editor writes to it as the user works and tells the host (clap.host-state's
+ * mark_dirty), and a load while the editor is open shows in it.
  */
 #include <gpuic/gpuic.h>
 
@@ -26,21 +30,41 @@ typedef struct
     clap_plugin_t plugin;
     const clap_host_t* host;
     const clap_host_timer_support_t* timers;
+    const clap_host_state_t* host_state; /* (optional: for mark_dirty) */
     clap_id timer;
-    gp_app* app; /* the editor, while it exists */
+    gp_app* app;                         /* the editor, while it exists */
     gp_window* window;
     gp_entity view, input;
     uint32_t width, height;
+    /* the plugin's state, which outlives each editor (the editor is an app of its own, made when the host shows it and freed when it hides it) */
     int clicks;
+    char* text; /* what was typed: the editor's field starts with it and writes back to it */
 } Plugin;
 
 /* ---------------------------------------------------------------- the editor's view */
+
+static void changed(Plugin* p) /* the state changed: the host's project has unsaved changes */
+{
+    if(p->host_state) {
+        p->host_state->mark_dirty(p->host);
+    }
+}
 
 static void clicked(void* self, gp_ctx* cx, const gp_mouse_event* ev, void* data)
 {
     Plugin* p = *(Plugin**)self;
     p->clicks++;
+    changed(p);
     gp_notify(cx);
+}
+
+static void typed(void* self, gp_ctx* cx, gp_entity input, void* data)
+{
+    Plugin* p = data;
+    const char* text = gp_text_input_text(cx->app, input);
+    free(p->text);
+    p->text = strdup(text ? text : "");
+    changed(p);
 }
 
 static gp_node* view(void* self, gp_ctx* cx)
@@ -79,7 +103,7 @@ static bool gui_create(const clap_plugin_t* plugin, const char* api, bool is_flo
     if(!p->app) {
         return false;
     }
-    p->input = gp_text_input_new(p->app, &(gp_text_input_options){ .placeholder = "Type here" });
+    p->input = gp_text_input_new(p->app, &(gp_text_input_options){ .placeholder = "Type here", .text = p->text, .on_change = typed, .data = p });
     p->view = gp_view_new(p->app, sizeof p, &p, view, NULL);
     if(!p->timers->register_timer(p->host, 16, &p->timer)) { /* the host's timer steps the app: without it the editor would stand still */
         gp_app_free(p->app);
@@ -178,6 +202,71 @@ static void on_timer(const clap_plugin_t* plugin, clap_id timer_id)
 }
 static const clap_plugin_timer_support_t timer_support = { on_timer };
 
+/* ---------------------------------------------------------------- clap.state
+ *
+ * Saved as: a version byte (1), the clicks as 4 bytes little-endian, then the text's bytes to the end. A stream may take or give fewer bytes
+ * than asked, so both directions loop. A later version would add fields after the clicks and keep reading version 1. */
+
+enum { STATE_VERSION = 1,
+};
+
+static bool write_all(const clap_ostream_t* stream, const void* buf, size_t size)
+{
+    for(size_t done = 0; done < size;) {
+        int64_t n = stream->write(stream, (const char*)buf + done, size - done);
+        if(n <= 0) {
+            return false;
+        }
+        done += (size_t)n;
+    }
+    return true;
+}
+
+static bool state_save(const clap_plugin_t* plugin, const clap_ostream_t* stream)
+{
+    Plugin* p = of(plugin);
+    uint32_t c = (uint32_t)p->clicks;
+    const uint8_t head[5] = { STATE_VERSION, c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff, c >> 24 };
+    return write_all(stream, head, sizeof head) && write_all(stream, p->text ? p->text : "", p->text ? strlen(p->text) : 0);
+}
+
+static bool state_load(const clap_plugin_t* plugin, const clap_istream_t* stream)
+{
+    Plugin* p = of(plugin);
+    size_t len = 0, cap = 256;
+    uint8_t* buf = malloc(cap);
+    for(int64_t n; buf && (n = stream->read(stream, buf + len, cap - len - 1)) != 0;) { /* (to the end; one byte kept for the text's NUL) */
+        if(n < 0) {
+            free(buf);
+            return false;
+        }
+        len += (size_t)n;
+        if(len + 1 == cap) {
+            uint8_t* bigger = realloc(buf, cap *= 2);
+            if(!bigger) {
+                free(buf);
+            }
+            buf = bigger;
+        }
+    }
+    if(!buf || len < 5 || buf[0] != STATE_VERSION) {
+        free(buf);
+        return false;
+    }
+    buf[len] = 0;
+    p->clicks = (int)((uint32_t)buf[1] | (uint32_t)buf[2] << 8 | (uint32_t)buf[3] << 16 | (uint32_t)buf[4] << 24);
+    free(p->text);
+    p->text = strdup((char*)buf + 5);
+    free(buf);
+    if(p->app) { /* (an open editor shows what was loaded) */
+        gp_ctx cx = gp_ctx_for(p->app, p->view);
+        gp_text_input_set_text(&cx, p->input, p->text);
+        gp_notify(&cx);
+    }
+    return true;
+}
+static const clap_plugin_state_t state = { state_save, state_load };
+
 /* ---------------------------------------------------------------- clap.audio-ports: one stereo pair in, one out */
 
 static uint32_t ports_count(const clap_plugin_t* plugin, bool is_input)
@@ -206,6 +295,7 @@ static bool plugin_init(const clap_plugin_t* plugin)
 {
     Plugin* p = of(plugin);
     p->timers = p->host->get_extension(p->host, CLAP_EXT_TIMER_SUPPORT);
+    p->host_state = p->host->get_extension(p->host, CLAP_EXT_STATE);
     p->width = 420;
     p->height = 260;
     return true;
@@ -213,6 +303,7 @@ static bool plugin_init(const clap_plugin_t* plugin)
 static void plugin_destroy(const clap_plugin_t* plugin)
 {
     gui_destroy(plugin);
+    free(of(plugin)->text);
     free(of(plugin));
 }
 static bool plugin_activate(const clap_plugin_t* plugin, double sample_rate, uint32_t min_frames, uint32_t max_frames)
@@ -254,6 +345,9 @@ static const void* plugin_get_extension(const clap_plugin_t* plugin, const char*
     }
     if(strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) {
         return &audio_ports;
+    }
+    if(strcmp(id, CLAP_EXT_STATE) == 0) {
+        return &state;
     }
     return NULL;
 }

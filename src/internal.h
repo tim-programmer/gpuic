@@ -655,6 +655,7 @@ void gp_gradient_normalize(gp_gradient* out, const gp_color_stop* stops, int n);
 int gp_gfx_gradient_row(gp_gfx* g, const gp_gradient* grad);
 const uint8_t* gp_gfx_gradient_data(const gp_gfx* g);             /* GP_GRAD_ROWS rows of GP_GRAD_W RGBA8, premultiplied */
 bool gp_gfx_gradient_take_dirty(gp_gfx* g, int* row0, int* row1); /* rows [row0, row1) changed since last asked */
+void gp_gfx_gradient_mark_all(gp_gfx* g);                         /* the whole table to upload again (a new renderer) */
 bool gp_gfx_overflowed(const gp_gfx* g);
 void gp_gfx_reset(gp_gfx* g);                                     /* forget all ramps (after overflow); images stay */
 int gp_gfx_gradient_count(const gp_gfx* g);

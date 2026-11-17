@@ -250,6 +250,10 @@ static void renderer_release(gp_app* app, gp_window* current)
     }
     gp_renderer_free(app->renderer, app->gfx);
     app->renderer = NULL;
+    /* what the textures held goes with them: a window opened later makes a new renderer, whose atlases start empty and whose gradient table
+     * is uploaded whole (images upload again by themselves) */
+    gp_text_atlas_reset(app->text);
+    gp_gfx_gradient_mark_all(app->gfx);
 }
 
 static void window_destroy(gp_app* app, gp_window* w)

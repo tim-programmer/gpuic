@@ -256,7 +256,8 @@ gp_window* gp_open_window(gp_app* app, const gp_window_options* opts, gp_entity 
 void gp_quit(gp_app* app);
 /* The window's native handle, to give to something that wants it: an X11 Window (as a pointer-sized integer) or an HWND; NULL elsewhere. */
 void* gp_window_native(gp_window* w);
-/* Resizes the window (logical pixels): an embedded one follows its host's size this way. */
+/* Resizes the window (logical pixels): an embedded one follows its host's size this way, and takes it at the next gp_app_step (it hears it
+ * back from the windowing system, as it would a resize the user made). */
 void gp_window_set_size(gp_window* w, int width, int height);
 
 /* An app whose loop the caller runs, for when something else owns the event loop: a plugin in a host (CLAP, VST3), a game engine. Instead of

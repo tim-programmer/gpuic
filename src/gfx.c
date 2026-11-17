@@ -239,6 +239,12 @@ const uint8_t* gp_gfx_gradient_data(const gp_gfx* g)
     return g->ramps;
 }
 
+void gp_gfx_gradient_mark_all(gp_gfx* g)
+{
+    g->dirty0 = 0;
+    g->dirty1 = GP_GRAD_ROWS;
+}
+
 bool gp_gfx_gradient_take_dirty(gp_gfx* g, int* row0, int* row1)
 {
     if(g->dirty1 <= g->dirty0) {

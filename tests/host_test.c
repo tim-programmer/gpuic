@@ -58,6 +58,28 @@ static gp_node* key_view(void* self, gp_ctx* cx)
     Counts* c = *(Counts**)self;
     return gp_div(gp_size_full(), gp_bg(gp_rgb(0x304020)), gp_track_focus(g_focus), gp_on_key_down_data(key_down, c));
 }
+/* white text on a dark ground, for counting the text's pixels */
+static gp_node* text_view(void* self, gp_ctx* cx)
+{
+    return gp_div(gp_size_full(), gp_bg(gp_rgb(0x101010)), gp_p(10), gp_text("Text after reopening", gp_text_size(24), gp_text_color(gp_rgb(0xffffff))));
+}
+/* how many pixels of the window's next frame are bright (the text), stepping `app` until it is drawn */
+static int bright_pixels(gp_app* app, gp_window* w)
+{
+    gp_debug_capture_next(app);
+    for(int i = 0; i < 200 && !app->capture_px; i++) {
+        w->dirty_paint = true;
+        gp_app_step(app, NULL);
+        usleep(5000);
+    }
+    int n = 0;
+    for(int i = 0; app->capture_px && i < app->capture_w * app->capture_h; i++) {
+        n += app->capture_px[i * 3] > 200;
+    }
+    free(app->capture_px);
+    app->capture_px = NULL;
+    return n;
+}
 static void tick(void* self, gp_ctx* cx, void* data)
 {
     ((Counts*)data)->ticks++;
@@ -283,6 +305,17 @@ int main(void)
         x11_position(we, &ex, &ey);
 #endif
         CHECK(ex == 0 && ey == 0, "and is still at its parent's top-left (%d, %d)", ex, ey);
+        gp_window_set_size(we, 170, 100); /* again, once SDL has heard from X where the window is (REAPER resizes its editor over and over) */
+        run_for(b, NULL, 200);
+#ifdef _WIN32
+        GetWindowRect((HWND)gp_window_native(we), &r);
+        MapWindowPoints(HWND_DESKTOP, (HWND)gp_window_native(wb), (POINT*)&r, 2);
+        ex = r.left;
+        ey = r.top;
+#else
+        x11_position(we, &ex, &ey);
+#endif
+        CHECK((int)we->size.w == 170 && (int)we->size.h == 100 && ex == 0 && ey == 0, "a second resize: %.0f x %.0f at (%d, %d), want 170 x 100 at (0, 0)", (double)we->size.w, (double)we->size.h, ex, ey);
     }
 
     /* the keyboard inside a host's window: a press there takes the focus from the host's top-level window, and keys come */
@@ -307,14 +340,27 @@ int main(void)
 #ifdef _WIN32
         CHECK(GetFocus() == (HWND)gp_window_native(wk), "a press in the embedded window gave it the keyboard focus");
 #else
-        CHECK(x11_focus() == (unsigned long)(uintptr_t)gp_window_native(wk), "a press in the embedded window gave it the keyboard focus (%lx, want %lx)", x11_focus(), (unsigned long)(uintptr_t)gp_window_native(wk));
-        if(x11_keys_arrive()) {
-            gp_platform_inject_mouse(wk, GP_SIM_DOWN, 20, 20, GP_MOUSE_LEFT, 1, 0); /* (the probe's window took the focus) */
+        unsigned long want = (unsigned long)(uintptr_t)gp_window_native(wk);
+        for(int i = 0; i < 20 && x11_focus() != want; i++) {   /* (a loaded machine: give the server a moment) */
+            run_for(b, NULL, 50);
+        }
+        if(x11_focus() != want && getenv("WAYLAND_DISPLAY")) { /* (a desktop's window manager has a say in X focus too) */
+            printf("(the desktop's window manager kept the focus from the embedded window: not judged here)\n");
+        } else {
+            CHECK(x11_focus() == want, "a press in the embedded window gave it the keyboard focus (%lx, want %lx)", x11_focus(), want);
+        }
+        if(getenv("WAYLAND_DISPLAY")) {                                                   /* (XWayland under a desktop asks the user, through a portal, before it takes XTest's keys) */
+            printf("(XWayland on a Wayland desktop: a real key through XTest not tried; it would ask for permission)\n");
+        } else if(x11_keys_arrive()) {
+            gp_platform_inject_mouse(wk, GP_SIM_DOWN, 20, 20, GP_MOUSE_LEFT, 1, 0);       /* (the probe's window took the focus) */
             gp_platform_inject_mouse(wk, GP_SIM_UP, 20, 20, GP_MOUSE_LEFT, 1, 0);
             run_for(b, NULL, 200);
+            bool focused = x11_focus() == (unsigned long)(uintptr_t)gp_window_native(wk); /* (a desktop's window manager may keep it from a window it did not activate) */
             x11_type_a();
             run_for(b, NULL, 300);
-            if(ck.keys == 0 && !x11_keys_arrive()) { /* (this display dropped XTest's keys again: no verdict) */
+            if(!focused) {
+                printf("(the window manager kept the focus from the embedded window: the real key not judged)\n");
+            } else if(ck.keys == 0 && !x11_keys_arrive()) { /* (this display dropped XTest's keys again: no verdict) */
                 printf("(XTest's keys stopped arriving on this display: the real key into the embedded window not judged)\n");
             } else {
                 CHECK(ck.keys == 1, "a key typed then reached it (%d)", ck.keys);
@@ -341,6 +387,40 @@ int main(void)
     CHECK(cb.clicks == clicks + 1, "and still gets its events: SDL lives while an app does (%d clicks, want %d)", cb.clicks, clicks + 1);
     gp_app_free(b);
     CHECK(cb.drops == 2, "and the last one ends cleanly (%d views dropped)", cb.drops);
+
+    /* one app's only window closed, and another opened: its text still shows (the renderer and its textures went with the first window; the
+     * glyphs cached for them must not be taken for drawn in the new one) */
+    {
+        gp_app* t = gp_app_new();
+        gp_entity tv = gp_view_new(t, 1, &(char){ 0 }, text_view, NULL);
+        gp_window* t1 = gp_open_window(t, &(gp_window_options){ .width = 320, .height = 80 }, tv);
+        int before = t1 ? bright_pixels(t, t1) : 0;
+        gp_window_close(t1);
+        for(int i = 0; i < 10; i++) {
+            gp_app_step(t, NULL);
+        }
+        gp_window* t2 = gp_open_window(t, &(gp_window_options){ .width = 320, .height = 80 }, tv);
+        int after = t2 ? bright_pixels(t, t2) : 0;
+        CHECK(before > 100 && after > before / 2, "text drawn in a window opened after the app's last one closed: %d bright pixels, %d before", after, before);
+        gp_app_free(t);
+    }
+
+    /* an editor closed and opened again, and again: no step may stall (NVIDIA's driver waited about 5 s in the first swap of every window from
+     * the third on, when each had been destroyed under its live GL context) */
+    double slowest = 0;
+    for(int round = 0; round < 4; round++) {
+        gp_app* r = gp_app_new();
+        static Counts cr;
+        gp_window* wr = open_view(r, &cr, NULL, 160, 100);
+        for(int i = 0; i < 20 && wr; i++) {
+            double t0 = gp_time();
+            gp_app_step(r, NULL);
+            slowest = gp_time() - t0 > slowest ? gp_time() - t0 : slowest;
+            usleep(5000);
+        }
+        gp_app_free(r);
+    }
+    CHECK(slowest < 1.0, "an app made and freed four times: its slowest step took %.2f s", slowest);
 
     printf(failures ? "host_test: %d FAILURE(S)\n" : "host_test: all checks passed\n", failures);
     return failures != 0;

@@ -23,6 +23,7 @@
 typedef struct
 {
     SDL_GLContext gl;
+    int nwindows;        /* open: the context goes before the last of them (see gp_platform_close_window) */
     SDL_Cursor* cursors[GP_CURSOR_COUNT];
     SDL_FingerID finger; /* the finger being followed (the first), 0 for none */
 } sdl_platform;
@@ -144,6 +145,25 @@ static bool x11_reparent(SDL_Window* win, unsigned long parent)
 }
 /* The keyboard focus to an embedded window: the host's top-level window has it, and keys reach a child only under the pointer otherwise.
  * When the window goes, the focus goes back to its parent. */
+/* An embedded window resized in place. SDL would move it too: it keeps a window's position in screen coordinates (from X's notifications,
+ * translated to the root) and applies it again with every resize, which inside a parent puts the window that far off its corner. */
+static void x11_resize(SDL_Window* win, int width, int height)
+{
+    int (*move_resize)(void*, unsigned long, int, int, unsigned, unsigned) = (int (*)(void*, unsigned long, int, int, unsigned, unsigned))x11_fn("XMoveResizeWindow");
+    int (*flush)(void*) = (int (*)(void*))x11_fn("XFlush");
+    void* display;
+    unsigned long xwin;
+    if(move_resize && flush && x11_window(win, &display, &xwin)) {
+        /* (X refuses a size beyond what it can hold, and Xlib's default handler would end the host's process over it) */
+        width = width < 1 ? 1 : width > 16384 ? 16384
+                                              : width;
+        height = height < 1 ? 1 : height > 16384 ? 16384
+                                                 : height;
+        move_resize(display, xwin, 0, 0, (unsigned)width, (unsigned)height);
+        flush(display);
+    }
+}
+
 static int x11_ignore_error(void* display, void* error)
 {
     (void)display, (void)error;
@@ -236,7 +256,6 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
         if(win) {
             SDL_SetWindowPosition(win, 0, 0); /* (where SDL had it on the screen is now a place inside the parent: centered, off its corner) */
             SDL_ShowWindow(win);
-            SDL_SyncWindow(win);
         }
 #else
         fprintf(stderr, "gpuic: a window inside another (gp_window_options.parent) is not supported on this platform\n");
@@ -269,6 +288,7 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
 #endif
     }
     SDL_GL_MakeCurrent(win, p->gl);
+    p->nwindows++;
     sdl_window* sw = calloc(1, sizeof *sw);
     sw->window = win;
     sw->embedded = opts->parent != NULL;
@@ -283,9 +303,16 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
 
 void gp_platform_close_window(gp_app* app, gp_window* w)
 {
-    (void)app;
     if(!w->platform) {
         return;
+    }
+    sdl_platform* p = plat(app);
+    if(--p->nwindows == 0 && p->gl) {
+        /* The context goes before its last window, never after: a window destroyed under a live context leaves NVIDIA's driver waiting
+         * (about 5 s, in the first swap) in every window made after two such ends, which is a plugin's editor closed and opened again. */
+        SDL_GL_MakeCurrent(sdl_win(w), NULL);
+        SDL_GL_DestroyContext(p->gl);
+        p->gl = NULL;
     }
     SDL_DestroyWindow(sdl_win(w));
 #ifdef _WIN32
@@ -320,6 +347,12 @@ void* gp_platform_native(gp_window* w)
 
 void gp_platform_set_size(gp_window* w, int width, int height)
 {
+#ifdef GP_X11_EMBED
+    if(((sdl_window*)w->platform)->embedded) {
+        x11_resize(sdl_win(w), width, height); /* (SDL's size and its next event follow from X's notification) */
+        return;
+    }
+#endif
     SDL_SetWindowSize(sdl_win(w), width, height);
     SDL_SyncWindow(sdl_win(w));
     gp_platform_update_size(w);
