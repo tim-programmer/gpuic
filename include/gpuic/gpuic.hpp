@@ -777,7 +777,7 @@ public:
     template <class F>
     Task spawn(F&& f) const;
 #ifdef GP_HAS_FD
-    /** `f(Self&, Ctx, FdEvent)` while `fd` is ready for `events` (GP_FD_*); level-triggered, as poll(2). Not on Windows. */
+    /** `f(Self&, Ctx, FdEvent)` while `fd` is ready for `events` (GP_FD_*); level-triggered, as poll(2). On Windows: sockets and pipes. */
     template <class F>
     Task watch_fd(int fd, int events, F&& f) const;
 #endif

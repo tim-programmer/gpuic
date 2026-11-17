@@ -4,21 +4,30 @@
  *
  * Time is real here (pipes are filled from this thread, from another thread and from the other end of a
  * socket), so the checks leave generous room and look for what must or must not happen, not exact timing.
+ * Linux and Windows: there, pipes are C library descriptors (tests/compat.h) and sockets go through Winsock.
  */
-#define _GNU_SOURCE /* pipe2 */
+#define _GNU_SOURCE
+#ifdef _WIN32
+# ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+# endif
+# include <winsock2.h>
+# include <ws2tcpip.h>
+#endif
 #include "../src/internal.h"
+#include "../src/threads.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
+#ifndef _WIN32
+# include <arpa/inet.h>
+# include <fcntl.h>
+# include <netinet/in.h>
+# include <sys/socket.h>
+# include <unistd.h>
+#endif
 
 static int failures;
 #define CHECK(cond, ...)                                \
@@ -33,7 +42,83 @@ static int failures;
 
 static void msleep(int ms)
 {
-    nanosleep(&(struct timespec){ 0, ms * 1000000L }, NULL);
+    usleep((unsigned)ms * 1000);
+}
+
+/* ---- sockets, the same on both: a non-blocking TCP socket, send / recv, "would block", a connected pair */
+#ifdef _WIN32
+# define SHUT_WR SD_SEND
+static int tcp_socket(void)
+{
+    SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+    u_long one = 1;
+    ioctlsocket(s, FIONBIO, &one);
+    return (int)s;
+}
+static void sock_close(int s)
+{
+    closesocket((SOCKET)s);
+}
+static ssize_t sock_send(int s, const void* buf, size_t len)
+{
+    return send((SOCKET)s, buf, (int)len, 0);
+}
+static ssize_t sock_recv(int s, void* buf, size_t len)
+{
+    return recv((SOCKET)s, buf, (int)len, 0);
+}
+static bool would_block(void)
+{
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+}
+#else
+static int tcp_socket(void)
+{
+    return socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+}
+static void sock_close(int s)
+{
+    close(s);
+}
+static ssize_t sock_send(int s, const void* buf, size_t len)
+{
+    return write(s, buf, len);
+}
+static ssize_t sock_recv(int s, void* buf, size_t len)
+{
+    return read(s, buf, len);
+}
+static bool would_block(void)
+{
+    return errno == EAGAIN || errno == EWOULDBLOCK;
+}
+#endif
+
+/* two connected, non-blocking stream sockets: a unix socket pair, or (Windows) both ends of a loopback TCP connection */
+static bool socket_pair(int sv[2])
+{
+#ifdef _WIN32
+    SOCKET l = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    int len = sizeof a;
+    if(bind(l, (struct sockaddr*)&a, sizeof a) || listen(l, 1) || getsockname(l, (struct sockaddr*)&a, &len)) {
+        return false;
+    }
+    SOCKET c = socket(AF_INET, SOCK_STREAM, 0);
+    if(connect(c, (struct sockaddr*)&a, sizeof a)) {
+        return false;
+    }
+    SOCKET s = accept(l, NULL, NULL);
+    closesocket(l);
+    u_long one = 1;
+    ioctlsocket(c, FIONBIO, &one);
+    ioctlsocket(s, FIONBIO, &one);
+    sv[0] = (int)c;
+    sv[1] = (int)s;
+    return s != INVALID_SOCKET;
+#else
+    return socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) == 0;
+#endif
 }
 
 typedef struct
@@ -86,8 +171,13 @@ static void on_fd(void* self, gp_ctx* cx, int fd, int events, void* data)
 
 static void make_pipe(int p[2])
 {
-    if(pipe2(p, O_NONBLOCK | O_CLOEXEC) != 0) {
-        perror("pipe2");
+#ifdef _WIN32 /* (only gpuic's call makes a C library pipe non-blocking there) */
+    bool ok = pipe(p) == 0 && gp_fd_set_nonblocking(p[0]) && gp_fd_set_nonblocking(p[1]);
+#else
+    bool ok = pipe2(p, O_NONBLOCK | O_CLOEXEC) == 0;
+#endif
+    if(!ok) {
+        perror("pipe");
         exit(2);
     }
 }
@@ -180,19 +270,19 @@ static void test_idle(gp_co* co, gp_app* app)
 static void test_writable(gp_co* co, gp_app* app)
 {
     int sv[2];
-    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) == 0, "socketpair");
+    CHECK(socket_pair(sv), "socket pair");
     /* fill the send buffer */
     char block[4096];
     memset(block, 'z', sizeof block);
     size_t total = 0;
     for(;;) {
-        ssize_t n = write(sv[0], block, sizeof block);
+        ssize_t n = sock_send(sv[0], block, sizeof block);
         if(n < 0) {
             break;
         }
         total += (size_t)n;
     }
-    CHECK(errno == EAGAIN, "filling the socket ended with errno %d", errno);
+    CHECK(would_block(), "filling the socket did not end with 'would block'");
 
     Watch w = { 0 };
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
@@ -200,12 +290,18 @@ static void test_writable(gp_co* co, gp_app* app)
     gp_sleep(co, 0.1);
     CHECK(w.fired == 0, "a full socket reported writable (%d)", w.fired);
 
-    /* the other side reads: room opens up (a unix socket is writable again once it is mostly empty) */
+    /* the other side reads: room opens up (a unix socket is writable again once it is mostly empty; over TCP what is
+     * still in flight arrives as the reader makes room) */
     size_t drained = 0;
     char buf[8192];
-    ssize_t n;
-    while((n = read(sv[1], buf, sizeof buf)) > 0) {
-        drained += (size_t)n;
+    for(int tries = 0; drained < total && tries < 200; tries++) {
+        ssize_t n;
+        while((n = sock_recv(sv[1], buf, sizeof buf)) > 0) {
+            drained += (size_t)n;
+        }
+        if(drained < total) {
+            msleep(2);
+        }
     }
     CHECK(drained == total, "drained %zu of %zu bytes", drained, total);
     gp_sleep(co, 0.1);
@@ -213,8 +309,78 @@ static void test_writable(gp_co* co, gp_app* app)
     w.cancel_after = w.fired + 1; /* it is level-triggered: it will be called again right away */
     gp_sleep(co, 0.1);
     CHECK(!gp_task_active(app, w.task), "the watch cancelled itself from its callback and is still active");
-    close(sv[0]);
-    close(sv[1]);
+    sock_close(sv[0]);
+    sock_close(sv[1]);
+}
+
+/* A full pipe is not writable, and is again once its reader takes the data; gp_co_write waits for room. */
+enum { PIPE_PAYLOAD = 256 * 1024,
+};
+typedef struct
+{
+    int fd;
+    unsigned char* got;
+    size_t n;
+    bool done;
+} PipeReader;
+static void pipe_reader(gp_co* co, void* self, gp_ctx* cx, void* data)
+{
+    PipeReader* r = data;
+    while(r->n < PIPE_PAYLOAD) {
+        ssize_t n = gp_co_read(co, r->fd, r->got + r->n, PIPE_PAYLOAD - r->n);
+        if(n <= 0) {
+            break;
+        }
+        r->n += (size_t)n;
+    }
+    r->done = true;
+}
+static void test_pipe_full(gp_co* co, gp_app* app)
+{
+    int p[2];
+    make_pipe(p);
+    char block[4096];
+    memset(block, 'p', sizeof block);
+    size_t total = 0;
+    for(int i = 0; i < 4096; i++) { /* (a pipe holds far less than 16 MB) */
+        ssize_t n = write(p[1], block, sizeof block);
+        if(n <= 0) {
+            break;
+        }
+        total += (size_t)n;
+    }
+    CHECK(total > 0 && total < 4096u * sizeof block, "filling the pipe took %zu bytes", total);
+    Watch w = { 0 };
+    gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
+    w.task = gp_watch_fd(&cx, p[1], GP_FD_WRITE, on_fd, &w);
+    gp_sleep(co, 0.1);
+    CHECK(w.fired == 0, "a full pipe reported writable (%d calls)", w.fired);
+    char buf[8192];
+    size_t drained = 0;
+    ssize_t n;
+    while((n = read(p[0], buf, sizeof buf)) > 0) {
+        drained += (size_t)n;
+    }
+    CHECK(drained == total, "drained %zu of %zu bytes", drained, total);
+    gp_sleep(co, 0.1);
+    CHECK(w.fired >= 1 && (w.events & GP_FD_WRITE), "an emptied pipe was not reported writable (%d calls)", w.fired);
+    gp_cancel(app, w.task);
+
+    PipeReader r = { .fd = p[0], .got = malloc(PIPE_PAYLOAD) };
+    unsigned char* sent = malloc(PIPE_PAYLOAD);
+    for(size_t i = 0; i < PIPE_PAYLOAD; i++) {
+        sent[i] = (unsigned char)(i * 2654435761u >> 11);
+    }
+    gp_spawn(&cx, pipe_reader, &r);
+    CHECK(gp_co_write(co, p[1], sent, PIPE_PAYLOAD) == PIPE_PAYLOAD, "gp_co_write of more than a pipe holds (errno %d)", errno);
+    for(int i = 0; i < 200 && !r.done; i++) {
+        gp_sleep(co, 0.01);
+    }
+    CHECK(r.done && r.n == PIPE_PAYLOAD && memcmp(r.got, sent, PIPE_PAYLOAD) == 0, "the reader got %zu of %d bytes%s", r.n, PIPE_PAYLOAD, r.n == PIPE_PAYLOAD ? ", different" : "");
+    free(r.got);
+    free(sent);
+    close(p[0]);
+    close(p[1]);
 }
 
 static void test_hup(gp_co* co, gp_app* app)
@@ -415,14 +581,14 @@ static void test_other_thread(gp_co* co, gp_app* app)
     Watch w = { .drain = 1 };
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     w.task = gp_watch_fd(&cx, p[0], GP_FD_READ, on_fd, &w);
-    pthread_t th;
-    pthread_create(&th, NULL, late_writer, &p[1]);
+    gp_thread th;
+    gp_thread_create(&th, late_writer, &p[1]);
     double t0 = gp_time();
     while(!w.fired && gp_time() - t0 < 2) {
         gp_sleep(co, 0.005);
     }
     double took = gp_time() - t0;
-    pthread_join(th, NULL);
+    gp_thread_join(th);
     CHECK(w.fired == 1 && w.ngot == 13, "thread write: %d calls, %zu bytes", w.fired, w.ngot);
     CHECK(took > 0.07 && took < 0.3, "delivered after %.3f s (written at 0.08)", took);
     gp_cancel(app, w.task);
@@ -462,10 +628,10 @@ static void test_await(gp_co* co, gp_app* app)
 
     /* a poll-style await with no limit, released by a write from elsewhere */
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
-    pthread_t th;
-    pthread_create(&th, NULL, late_writer, &p[1]);
+    gp_thread th;
+    gp_thread_create(&th, late_writer, &p[1]);
     CHECK(gp_await_fd(co, p[0], GP_FD_READ, -1, &rev) && rev == GP_FD_READ, "unbounded await");
-    pthread_join(th, NULL);
+    gp_thread_join(th);
     (void)cx;
     close(p[0]);
     close(p[1]);
@@ -544,7 +710,7 @@ static void echo_server(gp_co* co, void* self, gp_ctx* cx, void* data)
         }
         e->served += (size_t)n;
     }
-    close(fd);
+    sock_close(fd);
     e->server_done = true;
 }
 
@@ -593,17 +759,17 @@ static void test_tcp_echo(gp_co* co, gp_app* app)
     for(size_t i = 0; i < PAYLOAD; i++) {
         e.sent[i] = (unsigned char)(i * 2654435761u >> 13);
     }
-    e.listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    e.listen_fd = tcp_socket();
     int one = 1;
-    setsockopt(e.listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(e.listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof one);
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
     CHECK(bind(e.listen_fd, (struct sockaddr*)&a, sizeof a) == 0 && listen(e.listen_fd, 4) == 0, "listen");
     socklen_t len = sizeof a;
     getsockname(e.listen_fd, (struct sockaddr*)&a, &len);
     e.port = ntohs(a.sin_port);
-    e.cfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    e.cfd = tcp_socket();
     int small = 8192; /* a tiny send buffer: a write of 100 KB goes in many pieces, with EAGAIN between them */
-    setsockopt(e.cfd, SOL_SOCKET, SO_SNDBUF, &small, sizeof small);
+    setsockopt(e.cfd, SOL_SOCKET, SO_SNDBUF, (const char*)&small, sizeof small);
 
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_spawn(&cx, echo_server, &e);
@@ -616,8 +782,8 @@ static void test_tcp_echo(gp_co* co, gp_app* app)
     CHECK(e.connected, "client did not connect (errno %d)", e.connect_errno);
     CHECK(e.writer_done && e.reader_done && e.server_done, "echo unfinished: writer %d reader %d server %d (received %zu, served %zu)", e.writer_done, e.reader_done, e.server_done, e.nreceived, e.served);
     CHECK(e.nreceived == PAYLOAD && memcmp(e.sent, e.received, PAYLOAD) == 0, "the echo of %d bytes came back as %zu bytes, %s", PAYLOAD, e.nreceived, e.nreceived == PAYLOAD ? "different" : "short");
-    close(e.cfd);
-    close(e.listen_fd);
+    sock_close(e.cfd);
+    sock_close(e.listen_fd);
     free(e.sent);
     free(e.received);
 }
@@ -625,25 +791,27 @@ static void test_tcp_echo(gp_co* co, gp_app* app)
 static void refused(gp_co* co, void* self, gp_ctx* cx, void* data)
 {
     int* out = data;
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int fd = tcp_socket();
     /* a port that was just closed: nothing listens */
-    int probe = socket(AF_INET, SOCK_STREAM, 0);
+    int probe = tcp_socket();
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
     bind(probe, (struct sockaddr*)&a, sizeof a);
     socklen_t len = sizeof a;
     getsockname(probe, (struct sockaddr*)&a, &len);
-    close(probe);
+    sock_close(probe);
     int r = gp_co_connect(co, fd, (struct sockaddr*)&a, sizeof a);
-    out[0] = r;
     out[1] = errno;
-    close(fd);
+    out[0] = r;
+    sock_close(fd);
 }
 static void test_connect_refused(gp_co* co, gp_app* app)
 {
     int out[2] = { 99, 0 };
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     gp_spawn(&cx, refused, out);
-    gp_sleep(co, 0.2);
+    for(int i = 0; i < 300 && out[0] == 99; i++) { /* (Windows retries a refused connection for about two seconds) */
+        gp_sleep(co, 0.02);
+    }
     CHECK(out[0] == -1 && out[1] == ECONNREFUSED, "connect to a closed port: %d, errno %d (%s)", out[0], out[1], strerror(out[1]));
 }
 
@@ -692,6 +860,7 @@ static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
     test_level_triggered(co, app);
     test_idle(co, app);
     test_writable(co, app);
+    test_pipe_full(co, app);
     test_hup(co, app);
     test_closed_under_a_watch(co, app);
     test_entity(co, app);
@@ -727,6 +896,10 @@ static void ready(gp_app* app, void* userdata)
 
 int main(void)
 {
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1); /* a physical pointer over the window is not part of the test */
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);

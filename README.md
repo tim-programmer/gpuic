@@ -79,9 +79,8 @@ gpuic builds as a static library; there are no Windows DLL export macros yet.
 
 Linux is where gpuic is developed and tested. **Windows** builds (MSVC from Visual Studio 2022 17.9 on, or
 MinGW-w64/clang): coroutines run on fibers, the thread pool on Win32 threads, and fonts come from scanning
-`%WINDIR%\Fonts` and the per-user font directory. Two things are missing there: watching file descriptors
-(`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest are not declared; test for `GP_HAS_FD`; watching files and directories,
-`gp_watch_path`, works on both), and two of the tests (`fd_test`, and `text_test`, which is written against POSIX and Linux font locations). So far the Windows
+`%WINDIR%\Fonts` and the per-user font directory. Watching descriptors covers sockets and pipes there (see "Watching file
+descriptors"), and `text_test` (written against POSIX and Linux font locations) and `examples/fd.c` are not built. So far the Windows
 build has been cross-compiled with MinGW-w64 and run under Wine; `.github/workflows/windows-check.yml` builds and
 tests it with MSVC. macOS is untested: its font directories and the SDL-based GL loading follow SDL's own
 cross-platform APIs.
@@ -760,10 +759,9 @@ gp_task f = gp_watch_path(cx, "/home/me/settings.json", 0, reload, NULL);       
 
 ### Watching file descriptors
 
-(Not on Windows: these calls exist where the header defines `GP_HAS_FD`.)
-
-Pipes, sockets, eventfds, inotify, a child process's stdout: anything `poll(2)` understands wakes the
-event loop and runs your code on the main thread, like every other callback here.
+On Linux, pipes, sockets, eventfds, inotify, a child process's stdout: anything `poll(2)` understands wakes the
+event loop and runs your code on the main thread, like every other callback here. On Windows, sockets and pipes
+(below).
 
 ```c
 gp_fd_set_nonblocking(fd);
@@ -781,6 +779,14 @@ gp_cancel(app, t);                                                /* stops watch
   its single wait, so windows, timers and animations are untouched; an idle watch costs no wakeups (the test
   counts them). A descriptor is handed to the main thread once, and only watched again after its callback
   returned, so a slow callback never piles events up.
+* **Windows.** The same calls, on sockets and pipes. A socket is passed as its `SOCKET` cast to `int` (the app
+  calls `WSAStartup`, as for any socket) and waited for with `WSAPoll`: it wakes the loop as on Linux. A pipe is
+  passed as a C library descriptor (`_pipe`, `_open_osfhandle`, `_fileno`); anonymous pipes have no readiness
+  notification there, so while one is watched the watcher's thread asks it (`PeekNamedPipe`) every 10 ms, and the
+  event loop still only wakes when it is ready. `gp_fd_set_nonblocking` makes a pipe non-blocking (`PIPE_NOWAIT`);
+  `gp_co_read` reads a pipe only as far as there is data, so it never blocks either way. Room in a pipe is its
+  write quota (`NtQueryInformationFile`, as libuv asks it), a file is always ready, and a console is `GP_FD_INVALID`. Which kind a number is, is asked of Winsock: a C library descriptor whose number happens to
+  be a live socket's would be taken for the socket. `tests/fd_test.c` runs on both.
 * **Owned like the rest:** tasks belong to the entity in `cx`, which receives its state as `self` and
   cancels them when it is released. Cancel before you `close()`.
 
@@ -802,7 +808,7 @@ static void fetch(gp_co *co, void *self, gp_ctx *cx, void *data) {
 is 0 if it timed out); `gp_co_read`, `gp_co_write` (all of it), `gp_co_accept` and `gp_co_connect` retry
 on `EAGAIN` by awaiting. A cancelled coroutine gets `false` / `-1` with `errno == ECANCELED`. See
 `examples/fd.c` (stdin lines as they are piped in, and an in-process TCP echo server and client, each a
-coroutine).
+coroutine; POSIX only).
 
 ### Declarative animations
 
@@ -1903,7 +1909,7 @@ mouse move/hover ─────────────────────
 
 Roughly in the order I'd tackle them:
 
-1. Watching pipes and sockets (`gp_watch_fd`, `gp_await_fd`, `gp_co_read` and the rest) on Windows, and an `epoll`-style edge-triggered mode on Linux: the descriptor watcher uses `poll(2)` and an eventfd, so it is Linux only. (Watching files and directories for changes, `gp_watch_path`, works on both.)
+1. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short of thousands of descriptors).
 2. A view with a scroller under the mouse is painted in full every frame (hover and scrollbars are evaluated, not cached), and a cached view that holds a scroller, a list or an overflow clip is
    painted in full when it or its scroller moves (their clip moves with them: only views without one are moved, see "Transforms" and `tests/paintshift_test.c`). The scene is still
    re-uploaded and drawn as a whole every frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.

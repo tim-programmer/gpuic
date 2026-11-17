@@ -20,10 +20,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-/* Watching file descriptors (gp_watch_fd, gp_await_fd, gp_co_read and the rest) is built on poll(2): where GP_HAS_FD
- * is not defined, which today means Windows, those calls do not exist. */
-#ifndef _WIN32
-# define GP_HAS_FD 1
+/* Watching file descriptors (gp_watch_fd, gp_await_fd, gp_co_read and the rest): on Linux, anything poll(2) understands;
+ * on Windows, sockets and pipes (see "file descriptors" below). GP_HAS_FD says the calls exist. */
+#define GP_HAS_FD 1
+#ifdef _WIN32
+/* (what the declarations need, without <winsock2.h>: the same types it and the C library give) */
+struct sockaddr;
+typedef int socklen_t;
+# ifdef __MINGW32__
+#  include <sys/types.h> /* ssize_t */
+# elif !defined(_SSIZE_T_DEFINED)
+typedef intptr_t ssize_t;
+#  define _SSIZE_T_DEFINED
+# endif
+#else
 # include <sys/socket.h>
 # include <sys/types.h>
 #endif
@@ -655,11 +665,16 @@ void gp_post(gp_app* app, gp_entity entity, gp_task_fn fn, void* data);
 
 /* ---- file descriptors ------------------------------------------------------------------- */
 
-/* Not on Windows (see GP_HAS_FD at the top).
+/* Linux: pipes, sockets, eventfds, inotify, a child's stdout: anything poll(2) understands.
  *
- * Pipes, sockets, eventfds, inotify, a child's stdout: anything poll(2) understands. The event loop
- * wakes when a watched descriptor is ready (and only then: nothing is polled on a timer), and the
- * callback runs on the main thread like every other one here.
+ * Windows: sockets and pipes. A socket is passed as its SOCKET, cast to int (the app calls WSAStartup, as for any
+ * socket); a pipe as a C library descriptor (_pipe, _open_osfhandle, _fileno), as is a file, which is always ready. A
+ * socket wakes the loop as on Linux; an anonymous pipe has no readiness notification, so while one is watched the
+ * watcher's thread asks it every 10 ms, for data and for room (the event loop still only wakes when it is ready). A
+ * console is GP_FD_INVALID.
+ *
+ * Both: the event loop wakes when a watched descriptor is ready (and only then), and the callback runs
+ * on the main thread like every other one here.
  *
  * Watching is level-triggered, as in poll(2): the callback runs again for as long as the descriptor
  * stays ready, so it must read (or write) until it would block, or cancel the watch. Set O_NONBLOCK

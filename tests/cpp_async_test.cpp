@@ -6,7 +6,7 @@
  */
 #include <gpuic/gpuic.hpp>
 
-#ifdef GP_HAS_FD
+#if defined(GP_HAS_FD) && !defined(_WIN32)
 # include <unistd.h>
 #endif
 

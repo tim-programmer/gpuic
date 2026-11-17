@@ -12,11 +12,21 @@
  */
 #include "internal.h"
 
+#ifdef _WIN32
+# ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+# endif
+# ifndef NOMINMAX
+#  define NOMINMAX
+# endif
+# include <io.h>
+# include <winsock2.h> /* (before threads.h's windows.h) */
+#endif
 #include "threads.h"
 
 #include <errno.h>
 #include <time.h>
-#ifdef GP_HAS_FD
+#ifndef _WIN32
 # include <poll.h>
 # include <sys/eventfd.h>
 # include <unistd.h>
@@ -78,13 +88,17 @@ typedef struct
 {
     uint64_t job_id;
     int fd;
-    short events;
+    int want;      /* GP_FD_* */
     bool armed;
+#ifdef _WIN32
+    int kind;      /* W_SOCKET, W_PIPE, W_FILE or W_BAD */
+    HANDLE handle; /* a pipe's or a file's */
+#endif
 } fd_watch;
 typedef struct
 {
     uint64_t job_id;
-    short revents;
+    int events; /* GP_FD_* */
 } fd_ready;
 typedef struct
 {
@@ -117,7 +131,11 @@ struct gp_exec
     size_t nwatches, cap_watches;
     fd_ready* fd_ready_list;
     size_t nfd_ready, cap_fd_ready;
+#ifdef _WIN32
+    SOCKET wake_sock; /* a UDP socket connected to itself, which the poller also waits on: "the watch table changed" */
+#else
     int wake_fd; /* eventfd the poller also waits on: "the watch table changed" */
+#endif
     gp_thread poller;
     bool poller_started;
 };
@@ -690,7 +708,12 @@ void gp_post(gp_app* app, gp_entity entity, gp_task_fn fn, void* data)
 
 /* A thread that does nothing but poll(2) the armed descriptors and the control eventfd. When one is ready it
  * is disarmed, queued for the main thread, and the event loop is woken; the main thread owns jobs, runs the
- * callbacks and re-arms. The loop itself stays in SDL's wait, so nothing about window events changes. */
+ * callbacks and re-arms. The loop itself stays in SDL's wait, so nothing about window events changes.
+ *
+ * On Windows the thread waits in WSAPoll on the armed sockets and a wake socket. Anonymous pipes have no readiness
+ * notification there, so while one is armed the thread also asks it every PIPE_POLL_MS (PeekNamedPipe for data,
+ * the pipe's write quota for room): the thread wakes, the event loop does not. A file is always ready, and anything
+ * else (a console) is GP_FD_INVALID. */
 static short to_poll(int events)
 {
     short p = 0;
@@ -724,6 +747,7 @@ static int from_poll(short revents)
     return e;
 }
 
+# ifndef _WIN32
 static void poke(gp_exec* ex)
 {
     uint64_t one = 1;
@@ -758,7 +782,7 @@ static void* poller_main(void* arg)
             if(!ex->watches[i].armed) {
                 continue;
             }
-            pfds[n] = (struct pollfd){ ex->watches[i].fd, ex->watches[i].events, 0 };
+            pfds[n] = (struct pollfd){ ex->watches[i].fd, to_poll(ex->watches[i].want), 0 };
             ids[n++] = ex->watches[i].job_id;
         }
         gp_mutex_unlock(&ex->lock);
@@ -784,7 +808,7 @@ static void* poller_main(void* arg)
                     continue;
                 }
                 w->armed = false;
-                VEC_PUSH(ex->fd_ready_list, ex->nfd_ready, ex->cap_fd_ready, ((fd_ready){ w->job_id, pfds[k].revents }));
+                VEC_PUSH(ex->fd_ready_list, ex->nfd_ready, ex->cap_fd_ready, ((fd_ready){ w->job_id, from_poll(pfds[k].revents) }));
                 any = true;
                 break;
             }
@@ -816,14 +840,259 @@ static void poller_start(gp_exec* ex)
     ex->poller_started = true;
 }
 
+static void poller_stop(gp_exec* ex)
+{
+    poke(ex);
+    gp_thread_join(ex->poller);
+    close(ex->wake_fd);
+}
+
+# else /* _WIN32 */
+
+enum { W_SOCKET = 1,
+    W_PIPE,
+    W_FILE,
+    W_BAD,
+};
+#  define PIPE_POLL_MS  10
+#  define AS_SOCKET(fd) ((SOCKET)(uintptr_t)(unsigned)(fd))
+
+static void winsock_init(void)
+{
+    static bool done; /* (main thread only) */
+    if(!done) {
+        WSADATA wsa;
+        done = WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+    }
+}
+
+bool gp_win_is_socket(int fd)
+{
+    winsock_init();
+    int type, len = sizeof type;
+    return getsockopt(AS_SOCKET(fd), SOL_SOCKET, SO_TYPE, (char*)&type, &len) == 0;
+}
+
+static void ignore_invalid_parameter(const wchar_t* expr, const wchar_t* fn, const wchar_t* file, unsigned line, uintptr_t reserved)
+{
+    (void)expr, (void)fn, (void)file, (void)line, (void)reserved;
+}
+
+#  ifdef _MSC_VER
+#   define SET_IPH _set_thread_local_invalid_parameter_handler
+#  else
+#   define SET_IPH _set_invalid_parameter_handler /* (MinGW declares only the process-wide one; this runs on the main thread) */
+#  endif
+void* gp_win_fd_handle(int fd)
+{
+    _invalid_parameter_handler old = SET_IPH(ignore_invalid_parameter); /* (a closed descriptor is not fatal here) */
+    intptr_t h = _get_osfhandle(fd);
+    SET_IPH(old);
+    return h == -1 ? INVALID_HANDLE_VALUE : (HANDLE)h;
+}
+
+static int classify(int fd, HANDLE* h)
+{
+    *h = INVALID_HANDLE_VALUE;
+    if(gp_win_is_socket(fd)) {
+        return W_SOCKET;
+    }
+    *h = gp_win_fd_handle(fd);
+    DWORD type = *h == INVALID_HANDLE_VALUE ? FILE_TYPE_UNKNOWN : GetFileType(*h);
+    return type == FILE_TYPE_PIPE ? W_PIPE : type == FILE_TYPE_DISK ? W_FILE
+                                                                    : W_BAD;
+}
+
+/* The room left in a pipe's buffer (FILE_PIPE_LOCAL_INFORMATION.WriteQuotaAvailable, from ntdll, as the SDK does not
+ * declare it), or -1 if it cannot be asked. */
+typedef struct
+{
+    ULONG type, configuration, max_instances, instances, inbound_quota, read_available, outbound_quota, write_quota_available, state, end;
+} pipe_local_info;
+typedef struct
+{
+    void* status;
+    ULONG_PTR information;
+} io_status;
+typedef LONG(NTAPI* query_file_fn)(HANDLE, io_status*, void*, ULONG, int);
+static query_file_fn query_file; /* (set by poller_start, before the thread) */
+
+static long pipe_room(HANDLE h)
+{
+    pipe_local_info info;
+    io_status io;
+    if(!query_file || query_file(h, &io, &info, sizeof info, 24 /* FilePipeLocalInformation */) < 0) {
+        return -1;
+    }
+    return (long)info.write_quota_available;
+}
+
+/* what a pipe, a file or a bad descriptor is ready for now (0: nothing yet) */
+static int ask(const fd_watch* w)
+{
+    if(w->kind == W_BAD) {
+        return GP_FD_INVALID;
+    }
+    if(w->kind == W_FILE) {
+        return w->want & (GP_FD_READ | GP_FD_WRITE);
+    }
+    int ev = (w->want & GP_FD_WRITE) && pipe_room(w->handle) != 0 ? GP_FD_WRITE : 0; /* (unknown: writable) */
+    if(w->want & GP_FD_READ) {
+        DWORD avail = 0;
+        if(PeekNamedPipe(w->handle, NULL, 0, NULL, &avail, NULL)) {
+            ev |= avail ? GP_FD_READ : 0;
+        } else {
+            DWORD e = GetLastError();
+            ev |= e == ERROR_BROKEN_PIPE ? GP_FD_HUP : e == ERROR_INVALID_HANDLE ? GP_FD_INVALID
+                                                                                 : GP_FD_ERROR;
+        }
+    }
+    return ev;
+}
+
+static void poke(gp_exec* ex)
+{
+    send(ex->wake_sock, "", 1, 0); /* (a full queue is already a pending wake) */
+}
+
+static void* poller_main(void* arg)
+{
+    gp_exec* ex = arg;
+    WSAPOLLFD* pfds = NULL;
+    uint64_t* ids = NULL;
+    fd_watch* others = NULL; /* pipes, files and bad descriptors, asked directly */
+    fd_ready* found = NULL;
+    size_t cap = 0, nfound = 0, cap_found = 0;
+    for(;;) {
+        gp_mutex_lock(&ex->lock);
+        if(ex->shutdown) {
+            gp_mutex_unlock(&ex->lock);
+            break;
+        }
+        if(cap < ex->nwatches + 1) {
+            cap = ex->nwatches + 16;
+            pfds = realloc(pfds, cap * sizeof *pfds);
+            ids = realloc(ids, cap * sizeof *ids);
+            others = realloc(others, cap * sizeof *others);
+            if(!pfds || !ids || !others) {
+                abort();
+            }
+        }
+        size_t n = 0, nothers = 0;
+        pfds[n] = (WSAPOLLFD){ ex->wake_sock, POLLIN, 0 };
+        ids[n++] = 0;
+        for(size_t i = 0; i < ex->nwatches; i++) {
+            const fd_watch* w = &ex->watches[i];
+            if(!w->armed) {
+                continue;
+            }
+            if(w->kind == W_SOCKET) {
+                pfds[n] = (WSAPOLLFD){ AS_SOCKET(w->fd), to_poll(w->want), 0 };
+                ids[n++] = w->job_id;
+            } else {
+                others[nothers++] = *w;
+            }
+        }
+        gp_mutex_unlock(&ex->lock);
+
+        nfound = 0;
+        for(size_t i = 0; i < nothers; i++) {
+            int ev = ask(&others[i]);
+            if(ev) {
+                VEC_PUSH(found, nfound, cap_found, ((fd_ready){ others[i].job_id, ev }));
+            }
+        }
+        int r = WSAPoll(pfds, (ULONG)n, nfound ? 0 : nothers ? PIPE_POLL_MS
+                                                             : -1);
+        if(r == SOCKET_ERROR) {
+            Sleep(PIPE_POLL_MS); /* (not expected: do not spin on it) */
+            continue;
+        }
+        if(pfds[0].revents) {
+            char drain[64];
+            while(recv(ex->wake_sock, drain, sizeof drain, 0) > 0) {
+            }
+        }
+        for(size_t k = 1; k < n; k++) {
+            if(pfds[k].revents) {
+                VEC_PUSH(found, nfound, cap_found, ((fd_ready){ ids[k], from_poll(pfds[k].revents) }));
+            }
+        }
+        bool any = false;
+        gp_mutex_lock(&ex->lock);
+        for(size_t k = 0; k < nfound; k++) {
+            for(size_t i = 0; i < ex->nwatches; i++) { /* the table may have changed meanwhile */
+                fd_watch* w = &ex->watches[i];
+                if(w->job_id == found[k].job_id && w->armed) {
+                    w->armed = false;
+                    VEC_PUSH(ex->fd_ready_list, ex->nfd_ready, ex->cap_fd_ready, found[k]);
+                    any = true;
+                    break;
+                }
+            }
+        }
+        gp_mutex_unlock(&ex->lock);
+        if(any) {
+            gp_platform_wake(ex->app);
+        }
+    }
+    free(pfds);
+    free(ids);
+    free(others);
+    free(found);
+    return NULL;
+}
+
+static void poller_start(gp_exec* ex)
+{
+    if(ex->poller_started) {
+        return;
+    }
+    winsock_init();
+    query_file = (query_file_fn)(void*)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile");
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in a = { 0 };
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int len = sizeof a;
+    u_long nonblocking = 1;
+    if(s == INVALID_SOCKET || bind(s, (struct sockaddr*)&a, sizeof a) != 0 || getsockname(s, (struct sockaddr*)&a, &len) != 0
+        || connect(s, (struct sockaddr*)&a, sizeof a) != 0 || ioctlsocket(s, FIONBIO, &nonblocking) != 0) {
+        fprintf(stderr, "gpuic: the descriptor watcher's wake socket failed (%d)\n", WSAGetLastError());
+        if(s != INVALID_SOCKET) {
+            closesocket(s);
+        }
+        return;
+    }
+    ex->wake_sock = s;
+    if(!gp_thread_create(&ex->poller, poller_main, ex)) {
+        closesocket(s);
+        return;
+    }
+    ex->poller_started = true;
+}
+
+static void poller_stop(gp_exec* ex)
+{
+    poke(ex);
+    gp_thread_join(ex->poller);
+    closesocket(ex->wake_sock);
+}
+
+# endif                                           /* _WIN32 */
+
 static void watch_add(gp_exec* ex, const gp_job* j)
 {
     poller_start(ex);
     if(!ex->poller_started) {
         return;
     }
+    fd_watch w = { .job_id = j->id, .fd = j->fd, .want = j->fd_events, .armed = true };
+# ifdef _WIN32
+    w.kind = classify(j->fd, &w.handle);
+# endif
     gp_mutex_lock(&ex->lock);
-    VEC_PUSH(ex->watches, ex->nwatches, ex->cap_watches, ((fd_watch){ j->id, j->fd, to_poll(j->fd_events), true }));
+    VEC_PUSH(ex->watches, ex->nwatches, ex->cap_watches, w);
     gp_mutex_unlock(&ex->lock);
     poke(ex);
 }
@@ -1051,7 +1320,7 @@ static void drain_fds(gp_app* app)
         if(!j || !job_active(j)) {
             continue;
         }
-        deliver_fd(app, j, from_poll(items[i].revents));
+        deliver_fd(app, j, items[i].events);
         gp_effects_flush(app);
     }
     free(items);
@@ -1387,9 +1656,7 @@ void gp_exec_shutdown(gp_app* app)
     }
 #ifdef GP_HAS_FD
     if(ex->poller_started) {
-        poke(ex);
-        gp_thread_join(ex->poller);
-        close(ex->wake_fd);
+        poller_stop(ex);
         ex->poller_started = false;
     }
 #endif

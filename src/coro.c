@@ -22,7 +22,10 @@
 # ifndef NOMINMAX
 #  define NOMINMAX
 # endif
+# include <io.h>
+# include <limits.h>
 # include <windows.h>
+# include <winsock2.h> /* (before windows.h) */
 #else
 # include <fcntl.h>
 # include <sys/mman.h>
@@ -275,12 +278,6 @@ bool gp_await_background(gp_co* co, gp_work_fn work, void* data)
 
 #ifdef GP_HAS_FD
 
-bool gp_fd_set_nonblocking(int fd)
-{
-    int flags = fcntl(fd, F_GETFL, 0);
-    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
-}
-
 /* Waits for `events` on fd; false with errno set (ECANCELED) if the coroutine was cancelled. A hung-up or
  * failed descriptor counts as ready: the retried call then reports the real condition. */
 static bool wait_fd(gp_co* co, int fd, int events)
@@ -291,6 +288,222 @@ static bool wait_fd(gp_co* co, int fd, int events)
         return false;
     }
     return true;
+}
+
+#endif
+
+#if defined(GP_HAS_FD) && defined(_WIN32)
+
+/* Sockets go through Winsock; anything else is a CRT descriptor, and a pipe is read only as far as PeekNamedPipe says
+ * there is data, so that a read never blocks whether or not the pipe was made non-blocking. */
+# define AS_SOCKET(fd) ((SOCKET)(uintptr_t)(unsigned)(fd))
+
+static int wsa_errno(int e)
+{
+    switch(e) {
+        case WSAECONNREFUSED:
+            return ECONNREFUSED;
+        case WSAECONNRESET:
+            return ECONNRESET;
+        case WSAECONNABORTED:
+            return ECONNABORTED;
+        case WSAETIMEDOUT:
+            return ETIMEDOUT;
+        case WSAENOTCONN:
+            return ENOTCONN;
+        case WSAENETUNREACH:
+            return ENETUNREACH;
+        case WSAEHOSTUNREACH:
+            return EHOSTUNREACH;
+        case WSAEADDRINUSE:
+            return EADDRINUSE;
+        case WSAENOTSOCK:
+            return EBADF;
+        default:
+            return EIO;
+    }
+}
+
+static int clamp_len(size_t len)
+{
+    return len > INT_MAX ? INT_MAX : (int)len;
+}
+
+/* the pipe behind a CRT descriptor, or NULL if it is not one (*bad: not a descriptor at all) */
+static HANDLE pipe_of(int fd, bool* bad)
+{
+    HANDLE h = gp_win_fd_handle(fd);
+    *bad = h == INVALID_HANDLE_VALUE;
+    return !*bad && GetFileType(h) == FILE_TYPE_PIPE ? h : NULL;
+}
+
+bool gp_fd_set_nonblocking(int fd)
+{
+    if(gp_win_is_socket(fd)) {
+        u_long one = 1;
+        return ioctlsocket(AS_SOCKET(fd), FIONBIO, &one) == 0;
+    }
+    bool bad;
+    HANDLE h = pipe_of(fd, &bad);
+    if(!h) {
+        return !bad && GetFileType(gp_win_fd_handle(fd)) == FILE_TYPE_DISK; /* a file does not block; a console cannot be made not to */
+    }
+    DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+    return SetNamedPipeHandleState(h, &mode, NULL, NULL) != 0;
+}
+
+ssize_t gp_co_read(gp_co* co, int fd, void* buf, size_t len)
+{
+    if(gp_win_is_socket(fd)) {
+        for(;;) {
+            int n = recv(AS_SOCKET(fd), buf, clamp_len(len), 0);
+            if(n >= 0) {
+                return n;
+            }
+            int e = WSAGetLastError();
+            if(e != WSAEWOULDBLOCK) {
+                errno = wsa_errno(e);
+                return -1;
+            }
+            if(!wait_fd(co, fd, GP_FD_READ)) {
+                return -1;
+            }
+        }
+    }
+    bool bad;
+    HANDLE h = pipe_of(fd, &bad);
+    if(!h) {
+        if(bad) {
+            errno = EBADF;
+            return -1;
+        }
+        return _read(fd, buf, (unsigned)clamp_len(len));
+    }
+    for(;;) {
+        DWORD avail = 0, got = 0;
+        if(!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
+            if(GetLastError() == ERROR_BROKEN_PIPE) {
+                return 0; /* the writer is gone and everything was read */
+            }
+            errno = EIO;
+            return -1;
+        }
+        if(avail) {
+            if(!ReadFile(h, buf, avail < (DWORD)clamp_len(len) ? avail : (DWORD)clamp_len(len), &got, NULL)) {
+                errno = EIO;
+                return -1;
+            }
+            return (ssize_t)got;
+        }
+        if(!wait_fd(co, fd, GP_FD_READ)) {
+            return -1;
+        }
+    }
+}
+
+ssize_t gp_co_write(gp_co* co, int fd, const void* buf, size_t len)
+{
+    const char* p = buf;
+    size_t done = 0;
+    if(gp_win_is_socket(fd)) {
+        while(done < len) {
+            int n = send(AS_SOCKET(fd), p + done, clamp_len(len - done), 0);
+            if(n >= 0) {
+                done += (size_t)n;
+                continue;
+            }
+            int e = WSAGetLastError();
+            if(e != WSAEWOULDBLOCK) {
+                errno = wsa_errno(e);
+                return -1;
+            }
+            if(!wait_fd(co, fd, GP_FD_WRITE)) {
+                return -1;
+            }
+        }
+        return (ssize_t)done;
+    }
+    bool bad;
+    HANDLE h = pipe_of(fd, &bad);
+    while(done < len) {
+        if(!h) {
+            int n = bad ? -1 : _write(fd, p + done, (unsigned)clamp_len(len - done));
+            if(n < 0) {
+                errno = bad ? EBADF : errno;
+                return -1;
+            }
+            done += (size_t)n;
+            continue;
+        }
+        DWORD put = 0;
+        DWORD chunk = len - done < 4096 ? (DWORD)(len - done) : 4096;           /* (a non-blocking write bigger than the free room may write nothing) */
+        if(!WriteFile(h, p + done, chunk, &put, NULL)) {
+            DWORD e = GetLastError();
+            errno = e == ERROR_NO_DATA || e == ERROR_BROKEN_PIPE ? EPIPE : EIO; /* (no reader left) */
+            return -1;
+        }
+        done += put;
+        if(!put && !wait_fd(co, fd, GP_FD_WRITE)) { /* a full non-blocking pipe */
+            return -1;
+        }
+    }
+    return (ssize_t)done;
+}
+
+int gp_co_accept(gp_co* co, int listen_fd)
+{
+    for(;;) {
+        SOCKET s = accept(AS_SOCKET(listen_fd), NULL, NULL);
+        if(s != INVALID_SOCKET) {
+            u_long one = 1;
+            ioctlsocket(s, FIONBIO, &one);
+            return (int)s;
+        }
+        int e = WSAGetLastError();
+        if(e == WSAECONNRESET) {
+            continue;
+        }
+        if(e != WSAEWOULDBLOCK) {
+            errno = wsa_errno(e);
+            return -1;
+        }
+        if(!wait_fd(co, listen_fd, GP_FD_READ)) {
+            return -1;
+        }
+    }
+}
+
+int gp_co_connect(gp_co* co, int fd, const struct sockaddr* addr, socklen_t addrlen)
+{
+    if(connect(AS_SOCKET(fd), addr, addrlen) == 0) {
+        return 0;
+    }
+    int e = WSAGetLastError();
+    if(e != WSAEWOULDBLOCK) {
+        errno = wsa_errno(e);
+        return -1;
+    }
+    if(!wait_fd(co, fd, GP_FD_WRITE)) {
+        return -1;
+    }
+    int err = 0, len = sizeof err;
+    if(getsockopt(AS_SOCKET(fd), SOL_SOCKET, SO_ERROR, (char*)&err, &len) != 0) {
+        errno = wsa_errno(WSAGetLastError());
+        return -1;
+    }
+    if(err) {
+        errno = wsa_errno(err);
+        return -1;
+    }
+    return 0;
+}
+
+#elif defined(GP_HAS_FD)
+
+bool gp_fd_set_nonblocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
 ssize_t gp_co_read(gp_co* co, int fd, void* buf, size_t len)

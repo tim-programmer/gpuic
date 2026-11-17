@@ -1091,6 +1091,10 @@ void gp_co_forget_window(gp_co* co, gp_window* w);
 uint64_t gp_exec_wake_after(gp_app* app, int64_t delay_ns, uint64_t co_job);
 uint64_t gp_exec_wake_frame(gp_app* app, uint64_t co_job, double* time_out);
 uint64_t gp_exec_wake_fd(gp_app* app, uint64_t co_job, int fd, int events, int64_t timeout_ns, int* revents_out);
+#ifdef _WIN32
+bool gp_win_is_socket(int fd);  /* a SOCKET passed as an int (starts Winsock) */
+void* gp_win_fd_handle(int fd); /* a CRT descriptor's HANDLE, or INVALID_HANDLE_VALUE (not the CRT's fatal error) */
+#endif
 uint64_t gp_exec_wake_background(gp_app* app, uint64_t co_job, gp_work_fn work, void* data);
 void gp_exec_cancel_id(gp_app* app, uint64_t id);
 

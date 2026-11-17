@@ -1,5 +1,5 @@
 /*
- * What the tests use that the Windows C library names differently or lacks, and two helpers for files. On Windows
+ * What the tests use that the Windows C library names differently or lacks (setenv, usleep, pipe), and two helpers for files. On Windows
  * the build includes this in every test (CMakeLists.txt), so `setenv` and `usleep` are simply there.
  */
 #ifndef GPUIC_TEST_COMPAT_H
@@ -10,7 +10,12 @@
 #include <stdlib.h>
 
 #ifdef _WIN32
+# include <fcntl.h>
+# include <io.h> /* read, write, close */
 # include <process.h>
+
+/* a pipe of C library descriptors, as POSIX has it (binary, 64 KB) */
+# define pipe(p) _pipe((p), 65536, _O_BINARY)
 
 # ifdef __cplusplus
 extern "C"
