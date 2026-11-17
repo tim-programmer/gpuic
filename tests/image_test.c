@@ -538,7 +538,7 @@ static void lifecycle_tests(Fix* fx)
     uint32_t dead[8];
     /* an image that was drawn has a texture; releasing it queues the texture, and the next frame deletes it */
     gp_gfx_image* im = gp_gfx_image_get(g, fx->checker.index, fx->checker.generation);
-    CHECK(im && im->gl_tex != 0, "a drawn image has its texture");
+    CHECK(im && im->tex != 0, "a drawn image has its texture");
     gp_image_release(app, fx->checker);
     fx->checker = GP_IMAGE_NULL;
     wait_draws(2);

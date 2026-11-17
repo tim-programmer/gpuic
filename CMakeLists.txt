@@ -81,12 +81,19 @@ add_library(gpuic
   src/paint.c
   src/platform_sdl.c
   src/render_gl.c
+  src/render_vk.c
   src/scroll.c
   src/text_input.c
   src/text.c
   src/views.c
   src/vlist.c)
 add_library(gpuic::gpuic ALIAS gpuic)
+# The Vulkan renderer needs only the Vulkan headers to build (the loader is found at run time, through SDL): where they are not on the include
+# path (the Vulkan SDK on Windows), they are looked for; without them render_vk.c builds a stub and GPUIC_RENDERER=vulkan says so.
+find_path(GPUIC_VULKAN_INCLUDE vulkan/vulkan.h HINTS $ENV{VULKAN_SDK}/Include $ENV{VULKAN_SDK}/include)
+if(GPUIC_VULKAN_INCLUDE)
+  target_include_directories(gpuic PRIVATE ${GPUIC_VULKAN_INCLUDE})
+endif()
 set_target_properties(gpuic PROPERTIES
   C_STANDARD 11             # builder macros rely on __VA_OPT__ (gcc/clang)
   C_STANDARD_REQUIRED ON
@@ -177,6 +184,18 @@ if(GPUIC_BUILD_TESTS)
   else()
     set(_gpuic_test_compat -include "${CMAKE_CURRENT_SOURCE_DIR}/tests/compat.h")
   endif()
+  # Every test runs a second time drawn with Vulkan where this machine has a Vulkan device (vulkaninfo finds one)
+  if(NOT DEFINED GPUIC_TEST_VULKAN)
+    find_program(_gpuic_vulkaninfo vulkaninfo)
+    set(_gpuic_has_vk OFF)
+    if(_gpuic_vulkaninfo AND NOT CMAKE_CROSSCOMPILING)
+      execute_process(COMMAND ${_gpuic_vulkaninfo} --summary RESULT_VARIABLE _gpuic_vk_rc OUTPUT_VARIABLE _gpuic_vk_out ERROR_QUIET)
+      if(_gpuic_vk_rc EQUAL 0 AND _gpuic_vk_out MATCHES "deviceName")
+        set(_gpuic_has_vk ON)
+      endif()
+    endif()
+    option(GPUIC_TEST_VULKAN "Run every test a second time with GPUIC_RENDERER=vulkan" ${_gpuic_has_vk})
+  endif()
   set(_gpuic_tests exec_test anim_test window_test autohide_test fonts_test lcd_test gfx_test gradient_test image_test svg_test svgx_test svgx2_test svgfont_test colr_test fswatch_test box_test flex_test minwidth_test reveal_test track_test smooth_test bigdoc_test grapheme_test variations_test gamma_test touch_test sticky_test hlist_test hvlist_test border_style_test state_style_test paintshift_test cull_test host_test transform_test curve_test stroke_test xform2_test lstate_test layer_test effects_test shapes_test xform3d_test textscale_test svgrelease_test pointer_test emptyview_test wheel_test shutdown_test keys_test input_test ime_wrap_test dualcaret_test wrapedit_test lazywrap_test longline_test list_test vlist_test observe_test views_test)
   list(APPEND _gpuic_tests fd_test)
   if(NOT WIN32)
@@ -203,6 +222,10 @@ if(GPUIC_BUILD_TESTS)
     add_test(NAME ${test} COMMAND ${test})
     # tests never touch the user's real font scan cache
     set_tests_properties(${test} PROPERTIES ENVIRONMENT "${_gpuic_test_env}")
+    if(GPUIC_TEST_VULKAN)   # each again, drawn with Vulkan
+      add_test(NAME ${test}_vk COMMAND ${test})
+      set_tests_properties(${test}_vk PROPERTIES ENVIRONMENT "${_gpuic_test_env};GPUIC_RENDERER=vulkan")
+    endif()
   endforeach()
   if(GPUIC_HAVE_CXX)
     # the C++ layer: the same interface built with the C macros and with the chain must come out identical (needs a display),
@@ -257,6 +280,7 @@ if(GPUIC_BUILD_TESTS)
   # the grapheme tables and test strings use the Python `regex` module's Unicode properties: check them when it is there
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_FOUND)
+    add_test(NAME shaders_fresh COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_shaders.py --check)   # src/shaders_*.inc made from src/shaders/
     execute_process(COMMAND ${Python3_EXECUTABLE} -c "import regex" RESULT_VARIABLE _regex_missing OUTPUT_QUIET ERROR_QUIET)
     if(NOT _regex_missing)
       add_test(NAME grapheme_data_fresh COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_grapheme.py --check)

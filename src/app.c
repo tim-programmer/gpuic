@@ -215,7 +215,18 @@ gp_window* gp_open_window(gp_app* app, const gp_window_options* opts, gp_entity 
         return NULL;
     }
     if(!app->renderer) {
-        app->renderer = gp_renderer_new(gp_platform_gl_proc);
+        app->renderer = gp_platform_vulkan(app) ? gp_vk_renderer_new(app, w) : gp_gl_renderer_new(gp_platform_gl_proc);
+        if(!app->renderer && gp_platform_vulkan(app)) { /* Vulkan was asked for and cannot draw here: the window again, for OpenGL */
+            fprintf(stderr, "gpuic: drawing with OpenGL instead\n");
+            gp_platform_close_window(app, w);
+            gp_platform_drop_vulkan(app);
+            if(gp_platform_open_window(app, w, &o)) {
+                app->renderer = gp_gl_renderer_new(gp_platform_gl_proc);
+            } else {
+                free(w);
+                return NULL;
+            }
+        }
         if(!app->renderer) {
             gp_platform_close_window(app, w);
             free(w);
@@ -239,7 +250,7 @@ gp_window* gp_app_window_by_id(gp_app* app, uint32_t id)
     return NULL;
 }
 
-/* GL objects can only be deleted while a context is current, so this runs before the last window goes. */
+/* GL objects can only be deleted while a context is current (and Vulkan's swapchains before their windows), so this runs before the last window goes. */
 static void renderer_release(gp_app* app, gp_window* current)
 {
     if(!app->renderer) {
@@ -248,7 +259,7 @@ static void renderer_release(gp_app* app, gp_window* current)
     if(current) {
         gp_platform_make_current(current);
     }
-    gp_renderer_free(app->renderer, app->gfx);
+    app->renderer->ops->free(app->renderer, app->gfx);
     app->renderer = NULL;
     /* what the textures held goes with them: a window opened later makes a new renderer, whose atlases start empty and whose gradient table
      * is uploaded whole (images upload again by themselves) */
@@ -258,6 +269,9 @@ static void renderer_release(gp_app* app, gp_window* current)
 
 static void window_destroy(gp_app* app, gp_window* w)
 {
+    if(app->renderer) {
+        app->renderer->ops->window_gone(app->renderer, w);
+    }
     gp_platform_close_window(app, w);
     for(int b = 0; b < 3; b++) {
         gp_arena_release(w->capture[b].hold);
@@ -759,9 +773,8 @@ static void window_draw(gp_app* app, gp_window* w)
         update_hovers(w);         /* (a state style that lays out moved things under the pointer: what changes now is for the next frame) */
     }
 
-    gp_platform_make_current(w);
     int64_t ts = gp_now_ns();
-    gp_renderer_draw(app->renderer, app->text, &w->scene, w->px_w, w->px_h, w->scale, w->background);
+    app->renderer->ops->draw(app->renderer, w, app->text, &w->scene, w->background);
     app->stat_submit_ns += gp_now_ns() - ts;
     app->stat_instances += (int64_t)w->scene.len;
     app->stat_last_instances = (int64_t)w->scene.len;
@@ -786,19 +799,19 @@ static void window_draw(gp_app* app, gp_window* w)
     }
     bool waited = (gp_now_ns() - app->start_ns) / 1000000 >= app->wait_ms;
     if(app->shot_path && app->frames >= app->shot_at && !script_pending && waited) {
-        uint8_t* px = gp_renderer_read_pixels(w->px_w, w->px_h);
+        uint8_t* px = app->renderer->ops->read_pixels(app->renderer, w);
         write_ppm(app->shot_path, px, w->px_w, w->px_h);
         free(px);
         app->quit = true;
     }
     if(app->capture_next) {
         free(app->capture_px);
-        app->capture_px = gp_renderer_read_pixels(w->px_w, w->px_h);
+        app->capture_px = app->renderer->ops->read_pixels(app->renderer, w);
         app->capture_w = w->px_w;
         app->capture_h = w->px_h;
         app->capture_next = false;
     }
-    gp_platform_swap(w);
+    app->renderer->ops->present(app->renderer, w);
 }
 
 void gp_debug_capture_next(gp_app* app)

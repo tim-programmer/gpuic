@@ -1,11 +1,12 @@
 /*
- * Platform backend on SDL3: windows, GL context, input events, cursors.
+ * Platform backend on SDL3: windows, GL context (or Vulkan surfaces), input events, cursors.
  * Everything SDL-specific lives here, so a native Wayland/X11 backend only
  * has to reimplement the gp_platform_* functions from internal.h.
  */
 #include "internal.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 
 #ifdef _WIN32
 # ifndef WIN32_LEAN_AND_MEAN
@@ -23,6 +24,7 @@
 typedef struct
 {
     SDL_GLContext gl;
+    bool vulkan;         /* GPUIC_RENDERER=vulkan, and SDL found the Vulkan loader: windows are made for Vulkan, no GL context is */
     int nwindows;        /* open: the context goes before the last of them (see gp_platform_close_window) */
     SDL_Cursor* cursors[GP_CURSOR_COUNT];
     SDL_FingerID finger; /* the finger being followed (the first), 0 for none */
@@ -76,6 +78,13 @@ bool gp_platform_init(gp_app* app)
     p->cursors[GP_CURSOR_POINTER] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
     p->cursors[GP_CURSOR_TEXT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT);
     app->platform = p;
+    const char* renderer = getenv("GPUIC_RENDERER");
+    if(renderer && strcmp(renderer, "vulkan") == 0) {
+        p->vulkan = SDL_Vulkan_LoadLibrary(NULL);
+        if(!p->vulkan) {
+            fprintf(stderr, "gpuic: GPUIC_RENDERER=vulkan, but the Vulkan loader was not found (%s): drawing with OpenGL\n", SDL_GetError());
+        }
+    }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -99,6 +108,9 @@ void gp_platform_shutdown(gp_app* app)
     }
     if(p->gl) {
         SDL_GL_DestroyContext(p->gl);
+    }
+    if(p->vulkan) {
+        SDL_Vulkan_UnloadLibrary();
     }
     free(p);
     app->platform = NULL;
@@ -224,18 +236,19 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
 {
     sdl_platform* p = plat(app);
     int width = opts->width > 0 ? opts->width : 960, height = opts->height > 0 ? opts->height : 640;
+    SDL_WindowFlags api = p->vulkan ? SDL_WINDOW_VULKAN : SDL_WINDOW_OPENGL;
     SDL_Window* win = NULL;
 #ifdef _WIN32
     HWND child = NULL;
 #endif
     if(!opts->parent) {
-        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, api | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     } else {
 #if defined(_WIN32)
         child = win32_child((HWND)opts->parent, width, height);
         SDL_PropertiesID props = SDL_CreateProperties();
         SDL_SetPointerProperty(props, SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, child);
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
+        SDL_SetBooleanProperty(props, p->vulkan ? SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN : SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
         win = child ? SDL_CreateWindowWithProperties(props) : NULL;
         SDL_DestroyProperties(props);
         if(!win && child) {
@@ -247,7 +260,7 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
             fprintf(stderr, "gpuic: a window inside another (gp_window_options.parent) needs SDL's x11 video driver, not %s (SDL_VIDEO_DRIVER=x11)\n", SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "none");
             return false;
         }
-        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIDDEN);
+        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, api | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIDDEN);
         if(win && !x11_reparent(win, (unsigned long)(uintptr_t)opts->parent)) {
             fprintf(stderr, "gpuic: could not put the window inside its parent (libX11 or SDL's X11 window not found)\n");
             SDL_DestroyWindow(win);
@@ -267,7 +280,7 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
         return false;
     }
     SDL_SetPointerProperty(SDL_GetWindowProperties(win), APP_PROP, app);
-    if(!p->gl) {
+    if(!p->gl && !p->vulkan) {
         p->gl = SDL_GL_CreateContext(win);
         if(!p->gl) {
             fprintf(stderr, "gpuic: could not create an OpenGL 3.3 context: %s\n", SDL_GetError());
@@ -287,7 +300,9 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, L"opengl32.dll", &gl_dll);
 #endif
     }
-    SDL_GL_MakeCurrent(win, p->gl);
+    if(p->gl) {
+        SDL_GL_MakeCurrent(win, p->gl);
+    }
     p->nwindows++;
     sdl_window* sw = calloc(1, sizeof *sw);
     sw->window = win;
@@ -360,12 +375,51 @@ void gp_platform_set_size(gp_window* w, int width, int height)
 
 void gp_platform_make_current(gp_window* w)
 {
-    SDL_GL_MakeCurrent(sdl_win(w), plat(w->app)->gl);
+    if(plat(w->app)->gl) {
+        SDL_GL_MakeCurrent(sdl_win(w), plat(w->app)->gl);
+    }
 }
 
 void gp_platform_swap(gp_window* w)
 {
     SDL_GL_SwapWindow(sdl_win(w));
+}
+
+bool gp_platform_vulkan(gp_app* app)
+{
+    return plat(app)->vulkan;
+}
+
+void gp_platform_drop_vulkan(gp_app* app)
+{
+    sdl_platform* p = plat(app);
+    if(p->vulkan) {
+        SDL_Vulkan_UnloadLibrary();
+        p->vulkan = false;
+    }
+}
+
+void* gp_platform_vk_loader(void)
+{
+    return (void*)SDL_Vulkan_GetVkGetInstanceProcAddr();
+}
+
+const char* const* gp_platform_vk_extensions(uint32_t* count)
+{
+    Uint32 n = 0;
+    const char* const* names = SDL_Vulkan_GetInstanceExtensions(&n);
+    *count = n;
+    return names;
+}
+
+uint64_t gp_platform_vk_surface(gp_window* w, void* instance)
+{
+    VkSurfaceKHR surface = 0;
+    if(!SDL_Vulkan_CreateSurface(sdl_win(w), (VkInstance)instance, NULL, &surface)) {
+        fprintf(stderr, "gpuic: no Vulkan surface for the window: %s\n", SDL_GetError());
+        return 0;
+    }
+    return (uint64_t)surface;
 }
 
 void gp_platform_set_cursor(gp_window* w, int cursor)

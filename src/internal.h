@@ -662,13 +662,13 @@ bool gp_gfx_overflowed(const gp_gfx* g);
 void gp_gfx_reset(gp_gfx* g);                                     /* forget all ramps (after overflow); images stay */
 int gp_gfx_gradient_count(const gp_gfx* g);
 
-/* Images. The registry holds premultiplied RGBA8 pixels (owned) and, once the renderer made one, the GL texture. */
+/* Images. The registry holds premultiplied RGBA8 pixels (owned) and, once the renderer made one, its texture. */
 #define GP_IMAGE_MAX_DIM 16384
 typedef struct
 {
     uint8_t* pixels;                                                            /* w x h x 4, premultiplied */
     int w, h;
-    uint32_t gl_tex;                                                            /* 0 until drawn */
+    uint32_t tex;                                                               /* the renderer's texture for it (a GL name, a Vulkan slot + 1): 0 until drawn */
     uint32_t generation;                                                        /* of the slot: 0 = free */
 } gp_gfx_image;
 gp_image gp_gfx_image_add(gp_gfx* g, int w, int h, uint8_t* premultiplied);     /* takes the pixels; GP_IMAGE_NULL (and frees them) if invalid */
@@ -676,7 +676,7 @@ gp_gfx_image* gp_gfx_image_get(gp_gfx* g, uint32_t index, uint32_t generation); 
 bool gp_gfx_image_size(gp_gfx* g, gp_image image, int* w, int* h);
 void gp_gfx_image_release(gp_gfx* g, gp_image image);
 int gp_gfx_image_count(const gp_gfx* g);
-/* Textures of released images, for the renderer to delete (it owns GL); and, when it is torn down, all of them. */
+/* Textures of released images, for the renderer to delete (it owns them); and, when it is torn down, all of them. */
 size_t gp_gfx_take_dead_textures(gp_gfx* g, uint32_t* out, size_t cap);
 size_t gp_gfx_take_all_textures(gp_gfx* g, uint32_t* out, size_t cap); /* forgets them: the images upload again when drawn */
 
@@ -917,14 +917,24 @@ static inline gp_point gp_aff_apply(gp_affine m, gp_point p)
 void gp_scene_push(gp_scene* s, const gp_instance* i);
 void gp_scene_clear(gp_scene* s);
 
+/* A renderer draws a window's scene: OpenGL 3.3 (render_gl.c), or Vulkan 1.3 (render_vk.c) when the platform was started for it
+ * (GPUIC_RENDERER=vulkan). One serves every window of the app; it is made with the first window and freed before the last goes. */
 typedef struct gp_renderer gp_renderer;
-gp_renderer* gp_renderer_new(void* (*get_proc)(const char*));
-void gp_renderer_free(gp_renderer* r, gp_gfx* gfx);
-void gp_renderer_draw(gp_renderer* r, gp_text_system* ts, const gp_scene* scene, int px_w,
-    int px_h, float scale, gp_color clear);
-/* Tightly packed RGB, top row first. Caller frees. */
-uint8_t* gp_renderer_read_pixels(int px_w, int px_h);
-void gp_debug_capture_next(gp_app* app); /* tests: app->capture_px holds the next frame drawn */
+typedef struct
+{
+    void (*free)(gp_renderer* r, gp_gfx* gfx);
+    void (*draw)(gp_renderer* r, gp_window* w, gp_text_system* ts, const gp_scene* scene, gp_color clear);
+    uint8_t* (*read_pixels)(gp_renderer* r, gp_window* w); /* what the last draw made, tightly packed RGB, top row first; the caller frees it */
+    void (*present)(gp_renderer* r, gp_window* w);         /* puts the last draw on screen */
+    void (*window_gone)(gp_renderer* r, gp_window* w);     /* before the window is destroyed: what the renderer keeps for it */
+} gp_renderer_ops;
+struct gp_renderer
+{
+    const gp_renderer_ops* ops;
+};
+gp_renderer* gp_gl_renderer_new(void* (*get_proc)(const char*));
+gp_renderer* gp_vk_renderer_new(gp_app* app, gp_window* first); /* NULL (with a message) where Vulkan cannot draw */
+void gp_debug_capture_next(gp_app* app);                        /* tests: app->capture_px holds the next frame drawn */
 
 /* ---------------------------------------------------------------- scrolling */
 
@@ -1259,6 +1269,7 @@ struct gp_window
 {
     gp_app* app;
     void* platform; /* backend window handle */
+    void* rdata;    /* what the renderer keeps for the window (Vulkan: its surface and swapchain) */
     uint32_t id;
     gp_entity root_view;
     gp_color background;
@@ -1484,6 +1495,13 @@ void gp_platform_inject_wheel(gp_window* w, float x, float y, float dx, float dy
 void gp_platform_inject_text(gp_window* w, const char* utf8);
 void gp_platform_inject_mouse(gp_window* w, int kind, float x, float y, int button, int clicks, uint32_t mods);
 void* gp_platform_gl_proc(const char* name);
+/* Vulkan (GPUIC_RENDERER=vulkan): windows are made for it and no GL context is. The loader's vkGetInstanceProcAddr, the instance extensions a surface
+ * needs, and a surface for a window (a VkSurfaceKHR, 0 on failure); NULL / false when the platform was started for GL. */
+bool gp_platform_vulkan(gp_app* app);
+void gp_platform_drop_vulkan(gp_app* app); /* windows made from now on are for GL (Vulkan could not draw: no window may be open) */
+void* gp_platform_vk_loader(void);
+const char* const* gp_platform_vk_extensions(uint32_t* count);
+uint64_t gp_platform_vk_surface(gp_window* w, void* instance);
 /* Calls `file` (path, size, modification time) for every regular file under `dir`, recursively (bounded depth). */
 void gp_platform_walk_dir(const char* dir, void (*file)(const char* path, int64_t size, int64_t mtime_ns, void* user), void* user);
 /* Creates `dir` and its parents; true if it exists afterwards. */

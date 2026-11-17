@@ -320,7 +320,7 @@ gp_image gp_gfx_image_add(gp_gfx* g, int w, int h, uint8_t* premultiplied)
     im->pixels = premultiplied;
     im->w = w;
     im->h = h;
-    im->gl_tex = 0;
+    im->tex = 0;
     im->generation = gen + 1;
     g->alive++;
     return (gp_image){ index, im->generation };
@@ -355,12 +355,12 @@ void gp_gfx_image_release(gp_gfx* g, gp_image image)
     if(!im) {
         return;
     }
-    if(im->gl_tex) {
+    if(im->tex) {
         if(g->ndead == g->cap_dead) {
             g->cap_dead = g->cap_dead ? g->cap_dead * 2 : 8;
             g->dead = realloc(g->dead, (size_t)g->cap_dead * sizeof *g->dead);
         }
-        g->dead[g->ndead++] = im->gl_tex;
+        g->dead[g->ndead++] = im->tex;
     }
     free(im->pixels);
     uint32_t keep = im->generation; /* the slot goes on counting from here */
@@ -392,9 +392,9 @@ size_t gp_gfx_take_all_textures(gp_gfx* g, uint32_t* out, size_t cap)
 {
     size_t n = 0;
     for(uint32_t i = 0; i < g->ncap && n < cap; i++) {
-        if(g->images[i].pixels && g->images[i].gl_tex) {
-            out[n++] = g->images[i].gl_tex;
-            g->images[i].gl_tex = 0;
+        if(g->images[i].pixels && g->images[i].tex) {
+            out[n++] = g->images[i].tex;
+            g->images[i].tex = 0;
         }
     }
     return n;

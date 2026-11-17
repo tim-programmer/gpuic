@@ -40,7 +40,7 @@ SHA-256:
 
 | Dependency | Version fetched | How | Notes |
 |---|---|---|---|
-| SDL3 | 3.4.20 | CMake, static | windowing and input; OpenGL is loaded at runtime through it, so there is no GL link dependency |
+| SDL3 | 3.4.20 | CMake, static | windowing and input; OpenGL (or the Vulkan loader) is loaded at runtime through it, so there is no GL or Vulkan link dependency |
 | FreeType | 2.14.3 | CMake, static | color emoji (CBDT) needs libpng, which FreeType picks up if present |
 | HarfBuzz | 14.6.0 | CMake, static | its CMake build enables C++, so fetching it needs a C++ compiler |
 | FriBidi | 1.0.17 | built by `cmake/GpuicFriBidi.cmake` | upstream has no CMake build; the release tarball ships the generated tables |
@@ -120,6 +120,22 @@ colors across the mitre (it was all one side or the other, decided by rounding w
 texels, tests that compare two frames of an animation hold the animations' clock still between them, and a fixed wait in a test became a wait until the
 window is idle. Mesa 26.2's llvmpipe with its rasterizer threads could copy what is under a blended layer before all of it was drawn; gpuic waits for the
 drawing first there (`glFinish` before the copy, only when the renderer is llvmpipe).
+
+**Vulkan.** `GPUIC_RENDERER=vulkan` draws with Vulkan 1.3 (`src/render_vk.c`) instead of OpenGL 3.3 (`src/render_gl.c`). It needs a device
+with dynamic rendering, dual-source blending (LCD text) and push descriptors, and only the Vulkan headers to build (found on the include path, or
+under `VULKAN_SDK` on Windows; without them the renderer is a stub that says so). Where the loader or such a device is missing, gpuic says why and
+draws with OpenGL. `GPUIC_VK_VALIDATE=1` turns on the Khronos validation layer. Both renderers run the same shaders: `src/shaders/quad.vert` and
+`quad.frag`, with `#ifdef VULKAN` where they differ (push constants and bindings, rows counted down); `tools/gen_shaders.py` makes
+`src/shaders_gl.inc` (the source as C strings) and `src/shaders_vk.inc` (SPIR-V, with `glslc`), both committed, so a build needs neither Python
+nor `glslc`, and the `shaders_fresh` test says when they are older than the sources. A frame is drawn into an image of the window's own and copied
+to the swapchain's (what is under a backdrop or a blend is copied out of the target, and tests read frames back); targets stay in the GENERAL
+layout with a full barrier between two uses of one; one frame is in flight; presenting is mailbox where there is one (FIFO held a window KDE was
+not showing to its frame callbacks, about 50 ms an image). Where `vulkaninfo` finds a device, every test runs a second time drawn with Vulkan
+(`name_vk`; `-DGPUIC_TEST_VULKAN=OFF` turns that off): all of them pass, also with the validation layer and its synchronization checks (which,
+with the barriers taken out, report 30 hazards in `effects_test`). Screenshots of the examples drawn both ways are the same but for a few
+pixels a level apart (the animated one excepted). Per frame, once the GPU has clocked up: about 0.08 ms of CPU for the Vulkan submit against
+0.04 for GL's (GL's wait is in the swap, which is not counted). The Windows build was run under Wine (whose Vulkan is the host's driver): the
+tests tried pass, and a Vulkan that cannot start falls back to OpenGL there as it should.
 
 Headless checks: `GPUIC_SCREENSHOT=out.ppm` renders a few frames, writes a PPM and exits.
 Inject input after the second frame with `GPUIC_HOVER=x,y`, `GPUIC_CLICK=x,y` and
@@ -1988,8 +2004,9 @@ mouse move/hover ─────────────────────
 * **Text** (`text.c`): fontconfig finds fonts, an itemizer splits text into per-font runs, HarfBuzz
   shapes them, FreeType rasterizes into two atlases; see "Fonts and text shaping" below.
   Advances are in font units, so layout is DPI-independent.
-* **Renderer** (`render_gl.c`): quads, gradients, shadows and glyphs (coverage, LCD and color) are all instances of
-  one SDF shader; paint order is draw order. Images have textures of their own, so they split the one instanced draw.
+* **Renderer** (`render_gl.c`, or `render_vk.c` with `GPUIC_RENDERER=vulkan`, behind `gp_renderer_ops`): quads, gradients, shadows and glyphs
+  (coverage, LCD and color) are all instances of one SDF shader (`src/shaders/`); paint order is draw order. Images have textures of their own,
+  so they split the one instanced draw.
 * **Platform** (`platform_sdl.c`): the only file that knows about SDL. A native
   Wayland/X11 backend means reimplementing the `gp_platform_*` functions.
 
@@ -2002,10 +2019,17 @@ Roughly in the order I'd tackle them:
    shows the project as changed when the example calls `mark_dirty` (not yet seen in REAPER); what a host's own shortcuts take before the
    plugin's view sees a key; and the example built in CI.
 2. Native Wayland/X11 backends without SDL (what a plugin host would rather not have in its process: SDL's process-wide state and event
-   pumping) and a Vulkan renderer. Nothing needs Vulkan yet: OpenGL 3.3 works everywhere gpuic runs. Multi-window polish.
+   pumping). Multi-window polish. Vulkan, the rest: choosing it from the API (only `GPUIC_RENDERER` does now), CI running the `_vk` tests
+   (Mesa's lavapipe), a real Windows machine (it was run under Wine only), and offscreen targets per window (they are shared, as GL's are: two
+   windows of different sizes drawn in turn make them again every frame).
 3. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
    foreground color with the text color (it is black: color glyphs are cached untinted).
 4. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
    of thousands of descriptors), and `examples/fd.c` on Windows (it is POSIX: stdin and BSD sockets as they are there).
 5. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
-6. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
+6. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
+   frame, so only worth it if a real app shows it): a cached view whose own scroller moves (its visible part), one moved while it holds an
+   offscreen layer (an opacity group, a filter) or a transform, and one turned by a transform of its own while the mouse is in the window.
+   A scene that changes is sent to the GPU whole (only an unchanged one is not sent). The tests that compare cached frames with full ones
+   each carry their own helpers for it, which is how two of them came to drop only part of the cached copies: one shared header would do.
+7. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
