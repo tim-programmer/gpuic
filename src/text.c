@@ -11,8 +11,8 @@
  *                so layout does not depend on the display scale.
  *   FreeType     rasterizes glyphs. Outline fonts go into an R8 coverage atlas (tinted by the text
  *                color); fixed-size color bitmap fonts (CBDT emoji, with a single strike) are
- *                downscaled with an area filter into an RGBA atlas and are never tinted. Other
- *                color formats (COLR/CPAL, SVG, sbix) are not handled.
+ *                downscaled with an area filter into an RGBA atlas and are never tinted. SVG glyphs
+ *                are drawn by svgx.c, COLR glyphs (v1 and v0) by colr.c; sbix is not handled.
  *
  *   FriBidi      resolves bidirectional text (UAX #9): embedding levels per paragraph, then rules L1
  *                and L2. Reordering happens at the level of *runs* (same font, same level), and
@@ -27,6 +27,7 @@
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
 #include FT_TRUETYPE_TABLES_H
+#include FT_TRUETYPE_TAGS_H
 #include FT_SFNT_NAMES_H
 #include FT_MULTIPLE_MASTERS_H
 #include FT_TRUETYPE_IDS_H
@@ -83,6 +84,7 @@ typedef struct
     float upem, ascent, descent; /* font units */
     bool bitmap_only;            /* only fixed-size strikes (e.g. CBDT emoji) */
     bool svg;                    /* has an 'SVG ' table: color glyphs drawn by svgx.c through FreeType's hooks */
+    bool colr;                   /* has a 'COLR' table: its glyphs are drawn by colr.c */
 } gp_font;
 
 /* A shelf-packed texture atlas with a dirty rectangle for the renderer to upload. */
@@ -520,6 +522,8 @@ static int font_open(gp_text_system* ts, const char* path, int index, void* data
     f->family = face_family(face);
     f->italic = (face->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
     f->color = FT_HAS_COLOR(face) != 0;
+    FT_ULong colr_len = 0;
+    f->colr = f->color && FT_Load_Sfnt_Table(face, TTAG_COLR, 0, NULL, &colr_len) == 0;
 #ifdef GP_HAVE_OTSVG
     f->svg = FT_HAS_SVG(face) != 0;
 #endif
@@ -3383,7 +3387,7 @@ bool gp_text_svg_fonts(void)
 #endif
 }
 
-/* A glyph of an SVG font: FreeType loads its document and our hooks draw it (BGRA, premultiplied), as a color glyph. False if the glyph is not in
+/* A glyph of an SVG font: FreeType loads its document and our hooks draw it (BGRA, premultiplied), and it goes into the color atlas as RGBA. False if the glyph is not in
  * the 'SVG ' table (then it is drawn from its outline). */
 static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_size, gp_glyph_entry* e, bool* cache)
 {
@@ -3404,8 +3408,15 @@ static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_s
         *cache = false;
         return true;
     }
-    for(int row = 0; row < h; row++) {
-        memcpy(ts->color.data + ((size_t)(y + row) * ts->color.w + (size_t)x) * 4, g->bitmap.buffer + (size_t)row * (size_t)g->bitmap.pitch, (size_t)w * 4);
+    for(int row = 0; row < h; row++) { /* (FreeType's BGRA -> the atlas's RGBA) */
+        const uint8_t* src = g->bitmap.buffer + (size_t)row * (size_t)g->bitmap.pitch;
+        uint8_t* dst = ts->color.data + ((size_t)(y + row) * ts->color.w + (size_t)x) * 4;
+        for(int i = 0; i < w * 4; i += 4) {
+            dst[i] = src[i + 2];
+            dst[i + 1] = src[i + 1];
+            dst[i + 2] = src[i];
+            dst[i + 3] = src[i + 3];
+        }
     }
     atlas_mark_dirty(&ts->color, x, y, w, h);
     *e = (gp_glyph_entry){ (float)x, (float)y, (float)w, (float)h, (float)g->bitmap_left, (float)g->bitmap_top, true, false };
@@ -3419,6 +3430,27 @@ static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_s
     (void)cache;
     return false;
 #endif
+}
+
+/* A COLR glyph, drawn by colr.c at the quarter pixel `bin`, into the color atlas. False if it has no color (then it is its outline). */
+static bool colr_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_size, int bin, gp_glyph_entry* e, bool* cache)
+{
+    uint8_t* px;
+    int box[4], x, y;
+    if(!gp_colr_glyph(f->face, glyph, px_size, (float)bin / GP_SUBPIXEL_BINS, &px, box)) {
+        return false;
+    }
+    if(px && atlas_alloc(&ts->color, box[2], box[3], &x, &y)) {
+        for(int row = 0; row < box[3]; row++) {
+            memcpy(ts->color.data + ((size_t)(y + row) * ts->color.w + (size_t)x) * 4, px + (size_t)row * (size_t)box[2] * 4, (size_t)box[2] * 4);
+        }
+        atlas_mark_dirty(&ts->color, x, y, box[2], box[3]);
+        *e = (gp_glyph_entry){ (float)x, (float)y, (float)box[2], (float)box[3], (float)box[0], (float)box[1], true, false };
+    } else if(px) {
+        *cache = false;
+    }
+    free(px);
+    return true;
 }
 
 gp_glyph_entry gp_text_glyph_lcd(gp_text_system* ts, int font_id, uint32_t glyph, float px_size, int bin, int lcd)
@@ -3490,6 +3522,8 @@ gp_glyph_entry gp_text_glyph_lcd(gp_text_system* ts, int font_id, uint32_t glyph
         }
     } else if(f->svg && svg_glyph(ts, f, glyph, px_size, &e, &cache)) {
         /* (a glyph of the 'SVG ' table, drawn into the color atlas) */
+    } else if(f->colr && colr_glyph(ts, f, glyph, px_size, bin, &e, &cache)) {
+        /* (a COLR glyph, drawn by colr.c into the color atlas) */
     } else {
         FT_Set_Char_Size(f->face, 0, (FT_F26Dot6)(px_size * 64.f + 0.5f), 72, 72);
         bool loaded = FT_Load_Glyph(f->face, glyph, FT_LOAD_TARGET_LIGHT) == 0;
