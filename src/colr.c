@@ -44,7 +44,7 @@ typedef struct
     int npal;
     int w, h;
     int depth;
-    int budget; /* paints left to draw */
+    int budget;   /* paints left to draw */
     double scale; /* pixels per font unit */
     bool bounds;  /* only collecting the box of what the glyph outlines cover */
     double bb[4];
@@ -620,7 +620,9 @@ bool gp_colr_glyph(
     }
     FT_Set_Char_Size(face, 0, (FT_F26Dot6)(px_size * 64.f + .5f), 72, 72);
     double s = px_size / (double)face->units_per_EM;
-    Ctx x = { .face = face, .budget = MAX_PAINTS, .scale = s, .bb = { 1e30, 1e30, -1e30, -1e30 } };
+    Ctx x = {
+        .face = face, .budget = MAX_PAINTS, .scale = s, .bb = { 1e30, 1e30, -1e30, -1e30 }
+    };
     FT_Palette_Data pd;
     if(!FT_Palette_Data_Get(face, &pd) && pd.num_palettes && !FT_Palette_Select(face, 0, &x.pal)) {
         x.npal = pd.num_palette_entries;

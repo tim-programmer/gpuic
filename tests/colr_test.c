@@ -128,7 +128,10 @@ int main(void)
 
     glyph(9, 100.f); /* V: COLRv0 layers */
     CHECK(ge.color && fabsf(ge.left) <= 1 && ge.w >= 99 && ge.w <= 101 && rgba(at(25, -50), 255, 0, 0, 255) && rgba(at(75, -50), 0, 0, 255, 255),
-        "V, a COLRv0 glyph, is red on the left and blue on the right, on the em (%d, %.0f x %.0f)", ge.color, (double)ge.w, (double)ge.h);
+        "V, a COLRv0 glyph, is red on the left and blue on the right, on the em (%d, %.0f x %.0f)",
+        ge.color,
+        (double)ge.w,
+        (double)ge.h);
 
     glyph(0, 20.f);
     CHECK(ge.color && ge.w >= 19 && ge.w <= 21 && rgba(at(5, -10), 255, 0, 0, 255)
