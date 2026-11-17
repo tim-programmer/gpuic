@@ -634,6 +634,9 @@ void gp_text_set_gfx(gp_text_system* ts, gp_gfx* g);
 /* The shapes of `text` as SVG path data in pixels (y down, the pen at x0, y0 on the baseline); *advance is its width. NULL if nothing has an outline. malloc'd. (SVG text.) */
 char* gp_text_outline_path(gp_text_system* ts, int64_t weight, float size, const char* text, size_t len, float x0, float y0, float* advance);
 bool gp_text_svg_fonts(void); /* FreeType can draw OpenType SVG glyphs (through svgx.c) */
+/* colr.c: a COLR (v1 or v0) glyph as premultiplied RGBA (see there) */
+struct FT_FaceRec_;
+bool gp_colr_glyph(struct FT_FaceRec_* face, uint32_t glyph, float px_size, float shift, uint8_t** rgba, int box[4]);
 typedef struct
 {
     char* d;

@@ -24,7 +24,7 @@ static int failures;
 
 static const uint8_t* atlas;
 static gp_glyph_entry ge;
-/* the atlas pixel at (x, y) pixels from the glyph's origin (y down from the baseline), as BGRA */
+/* the atlas pixel at (x, y) pixels from the glyph's origin (y down from the baseline), as RGBA */
 static const uint8_t* at(float x, float y)
 {
     int ax = (int)ge.u + (int)floorf(x - ge.left), ay = (int)ge.v + (int)floorf(y + ge.top);
@@ -33,9 +33,9 @@ static const uint8_t* at(float x, float y)
     }
     return atlas + ((size_t)ay * GP_COLOR_ATLAS_SIZE + (size_t)ax) * 4;
 }
-static bool bgra(const uint8_t* p, int r, int g, int b)
+static bool rgba(const uint8_t* p, int r, int g, int b)
 {
-    return p[3] > 247 && abs(p[2] - r) < 8 && abs(p[1] - g) < 8 && abs(p[0] - b) < 8;
+    return p[3] > 247 && abs(p[0] - r) < 8 && abs(p[1] - g) < 8 && abs(p[2] - b) < 8;
 }
 static bool clear(const uint8_t* p)
 {
@@ -65,15 +65,15 @@ int main(void)
     ge = gp_text_glyph(ts, g[0].font, g[0].glyph, 100.f);
     atlas = gp_text_color_atlas(ts);
     CHECK(ge.color && ge.w >= 60 && ge.w <= 64 && ge.h >= 80 && ge.h <= 84, "A is a color glyph of about 60 x 80 px (%d: %.0f x %.0f)", ge.color, (double)ge.w, (double)ge.h);
-    CHECK(bgra(at(15, -40), 255, 0, 0) && bgra(at(2, -78), 255, 0, 0), "its left half is red");
-    CHECK(bgra(at(45, -40), 0, 0, 255) && bgra(at(58, -2), 0, 0, 255), "its right half is blue");
+    CHECK(rgba(at(15, -40), 255, 0, 0) && rgba(at(2, -78), 255, 0, 0), "its left half is red");
+    CHECK(rgba(at(45, -40), 0, 0, 255) && rgba(at(58, -2), 0, 0, 255), "its right half is blue");
     CHECK(clear(at(15, 3)) && clear(at(15, -83)) && clear(at(62, -40)), "and nothing is drawn outside it");
     CHECK(fabsf(ge.left) <= 1.5f && fabsf(ge.top - 80.f) <= 1.5f, "its box starts at the origin, 80 above the baseline (%.1f, %.1f)", (double)ge.left, (double)ge.top);
 
     /* B: a green circle of radius 30 at (30, -40): the square cut by the clip */
     ge = gp_text_glyph(ts, g[1].font, g[1].glyph, 100.f);
     atlas = gp_text_color_atlas(ts);
-    CHECK(ge.color && bgra(at(30, -40), 0, 255, 0) && bgra(at(30, -68), 0, 255, 0) && bgra(at(3, -40), 0, 255, 0), "B is green inside its circle");
+    CHECK(ge.color && rgba(at(30, -40), 0, 255, 0) && rgba(at(30, -68), 0, 255, 0) && rgba(at(3, -40), 0, 255, 0), "B is green inside its circle");
     CHECK(clear(at(4, -74)) && clear(at(56, -6)) && clear(at(56, -74)), "and clear in the square's corners, outside the circle (the clip, through a <use>)");
     /* the circle's edge: every pixel whose center is more than a pixel inside it is covered, more than a pixel outside it is not */
     int bad = 0, inside = 0;
@@ -100,7 +100,7 @@ int main(void)
     /* sizes: at 20 px A is 12 x 16 */
     ge = gp_text_glyph(ts, g[0].font, g[0].glyph, 20.f);
     atlas = gp_text_color_atlas(ts);
-    CHECK(ge.color && ge.w >= 12 && ge.w <= 15 && bgra(at(3, -8), 255, 0, 0) && bgra(at(9, -8), 0, 0, 255), "at 20 px A is 12 px wide and still red and blue (%.0f)", (double)ge.w);
+    CHECK(ge.color && ge.w >= 12 && ge.w <= 15 && rgba(at(3, -8), 255, 0, 0) && rgba(at(9, -8), 0, 0, 255), "at 20 px A is 12 px wide and still red and blue (%.0f)", (double)ge.w);
 
     gp_text_system_free(ts);
     printf(failures ? "svgfont_test: %d FAILURE(S)\n" : "svgfont_test: all checks passed\n", failures);

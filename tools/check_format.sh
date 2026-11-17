@@ -4,7 +4,7 @@
 #   tools/check_format.sh          exits 1 and names the files that are not formatted
 #   tools/check_format.sh --fix    formats them (repeated until nothing changes: aligned comments can move again on a second pass)
 #
-# Left out: third_party/ (vendored code, kept as upstream wrote it) and generated files (tools/gen_*.py and tools/gen_svg_font.py make
+# Left out: third_party/ (vendored code, kept as upstream wrote it) and generated files (tools/gen_*.py make
 # them; two of them are compared with their generators by ctest). The .clang-format sets InsertBraces: every if, else, for, while and do
 # body has braces.
 #
@@ -26,7 +26,7 @@ fi
 
 FILES=$(git ls-files '*.c' '*.h' '*.cpp' '*.hpp' \
     | grep -v '^third_party/' \
-    | grep -v -x -e 'src/grapheme_data.h' -e 'tests/image_fixtures.h' -e 'tests/svgfont_fixture.h')
+    | grep -v -x -e 'src/grapheme_data.h' -e 'tests/image_fixtures.h' -e 'tests/svgfont_fixture.h' -e 'tests/colr_fixture.h')
 
 if [ "${1:-}" = "--fix" ]; then
     for pass in 1 2 3 4 5; do
