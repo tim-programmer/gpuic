@@ -246,10 +246,40 @@ typedef struct
     const char* title;
     int width, height;   /* logical pixels; 0 => 960x640 */
     gp_color background; /* a == 0 => dark grey */
+    /* A native window to open this one inside of, as a child filling (width x height) at its top-left: a plugin's view in its host. An X11
+     * Window (cast to a pointer) or an HWND. X11 needs SDL's x11 video driver (SDL_VIDEO_DRIVER=x11 before gp_app_new: a host's window on a
+     * Wayland desktop is an XWayland one anyway); Wayland and macOS have no such thing here, and the window does not open. */
+    void* parent;
 } gp_window_options;
 
 gp_window* gp_open_window(gp_app* app, const gp_window_options* opts, gp_entity root_view);
 void gp_quit(gp_app* app);
+/* The window's native handle, to give to something that wants it: an X11 Window (as a pointer-sized integer) or an HWND; NULL elsewhere. */
+void* gp_window_native(gp_window* w);
+/* Resizes the window (logical pixels): an embedded one follows its host's size this way. */
+void gp_window_set_size(gp_window* w, int width, int height);
+
+/* An app whose loop the caller runs, for when something else owns the event loop: a plugin in a host (CLAP, VST3), a game engine. Instead of
+ * gp_application_run(ready, data):
+ *
+ *   gp_app *app = gp_app_new();              // what `ready` did: entities, views, windows...
+ *   ...
+ *   int ms;                                  // then, from the host's timer (or its idle callback), on the thread that made the app:
+ *   gp_app_step(app, &ms);                   // events, timers, observers, drawing: whatever is due, without waiting
+ *   ...
+ *   gp_app_free(app);                        // windows closed, tasks cancelled, entities dropped
+ *
+ * gp_app_step never sleeps; `*next_ms` (may be NULL) says when it next wants to run (0 at once, -1 only when an event comes), but events
+ * (input, a gp_post from a worker) arrive whenever: a host calls it on a timer, at the display's rate when it can. It returns false once
+ * gp_quit was called. An app with no window is fine (a plugin before its view opens), and closing the last window does not end it. Several
+ * apps can live in one process (two instances of a plugin): each window's events go to the app that opened it, whichever app's step takes
+ * them. A step draws the windows that need it and swaps with vsync, so it can take up to a frame. On Windows, an app with an embedded window
+ * leaves the thread's message loop to the host from then on, for every SDL window in the process (SDL_HINT_WINDOWS_ENABLE_MESSAGELOOP). An
+ * app's posts (gp_post) and observers run in its own steps: step every app. Close an embedded window (gp_window_close and one more step,
+ * or gp_app_free) before its host destroys the parent: on X11 the child goes with it, and drawing to it then ends the process (Xlib's error handler). */
+gp_app* gp_app_new(void); /* NULL if the platform could not start */
+bool gp_app_step(gp_app* app, int* next_ms);
+void gp_app_free(gp_app* app);
 
 /* ---- fonts ----
  * With nothing registered, fonts come from the system (fontconfig, or a scan of the system font

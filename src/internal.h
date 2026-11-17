@@ -1385,6 +1385,7 @@ struct gp_app
     void* gl_context; /* backend-owned */
     void* platform;
     bool quit;
+    bool hosted;      /* made with gp_app_new: the caller runs the loop (gp_app_step), and the platform's quit request is not ours */
 
     /* test hooks, driven by GPUIC_* env vars */
     const char* shot_path;
@@ -1483,5 +1484,7 @@ bool gp_platform_mkdirs(const char* dir);
 bool gp_platform_rename(const char* from, const char* to);
 /* Blocks up to timeout_ms (-1 = forever) for events, then dispatches all pending. */
 void gp_platform_pump(gp_app* app, int timeout_ms);
+void* gp_platform_native(gp_window* w);                         /* an X11 Window (as an integer) or an HWND; NULL where there is none to give */
+void gp_platform_set_size(gp_window* w, int width, int height); /* logical pixels */
 
 #endif

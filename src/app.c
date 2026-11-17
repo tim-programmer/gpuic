@@ -402,7 +402,7 @@ static void update_cursor(gp_window* w)
     if(w->mouse_in && gp_hit_test(w->tree, w->mouse, GP_HIT_CURSOR, &hit)) {
         cursor = hit.el->style.cursor;
     }
-    if(cursor != w->cursor) {
+    if(cursor != w->cursor || w->mouse_in) { /* (with the mouse over it, asked each time: another app's window may have set the process's cursor) */
         w->cursor = cursor;
         gp_platform_set_cursor(w, cursor);
     }
@@ -804,18 +804,19 @@ void gp_debug_capture_next(gp_app* app)
     app->capture_next = true;
 }
 
-int gp_application_run(gp_ready_fn ready, void* userdata)
+/* Everything an app needs before its first window: the platform, text, graphics, executors, and the test hooks the environment asks for. */
+static gp_app* app_new(void)
 {
     gp_app* app = calloc(1, sizeof *app);
     if(!gp_platform_init(app)) {
         free(app);
-        return 1;
+        return NULL;
     }
     app->text = gp_text_system_new();
     if(!app->text) {
         gp_platform_shutdown(app);
         free(app);
-        return 1;
+        return NULL;
     }
 
     app->gfx = gp_gfx_new();
@@ -823,7 +824,7 @@ int gp_application_run(gp_ready_fn ready, void* userdata)
         gp_text_system_free(app->text);
         gp_platform_shutdown(app);
         free(app);
-        return 1;
+        return NULL;
     }
     gp_text_set_gfx(app->text, app->gfx);
 
@@ -871,107 +872,116 @@ int gp_application_run(gp_ready_fn ready, void* userdata)
     if(hover && sscanf(hover, "%f,%f", &app->hover_at.x, &app->hover_at.y) == 2) {
         app->has_hover = true;
     }
+    return app;
+}
 
-    ready(app, userdata);
-    gp_effects_flush(app);
+/* How long the loop may sleep before it has something to do: the next timer or frame, 0 if effects are waiting, -1 for nothing but events. Test
+ * mode keeps frames flowing. */
+static int app_timeout_ms(gp_app* app)
+{
+    bool scripted = app->shot_path || app->nclicks;
+    int timeout = app->shot_path ? 0 : gp_exec_timeout_ms(app);
+    if(scripted && !app->shot_path && (timeout < 0 || timeout > 10)) {
+        timeout = 10; /* poll the script */
+    }
+    if(gp_effects_pending(app)) {
+        timeout = 0;
+    }
+    return timeout;
+}
 
-    int status = app->nwindows ? 0 : 1;
-    while(!app->quit && app->nwindows) {
-        /* sleep until the next event, timer or frame; test mode keeps frames flowing */
-        bool scripted = app->shot_path || app->nclicks;
-        int timeout = app->shot_path ? 0 : gp_exec_timeout_ms(app);
-        if(scripted && !app->shot_path && (timeout < 0 || timeout > 10)) {
-            timeout = 10; /* poll the script */
-        }
-        if(gp_effects_pending(app)) {
-            timeout = 0;
-        }
-        gp_platform_pump(app, timeout);
-        app->stat_wakeups++;
-        for(int i = 0; i < app->nwindows; i++) {
-            app->windows[i]->swallow_text = false;
-        }
-        gp_exec_run(app);
-        gp_effects_flush(app); /* what drawing or the script hooks below queued last turn */
+/* One turn of the loop after its events were taken: timers, effects, windows closed and drawn, and the test scripts. */
+static void app_turn(gp_app* app)
+{
+    bool scripted = app->shot_path || app->nclicks;
+    app->stat_wakeups++;
+    for(int i = 0; i < app->nwindows; i++) {
+        app->windows[i]->swallow_text = false;
+    }
+    gp_exec_run(app);
+    gp_effects_flush(app); /* what drawing or the script hooks below queued last turn */
 
-        for(int i = 0; i < app->nwindows;) {
-            gp_window* w = app->windows[i];
-            if(w->closed) {
-                gp_exec_window_closed(app, w);
-                if(app->nwindows == 1) {
-                    renderer_release(app, w);
-                }
-                window_destroy(app, w);
-                memmove(&app->windows[i], &app->windows[i + 1], (size_t)(app->nwindows - i - 1) * sizeof w);
-                app->nwindows--;
-                continue;
+    for(int i = 0; i < app->nwindows;) {
+        gp_window* w = app->windows[i];
+        if(w->closed) {
+            gp_exec_window_closed(app, w);
+            if(app->nwindows == 1) {
+                renderer_release(app, w);
             }
-            if(w->dirty_render || w->dirty_paint || w->dirty_layout || !w->tree) {
-                window_draw(app, w);
-            }
-            i++;
+            window_destroy(app, w);
+            memmove(&app->windows[i], &app->windows[i + 1], (size_t)(app->nwindows - i - 1) * sizeof w);
+            app->nwindows--;
+            continue;
         }
-
-        if(scripted && app->nwindows) {
-            gp_window* w = app->windows[0];
-            if(app->frames == 2 && app->has_hover) {
-                app->has_hover = false;
-                gp_window_on_mouse_move(w, app->hover_at.x, app->hover_at.y, 0);
-            }
-            if(app->frames == 2 && app->has_click) {
-                app->has_click = false;
-                gp_window_on_mouse_move(w, app->click_at.x, app->click_at.y, 0);
-                gp_window_on_mouse_button(w, app->click_at.x, app->click_at.y, GP_MOUSE_LEFT, true, 1, 0);
-                gp_window_on_mouse_button(w, app->click_at.x, app->click_at.y, GP_MOUSE_LEFT, false, 1, 0);
-            }
-            for(int i = 0; i < app->nclicks; i++) {
-                int64_t elapsed_ms = (gp_now_ns() - app->start_ns) / 1000000;
-                if(app->clicks[i].done || app->frames < 1 || elapsed_ms < app->clicks[i].ms) {
-                    continue;
-                }
-                app->clicks[i].done = true;
-                gp_point p = app->clicks[i].at;
-                gp_window_on_mouse_move(w, p.x, p.y, 0);
-                gp_window_on_mouse_button(w, p.x, p.y, GP_MOUSE_LEFT, true, 1, 0);
-                gp_window_on_mouse_button(w, p.x, p.y, GP_MOUSE_LEFT, false, 1, 0);
-                app->shot_at = app->frames + 3;
-            }
-            if(app->frames >= 2 && app->keys && *app->keys) {
-                inject_key(app, w);
-            }
-            if(app->frames >= 3 && app->ime_text && !(app->keys && *app->keys) && !app->ime_shot_set) {
-                app->ime_shot_set = true;
-                app->shot_at = app->frames + 4;
-            }
-            if(app->frames >= 2 && app->wheel && *app->wheel) {
-                inject_wheel(app, w);
-            }
-            if(app->has_drag && app->frames >= 2 + app->drag_stage) {
-                /* press, move halfway, move to the end, release: one step per frame */
-                float* d = app->drag;
-                switch(app->drag_stage++) {
-                    case 0:
-                        gp_window_on_mouse_move(w, d[0], d[1], 0);
-                        gp_window_on_mouse_button(w, d[0], d[1], GP_MOUSE_LEFT, true, 1, 0);
-                        break;
-                    case 1:
-                        gp_window_on_mouse_move(w, (d[0] + d[2]) / 2, (d[1] + d[3]) / 2, 0);
-                        break;
-                    case 2:
-                        gp_window_on_mouse_move(w, d[2], d[3], 0);
-                        break;
-                    default:
-                        gp_window_on_mouse_button(w, d[2], d[3], GP_MOUSE_LEFT, false, 1, 0);
-                        app->has_drag = false;
-                        app->shot_at = app->frames + 3;
-                }
-            }
-            if(app->shot_path) {
-                w->dirty_paint = true; /* keep frames flowing in test mode */
-            }
+        if(w->dirty_render || w->dirty_paint || w->dirty_layout || !w->tree) {
+            window_draw(app, w);
         }
+        i++;
     }
 
+    if(scripted && app->nwindows) {
+        gp_window* w = app->windows[0];
+        if(app->frames == 2 && app->has_hover) {
+            app->has_hover = false;
+            gp_window_on_mouse_move(w, app->hover_at.x, app->hover_at.y, 0);
+        }
+        if(app->frames == 2 && app->has_click) {
+            app->has_click = false;
+            gp_window_on_mouse_move(w, app->click_at.x, app->click_at.y, 0);
+            gp_window_on_mouse_button(w, app->click_at.x, app->click_at.y, GP_MOUSE_LEFT, true, 1, 0);
+            gp_window_on_mouse_button(w, app->click_at.x, app->click_at.y, GP_MOUSE_LEFT, false, 1, 0);
+        }
+        for(int i = 0; i < app->nclicks; i++) {
+            int64_t elapsed_ms = (gp_now_ns() - app->start_ns) / 1000000;
+            if(app->clicks[i].done || app->frames < 1 || elapsed_ms < app->clicks[i].ms) {
+                continue;
+            }
+            app->clicks[i].done = true;
+            gp_point p = app->clicks[i].at;
+            gp_window_on_mouse_move(w, p.x, p.y, 0);
+            gp_window_on_mouse_button(w, p.x, p.y, GP_MOUSE_LEFT, true, 1, 0);
+            gp_window_on_mouse_button(w, p.x, p.y, GP_MOUSE_LEFT, false, 1, 0);
+            app->shot_at = app->frames + 3;
+        }
+        if(app->frames >= 2 && app->keys && *app->keys) {
+            inject_key(app, w);
+        }
+        if(app->frames >= 3 && app->ime_text && !(app->keys && *app->keys) && !app->ime_shot_set) {
+            app->ime_shot_set = true;
+            app->shot_at = app->frames + 4;
+        }
+        if(app->frames >= 2 && app->wheel && *app->wheel) {
+            inject_wheel(app, w);
+        }
+        if(app->has_drag && app->frames >= 2 + app->drag_stage) {
+            /* press, move halfway, move to the end, release: one step per frame */
+            float* d = app->drag;
+            switch(app->drag_stage++) {
+                case 0:
+                    gp_window_on_mouse_move(w, d[0], d[1], 0);
+                    gp_window_on_mouse_button(w, d[0], d[1], GP_MOUSE_LEFT, true, 1, 0);
+                    break;
+                case 1:
+                    gp_window_on_mouse_move(w, (d[0] + d[2]) / 2, (d[1] + d[3]) / 2, 0);
+                    break;
+                case 2:
+                    gp_window_on_mouse_move(w, d[2], d[3], 0);
+                    break;
+                default:
+                    gp_window_on_mouse_button(w, d[2], d[3], GP_MOUSE_LEFT, false, 1, 0);
+                    app->has_drag = false;
+                    app->shot_at = app->frames + 3;
+            }
+        }
+        if(app->shot_path) {
+            w->dirty_paint = true; /* keep frames flowing in test mode */
+        }
+    }
+}
+
+/* The end of an app: its tasks cancelled and coroutines unwound, its windows closed, its entities dropped, everything freed. */
+static void app_free(gp_app* app)
+{
     if(getenv("GPUIC_STATS")) {
         fprintf(stderr, "gpuic: %lu loop wakeups, %lu draws, %lu atlas resets in %.2f s; %lu view renders; "
                         "per draw: build %.3f ms, layout %.3f ms, paint %.3f ms, GL submit %.3f ms (%ld instances); cached subtrees: %lu layouts skipped, "
@@ -990,9 +1000,9 @@ int gp_application_run(gp_ready_fn ready, void* userdata)
             app->stat_paint_hits,
             app->stat_paint_misses);
     }
-    gp_exec_shutdown(app); /* cancel tasks, unwind coroutines, join the pool: entities still alive */
+    gp_exec_shutdown(app);                        /* cancel tasks, unwind coroutines, join the pool: entities still alive */
     renderer_release(app, app->nwindows ? app->windows[0] : NULL);
-    for(int i = 0; i < app->nwindows; i++) {
+    for(int i = app->nwindows - 1; i >= 0; i--) { /* the newest first: a window inside another goes before it (X11 would take it along) */
         window_destroy(app, app->windows[i]);
     }
     for(uint32_t i = 0; i < app->nslots; i++) {
@@ -1017,7 +1027,61 @@ int gp_application_run(gp_ready_fn ready, void* userdata)
     gp_platform_shutdown(app);
     gp_arena_holds_free();
     free(app);
+}
+
+int gp_application_run(gp_ready_fn ready, void* userdata)
+{
+    gp_app* app = app_new();
+    if(!app) {
+        return 1;
+    }
+    ready(app, userdata);
+    gp_effects_flush(app);
+    int status = app->nwindows ? 0 : 1;
+    while(!app->quit && app->nwindows) {
+        gp_platform_pump(app, app_timeout_ms(app)); /* sleep until the next event, timer or frame */
+        app_turn(app);
+    }
+    app_free(app);
     return status;
+}
+
+gp_app* gp_app_new(void)
+{
+    gp_app* app = app_new();
+    if(app) {
+        app->hosted = true;
+    }
+    return app;
+}
+
+bool gp_app_step(gp_app* app, int* next_ms)
+{
+    if(!app->quit) {
+        gp_platform_pump(app, 0);
+        app_turn(app);
+    }
+    if(next_ms) {
+        *next_ms = app->quit ? -1 : app_timeout_ms(app);
+    }
+    return !app->quit;
+}
+
+void gp_app_free(gp_app* app)
+{
+    if(app) {
+        app_free(app);
+    }
+}
+
+void* gp_window_native(gp_window* w)
+{
+    return gp_platform_native(w);
+}
+
+void gp_window_set_size(gp_window* w, int width, int height)
+{
+    gp_platform_set_size(w, width, height);
 }
 
 /* ---------------------------------------------------------------- clipboard / synthetic input */

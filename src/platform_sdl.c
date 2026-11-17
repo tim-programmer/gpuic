@@ -15,6 +15,9 @@
 #  define NOMINMAX
 # endif
 # include <windows.h>
+#elif defined(__linux__) || defined(__FreeBSD__)
+# include <dlfcn.h>
+# define GP_X11_EMBED 1
 #endif
 
 typedef struct
@@ -27,11 +30,19 @@ typedef struct
 typedef struct
 {
     SDL_Window* window;
+#ifdef _WIN32
+    HWND child; /* an embedded window: the child of the host's that SDL wraps (ours to destroy) */
+#endif
 } sdl_window;
 
-static bool g_ignore_real_mouse; /* GPUIC_IGNORE_REAL_MOUSE, see real_mouse() */
-static bool g_ignore_real_keys;  /* GPUIC_IGNORE_REAL_KEYS, see real_key() */
-static Uint32 g_wake_event;      /* custom event used to wake the loop from other threads */
+#define APP_PROP "gpuic.app"                                                                                                /* on each SDL window: the app that opened it, which its events go to */
+
+static bool g_ignore_real_mouse;                                                                                            /* GPUIC_IGNORE_REAL_MOUSE, see real_mouse() */
+static bool g_ignore_real_keys;                                                                                             /* GPUIC_IGNORE_REAL_KEYS, see real_key() */
+static Uint32 g_wake_event;                                                                                                 /* custom event used to wake the loop from other threads */
+static SDL_Cursor* g_cursor;                                                                                                /* the cursor shown: it is the process's, and every app has a set of its own */
+static int g_sdl_users;
+static bool g_sdl_ours; /* SDL was not running before gpuic started it: gpuic ends it (a host using SDL itself keeps it) */ /* apps alive (gp_app_new can make several): SDL starts with the first and ends with the last */
 
 static sdl_platform* plat(gp_app* app)
 {
@@ -44,11 +55,17 @@ static SDL_Window* sdl_win(gp_window* w)
 
 bool gp_platform_init(gp_app* app)
 {
-    if(!SDL_Init(SDL_INIT_VIDEO)) {
-        fprintf(stderr, "gpuic: SDL_Init failed: %s\n", SDL_GetError());
-        return false;
+    if(!g_sdl_users) {
+        g_sdl_ours = SDL_WasInit(0) == 0;
+        if(!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+            fprintf(stderr, "gpuic: SDL_Init failed: %s\n", SDL_GetError());
+            return false;
+        }
     }
-    g_wake_event = SDL_RegisterEvents(1);
+    g_sdl_users++;
+    if(!g_wake_event) {
+        g_wake_event = SDL_RegisterEvents(1);
+    }
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0"); /* a finger is not a mouse: it scrolls (gp_scroll_touch) and a tap is made a click there */
     g_ignore_real_mouse = getenv("GPUIC_IGNORE_REAL_MOUSE") != NULL;
     g_ignore_real_keys = getenv("GPUIC_IGNORE_REAL_KEYS") != NULL;
@@ -72,6 +89,9 @@ void gp_platform_shutdown(gp_app* app)
     }
     for(int i = 0; i < GP_CURSOR_COUNT; i++) {
         if(p->cursors[i]) {
+            if(p->cursors[i] == g_cursor) {
+                g_cursor = NULL;
+            }
             SDL_DestroyCursor(p->cursors[i]);
         }
     }
@@ -80,8 +100,59 @@ void gp_platform_shutdown(gp_app* app)
     }
     free(p);
     app->platform = NULL;
-    SDL_Quit();
+    if(--g_sdl_users == 0) {
+        if(g_sdl_ours) {
+            SDL_Quit();
+        } else {
+            SDL_QuitSubSystem(SDL_INIT_VIDEO); /* (only gpuic's part: a host using SDL itself keeps its own) */
+        }
+        g_wake_event = 0;
+    }
 }
+
+#ifdef GP_X11_EMBED
+/* The X11 calls embedding needs, from the libX11 SDL has loaded (so that gpuic does not link it itself). */
+static bool x11_reparent(SDL_Window* win, unsigned long parent)
+{
+    static int (*reparent)(void*, unsigned long, unsigned long, int, int);
+    static int (*flush)(void*);
+    if(!reparent) {
+        void* lib = dlopen("libX11.so.6", RTLD_NOW | RTLD_NOLOAD);
+        lib = lib ? lib : dlopen("libX11.so.6", RTLD_NOW);
+        reparent = lib ? (int (*)(void*, unsigned long, unsigned long, int, int))dlsym(lib, "XReparentWindow") : NULL;
+        flush = lib ? (int (*)(void*))dlsym(lib, "XFlush") : NULL;
+    }
+    SDL_PropertiesID props = SDL_GetWindowProperties(win);
+    void* display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+    unsigned long xwin = (unsigned long)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+    if(!reparent || !flush || !display || !xwin) {
+        return false;
+    }
+    reparent(display, xwin, parent, 0, 0);
+    flush(display);
+    return true;
+}
+#endif
+
+#ifdef _WIN32
+/* An embedded window on Windows: a child of the host's window, made here and wrapped by SDL (which sets it up for GL and takes its messages). */
+static HWND win32_child(HWND parent, int width, int height)
+{
+    static ATOM cls;
+    if(!cls) {
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof wc);
+        wc.cbSize = sizeof wc;
+        wc.style = CS_OWNDC; /* (GL keeps its device context) */
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.lpszClassName = L"gpuic_embedded";
+        cls = RegisterClassExW(&wc);
+    }
+    return CreateWindowExW(0, L"gpuic_embedded", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, width, height, parent, NULL, GetModuleHandleW(NULL), NULL);
+}
+#endif
 
 void gp_platform_update_size(gp_window* w)
 {
@@ -97,19 +168,59 @@ void gp_platform_update_size(gp_window* w)
 bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options* opts)
 {
     sdl_platform* p = plat(app);
-    SDL_Window* win = SDL_CreateWindow(opts->title ? opts->title : "gpuic",
-        opts->width > 0 ? opts->width : 960,
-        opts->height > 0 ? opts->height : 640,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    int width = opts->width > 0 ? opts->width : 960, height = opts->height > 0 ? opts->height : 640;
+    SDL_Window* win = NULL;
+#ifdef _WIN32
+    HWND child = NULL;
+#endif
+    if(!opts->parent) {
+        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    } else {
+#if defined(_WIN32)
+        child = win32_child((HWND)opts->parent, width, height);
+        SDL_PropertiesID props = SDL_CreateProperties();
+        SDL_SetPointerProperty(props, SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, child);
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
+        win = child ? SDL_CreateWindowWithProperties(props) : NULL;
+        SDL_DestroyProperties(props);
+        if(!win && child) {
+            DestroyWindow(child);
+        }
+        SDL_SetHint(SDL_HINT_WINDOWS_ENABLE_MESSAGELOOP, "0"); /* (the host's loop runs it, and takes this window's messages to SDL) */
+#elif defined(GP_X11_EMBED)
+        if(!SDL_GetCurrentVideoDriver() || strcmp(SDL_GetCurrentVideoDriver(), "x11") != 0) {
+            fprintf(stderr, "gpuic: a window inside another (gp_window_options.parent) needs SDL's x11 video driver, not %s (SDL_VIDEO_DRIVER=x11)\n", SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "none");
+            return false;
+        }
+        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIDDEN);
+        if(win && !x11_reparent(win, (unsigned long)(uintptr_t)opts->parent)) {
+            fprintf(stderr, "gpuic: could not put the window inside its parent (libX11 or SDL's X11 window not found)\n");
+            SDL_DestroyWindow(win);
+            return false;
+        }
+        if(win) {
+            SDL_ShowWindow(win);
+        }
+#else
+        fprintf(stderr, "gpuic: a window inside another (gp_window_options.parent) is not supported on this platform\n");
+        return false;
+#endif
+    }
     if(!win) {
         fprintf(stderr, "gpuic: SDL_CreateWindow failed: %s\n", SDL_GetError());
         return false;
     }
+    SDL_SetPointerProperty(SDL_GetWindowProperties(win), APP_PROP, app);
     if(!p->gl) {
         p->gl = SDL_GL_CreateContext(win);
         if(!p->gl) {
             fprintf(stderr, "gpuic: could not create an OpenGL 3.3 context: %s\n", SDL_GetError());
             SDL_DestroyWindow(win);
+#ifdef _WIN32
+            if(child) {
+                DestroyWindow(child);
+            }
+#endif
             return false;
         }
         SDL_GL_SetSwapInterval(1);
@@ -123,6 +234,9 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
     SDL_GL_MakeCurrent(win, p->gl);
     sdl_window* sw = calloc(1, sizeof *sw);
     sw->window = win;
+#ifdef _WIN32
+    sw->child = child;
+#endif
     w->platform = sw;
     w->id = SDL_GetWindowID(win);
     gp_platform_update_size(w);
@@ -136,8 +250,30 @@ void gp_platform_close_window(gp_app* app, gp_window* w)
         return;
     }
     SDL_DestroyWindow(sdl_win(w));
+#ifdef _WIN32
+    if(((sdl_window*)w->platform)->child) {
+        DestroyWindow(((sdl_window*)w->platform)->child); /* (SDL leaves a window it did not make) */
+    }
+#endif
     free(w->platform);
     w->platform = NULL;
+}
+
+void* gp_platform_native(gp_window* w)
+{
+    SDL_PropertiesID props = SDL_GetWindowProperties(sdl_win(w));
+#ifdef _WIN32
+    return SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+#else
+    return (void*)(uintptr_t)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+#endif
+}
+
+void gp_platform_set_size(gp_window* w, int width, int height)
+{
+    SDL_SetWindowSize(sdl_win(w), width, height);
+    SDL_SyncWindow(sdl_win(w));
+    gp_platform_update_size(w);
 }
 
 void gp_platform_make_current(gp_window* w)
@@ -152,8 +288,11 @@ void gp_platform_swap(gp_window* w)
 
 void gp_platform_set_cursor(gp_window* w, int cursor)
 {
-    (void)w;
-    SDL_SetCursor(plat(w->app)->cursors[cursor]);
+    SDL_Cursor* c = plat(w->app)->cursors[cursor];
+    if(c != g_cursor) {
+        g_cursor = c;
+        SDL_SetCursor(c);
+    }
 }
 
 void gp_platform_set_text_input_area(gp_window* w, float x, float y, float width, float height,
@@ -355,9 +494,16 @@ static bool injected_text(const char* text);
 static void dispatch(gp_app* app, const SDL_Event* e)
 {
     gp_window* w;
+    SDL_Window* target = SDL_GetWindowFromEvent(e);
+    gp_app* owner = target ? SDL_GetPointerProperty(SDL_GetWindowProperties(target), APP_PROP, NULL) : NULL;
+    if(owner) {
+        app = owner; /* several apps share SDL's one queue: a window's events go to the app that opened it, whichever app took them */
+    }
     switch(e->type) {
         case SDL_EVENT_QUIT:
-            gp_quit(app);
+            if(!app->hosted) { /* (an app the host runs ends when the host says) */
+                gp_quit(app);
+            }
             break;
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             if((w = gp_app_window_by_id(app, e->window.windowID))) {
