@@ -24,7 +24,10 @@ typedef struct
     uint32_t vis_gen; /* the window's scroll_vis_gen: auto-hiding scrollbars changed */
     gp_color tc;      /* with has_tc: the text color a state style above set, for everything below that does not set its own */
     bool has_tc;
-    size_t culled;    /* subtrees skipped for being outside the clip */
+    size_t culled;    /* subtrees skipped for being outside the clip the cached view being painted inherits (what a clip inside it skips moves with it) */
+    /* While a cached view is painted: the clip it inherits, the boxes inside it that clip (their union), and where the mouse can go with nothing in it
+     * painting differently (the region every element whose look depends on the mouse cuts down to: inside its box if it is under the mouse, else out of it) */
+    rect root_clip, u, hr;
     /* offscreen layers open now (gp_paint_layer_begin): where each one's BEGIN is in the scene, and the box on screen of what was painted into it so far */
     int depth;
     size_t lbegin[GP_MAX_LAYERS];
@@ -56,6 +59,53 @@ static rect rect_isect(rect a, rect b)
 static bool rect_has(rect r, gp_point p)
 {
     return p.x >= r.x0 && p.x < r.x1 && p.y >= r.y0 && p.y < r.y1;
+}
+
+static bool rect_eq(rect a, rect b)
+{
+    return a.x0 == b.x0 && a.y0 == b.y0 && a.x1 == b.x1 && a.y1 == b.y1;
+}
+
+static rect rect_union(rect a, rect b)
+{
+    return (rect){ fminf(a.x0, b.x0), fminf(a.y0, b.y0), fmaxf(a.x1, b.x1), fmaxf(a.y1, b.y1) };
+}
+
+#define RECT_ALL  ((rect){ -1e9f, -1e9f, 1e9f, 1e9f })
+#define RECT_NONE ((rect){ 1e30f, 1e30f, -1e30f, -1e30f })
+
+/* Something whose look depends on the mouse is shown in `box` (its box cut to its clip): the region where the mouse leaves everything looking the same
+ * shrinks to the box if the mouse is in it, else to the largest part of the region around the mouse that keeps out of it. Under a transform the box is
+ * not where it is on screen: no region at all (painted again whenever the mouse moves over the view). */
+static void hover_cut(paint_ctx* pc, rect box, bool exact)
+{
+    gp_point m = pc->mouse;
+    if(pc->has_xf || !exact) {
+        pc->hr = (rect){ m.x, m.y, m.x, m.y };
+        return;
+    }
+    if(!(box.x1 > box.x0 && box.y1 > box.y0)) {
+        return; /* (never under the mouse) */
+    }
+    rect r = pc->hr;
+    if(rect_has(box, m)) {
+        pc->hr = rect_isect(r, box);
+        return;
+    }
+    rect c[4] = { r, r, r, r };
+    bool ok[4] = { m.x < box.x0, m.x >= box.x1, m.y < box.y0, m.y >= box.y1 };
+    c[0].x1 = fminf(r.x1, box.x0);
+    c[1].x0 = fmaxf(r.x0, box.x1);
+    c[2].y1 = fminf(r.y1, box.y0);
+    c[3].y0 = fmaxf(r.y0, box.y1);
+    float best = -1.f;
+    for(int i = 0; i < 4; i++) {
+        float area = (c[i].x1 - c[i].x0) * (c[i].y1 - c[i].y0);
+        if(ok[i] && area > best) {
+            best = area;
+            pc->hr = c[i];
+        }
+    }
 }
 
 static void set4(float* dst, float a, float b, float c, float d)
@@ -1268,7 +1318,9 @@ static void paint_scrollbars(paint_ctx* pc, gp_el* n, float x, float y, rect cli
             continue;
         }
         /* under the mouse only where it can be seen: a bar clipped away is not touched (nor can it be grabbed) */
-        bool active = pc->drag_key == n->scroll_key || (rect_has(clip, pc->mouse) && rect_has((rect){ t.x, t.y, t.x + t.w, t.y + t.h }, pc->mouse_local));
+        rect tr = { t.x, t.y, t.x + t.w, t.y + t.h };
+        bool active = pc->drag_key == n->scroll_key || (rect_has(clip, pc->mouse) && rect_has(tr, pc->mouse_local));
+        hover_cut(pc, rect_isect(tr, clip), true);
         gp_color c = base;
         if(active) {
             c.a = fminf(1.f, c.a * 1.6f);
@@ -1333,21 +1385,39 @@ static void paint_node_inner(paint_ctx* pc, gp_el* n, float ox, float oy, rect c
 /* A cached view's subtree is painted again only if something it was painted for has changed: the layout of
  * the subtree (it was not laid out again), where it is, the clip and opacity it inherits, the scale, the
  * glyph atlas (cached instances hold atlas coordinates), and, if it has focusable elements, which element
- * has focus. If it has hover styles or scrollbars, a mouse over it is a reason to paint in full, and what is
- * painted then is not kept: a thumb lights up under the mouse, and a row under it takes its hover color.
- * "Over it" means over anything below it that can paint differently, which may reach outside the root's own box
- * (gp_el.ext). Scrollers and lists move in place, without a layout: that is dyn_gen, and a thumb being
- * dragged is drag_key. */
+ * has focus. Scrollers and lists move in place, without a layout: that is dyn_gen, and a thumb being dragged is drag_key.
+ *
+ * The mouse: with hover styles or scrollbars, a copy painted with the mouse away from all of them ("over" is over anything below that can paint
+ * differently, which may reach outside the root's own box: gp_el.ext) holds while it stays away. One painted with the mouse over the view holds while
+ * the mouse stays in the region where nothing in it would look different (hover_cut) and the buttons and the window's hold on the mouse are as they
+ * were: moving within one row, or between two things with no hover style, paints nothing. (A state style that lays out is painted again under the
+ * mouse, as before: its states are collected while painting.)
+ *
+ * Where it is: the same, or moved by whole device pixels, which is the same instances moved. What is clipped to a box inside it moves with it, and
+ * what is clipped to the clip it inherits does not: told apart by the clip itself, which is why the boxes inside must be strictly inside the inherited
+ * clip, before and after (then no instance clipped to one of them has the inherited clip). Not moved: a copy that skipped something because the
+ * inherited clip left it out (a tall row: what was skipped would be missing), one with offscreen layers (their regions are cut to what they hold
+ * on screen), one with a transform, or one painted with the mouse over it. A row of a list that scrolls is painted once and then only shifted,
+ * whatever the offset (the offset is whole pixels while it is dragged or wheeled; a smooth scroll, which is not, repaints). Whole exactly: a move a
+ * hair off (layout's float arithmetic) shifted would put the instances a hair from where a fresh paint does. */
 static bool g_cull = true;
 void gp_paint_set_culling(bool on)
 {
     g_cull = on;
 }
 
+static bool strictly_inside(rect a, rect b)
+{
+    return a.x0 > b.x0 && a.y0 > b.y0 && a.x1 < b.x1 && a.y1 < b.y1;
+}
+
 static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, float opacity)
 {
-    if(g_cull && !n->ink_all && !pc->has_xf && (oy + n->pos.y + n->ink_y1 <= clip.y0 || oy + n->pos.y + n->ink_y0 >= clip.y1)) {
-        pc->culled++; /* above or below the clip: nothing of it would show */
+    float cy = oy + n->pos.y, cx = ox + n->pos.x;
+    if(g_cull && !n->ink_all && !pc->has_xf && (cy + n->ink_y1 <= clip.y0 || cy + n->ink_y0 >= clip.y1 || cx + n->ink_x1 <= clip.x0 || cx + n->ink_x0 >= clip.x1)) {
+        if(rect_eq(clip, pc->root_clip)) {
+            pc->culled++; /* outside the clip: nothing of it would show (and if the clip is one inside the view, it moves with it) */
+        }
         return;
     }
     if(!pc->views || !n->cached_view.generation || n->prep_valid == false) {
@@ -1360,13 +1430,14 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
         return;
     }
     float x = ox + n->pos.x, y = oy + n->pos.y;
-    bool by_hover = false;
-    if(n->sub_flags & (GP_SUB_HOVER | GP_SUB_SCROLL)) {
-        rect reach = { x + n->ext[0], y + n->ext[1], x + n->ext[2], y + n->ext[3] };
-        bool over = rect_has(reach, pc->mouse_local);
+    bool mousy = (n->sub_flags & (GP_SUB_HOVER | GP_SUB_SCROLL)) != 0, over = false;
+    rect reach = { x + n->ext[0], y + n->ext[1], x + n->ext[2], y + n->ext[3] };
+    if(mousy) {
         /* a scrollbar under the mouse lights up whether or not the mouse is in the window (its last place counts) */
-        by_hover = over && ((n->sub_flags & GP_SUB_SCROLL) || pc->mouse_in);
+        over = (rect_has(reach, pc->mouse_local) || n->style.has_xf) && ((n->sub_flags & GP_SUB_SCROLL) || pc->mouse_in); /* (turned by a transform of its own, the reach is not where it is on screen) */
     }
+    bool keep = !(over && (n->sub_flags & GP_SUB_LSTATE));
+    uint8_t hstate = (uint8_t)(pc->mouse_in | pc->pressed << 1);
     float vals[8] = { 0, 0, clip.x0, clip.y0, clip.x1, clip.y1, opacity, pc->scale }; /* (where it is is kept apart: see below) */
     uint32_t sig[32] = { 0 };
     memcpy(sig, vals, sizeof vals);
@@ -1395,21 +1466,34 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
         sig[14] = pc->vis_gen;
     }
     sig[15] = pc->depth > 0; /* painted into a layer: text there is not LCD-antialiased */ /* a scrollbar below faded in or out */
-    if(!by_hover && vv->chunk_valid && vv->chunk_gen == n->layout_gen && memcmp(sig, vv->chunk_sig, sizeof sig) == 0) {
-        /* Where it is: the same, or moved by whole device pixels with nothing below that is clipped to a box of its own (an overflow, a scroller, a list:
-         * their clip moves with the subtree and is not the clip it inherits), which is the same instances moved. A row of a list that scrolls is painted
-         * once and then only shifted, whatever the offset (the offset is whole pixels while it is dragged or wheeled; a smooth scroll, which is not, repaints).
-         * Whole exactly: a move a hair off (layout's float arithmetic) shifted would put the instances a hair from where a fresh paint does. */
+    if(keep && vv->chunk_valid && vv->chunk_gen == n->layout_gen && memcmp(sig, vv->chunk_sig, sizeof sig) == 0) {
         float dx = x - vv->chunk_x, dy = y - vv->chunk_y;
         bool same_place = dx == 0.f && dy == 0.f;
+        bool away = !over && !vv->chunk_over; /* the mouse is not over it, nor was it */
+        rect chr, u;
+        memcpy(&chr, vv->chunk_hr, sizeof chr);
+        memcpy(&u, vv->chunk_u, sizeof u);
+        bool same_hover = mousy && same_place && vv->chunk_hstate == hstate && rect_has(chr, pc->mouse) && !pc->has_xf; /* nothing under the mouse changed */
         float sx = dx * pc->scale, sy = dy * pc->scale;
-        bool shiftable = !same_place && !vv->chunk_partial && !(n->sub_flags & (GP_SUB_CLIP | GP_SUB_SCROLL | GP_SUB_LIST | GP_SUB_XF)) && !pc->has_xf && sx == roundf(sx) && sy == roundf(sy) && fabsf(dx) < 1e6f && fabsf(dy) < 1e6f;
-        if(same_place || shiftable) {
+        rect moved = { u.x0 + dx, u.y0 + dy, u.x1 + dx, u.y1 + dy };
+        bool clips_inside = !(u.x1 > u.x0) || (strictly_inside(u, clip) && strictly_inside(moved, clip));
+        bool shiftable = !same_place && (away || !mousy) && !vv->chunk_partial && !vv->chunk_layers && clips_inside && !(n->sub_flags & GP_SUB_XF) && !pc->has_xf && sx == roundf(sx) && sy == roundf(sy) && fabsf(dx) < 1e6f && fabsf(dy) < 1e6f;
+        if((same_place && (away || !mousy || same_hover)) || shiftable) {
             if(shiftable) {
+                gp_instance probe = { 0 };
+                set_clip(&probe, clip); /* (the inherited clip as instances hold it: those clipped to a box inside have another) */
                 for(size_t i = 0; i < vv->nchunk; i++) {
-                    vv->chunk[i].bounds[0] += dx;
-                    vv->chunk[i].bounds[1] += dy;
+                    gp_instance* in = &vv->chunk[i];
+                    in->bounds[0] += dx;
+                    in->bounds[1] += dy;
+                    if(memcmp(in->clip, probe.clip, sizeof probe.clip) != 0) {
+                        in->clip[0] += dx;
+                        in->clip[1] += dy;
+                    }
                 }
+                memcpy(vv->chunk_u, &moved, sizeof vv->chunk_u);
+                u = moved;
+                vv->chunk_hr[0] = vv->chunk_hr[2] = 0.f; /* (the region was learned where it was: none until it is painted with the mouse over it) */
                 vv->chunk_x = x;
                 vv->chunk_y = y;
                 if(pc->app) {
@@ -1422,6 +1506,12 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
             if(vv->chunk_partial) {
                 pc->culled++; /* (a copy around it that holds this one holds what this one skipped) */
             }
+            pc->u = rect_union(pc->u, u);
+            if(mousy && !away) {
+                pc->hr = rect_isect(pc->hr, chr);
+            } else if(mousy && !rect_has(reach, pc->mouse_local)) {
+                hover_cut(pc, reach, true); /* (a copy around it holds while the mouse keeps away from this one too) */
+            }
             if(pc->app) {
                 pc->app->stat_paint_hits++;
             }
@@ -1429,11 +1519,19 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
         }
     }
     size_t start = pc->scene->len, culled = pc->culled;
+    rect outer_root = pc->root_clip, outer_u = pc->u, outer_hr = pc->hr;
+    pc->root_clip = clip;
+    pc->u = RECT_NONE;
+    pc->hr = RECT_ALL;
     paint_node_inner(pc, n, ox, oy, clip, opacity);
+    rect u = pc->u, hr = pc->hr;
+    pc->root_clip = outer_root;
+    pc->u = rect_union(outer_u, u);
+    pc->hr = rect_isect(outer_hr, hr);
     if(pc->app) {
         pc->app->stat_paint_misses++;
     }
-    if(by_hover) {
+    if(!keep) {
         return;
     }
     vv = gp_views_find(pc->views, n->cached_view); /* the table does not move while painting, but do not assume it */
@@ -1448,6 +1546,10 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
             abort();
         }
     }
+    vv->chunk_layers = false;
+    for(size_t i = 0; i < count; i++) {
+        vv->chunk_layers |= pc->scene->items[start + i].kind >= (float)GP_PRIM_LAYER_BEGIN;
+    }
     if(count) {
         memcpy(vv->chunk, pc->scene->items + start, count * sizeof *vv->chunk); /* (a view that paints nothing may have no copy yet, nor the scene any items: NULL, even for 0 bytes, is undefined) */
     }
@@ -1458,6 +1560,10 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
     vv->chunk_gen = n->layout_gen;
     vv->chunk_valid = true;
     vv->chunk_partial = pc->culled != culled;
+    vv->chunk_over = over;
+    vv->chunk_hstate = hstate;
+    memcpy(vv->chunk_hr, &hr, sizeof vv->chunk_hr);
+    memcpy(vv->chunk_u, &u, sizeof vv->chunk_u);
 }
 
 /* What a state style (gp_hover_style, gp_active_style, gp_focus_style) changes: the paint-only properties it sets (background, border
@@ -1560,6 +1666,10 @@ static void paint_node_body(paint_ctx* pc, gp_el* n, float ox, float oy, rect cl
     if(hovered && n->kind == GP_EL_CURVE) { /* a stroke is hovered on the stroke, not in its box (looked at only if something depends on it) */
         const gp_style* cs = &n->style;
         hovered = (cs->has_hover_bg || cs->has_active_bg || cs->hover_style || cs->active_style) && gp_curve_hit(n, pc->mouse_local.x - x, pc->mouse_local.y - y);
+    }
+    if(pc->mouse_in && (s->has_hover_bg || s->has_active_bg || s->hover_style || s->active_style)) { /* (a stroke is hovered on the stroke: no region while in its box) */
+        rect box = rect_isect(bounds, clip);
+        hover_cut(pc, box, n->kind != GP_EL_CURVE || !rect_has(box, pc->mouse));
     }
     bool focused = n->focus_id && n->focus_id == pc->focused;
     if(n->lstates && g_collect) { /* a state style that lays out: what layout is to lay it out in */
@@ -1820,7 +1930,8 @@ static void paint_node_body(paint_ctx* pc, gp_el* n, float ox, float oy, rect cl
     if(s->overflow_hidden || scrolls) {
         if(!pc->has_xf) {
             child_clip = rect_isect(clip, bounds);
-        } else { /* the box as it is on screen: cut to it if the transform keeps the axes, else not cut (a rotated clip is not made) */
+            pc->u = rect_union(pc->u, bounds); /* (the box itself: inside the inherited clip, it is the clip of what is in it) */
+        } else {                               /* the box as it is on screen: cut to it if the transform keeps the axes, else not cut (a rotated clip is not made) */
             rect on_screen;
             if(aff_rect(pc->xf, bounds, &on_screen)) {
                 child_clip = rect_isect(clip, on_screen);
@@ -1891,6 +2002,7 @@ void gp_paint_tree(gp_scene* scene, gp_arena* scratch, gp_text_system* ts, gp_el
         return;
     }
     paint_ctx pc = { .scene = scene, .scratch = scratch, .ts = ts, .scale = scale, .mouse = mouse, .mouse_local = mouse, .xf = gp_aff_identity(), .inv = gp_aff_identity(), .mouse_in = mouse_in, .pressed = pressed, .focused = focused, .drag_key = drag_key, .views = gp_frame_caches_enabled() ? views : NULL, .app = app, .atlas_gen = gp_text_atlas_generation(ts), .vis_gen = vis_gen };
-    rect everything = { -1e9f, -1e9f, 1e9f, 1e9f };
-    paint_node(&pc, root, 0, 0, everything, 1.f);
+    pc.root_clip = pc.hr = RECT_ALL;
+    pc.u = RECT_NONE;
+    paint_node(&pc, root, 0, 0, RECT_ALL, 1.f);
 }

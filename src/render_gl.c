@@ -459,6 +459,8 @@ struct gp_renderer
     GLuint prog, vao, vbo, atlas, color_atlas, lcd_atlas, ramps;
     GLint u_viewport, u_scale, u_gamma, u_atlas, u_color_atlas, u_lcd_atlas, u_ramps, u_image, u_layer, u_aux, u_backdrop;
     size_t vbo_cap;
+    gp_instance* sent;       /* what the buffer holds now: a frame that paints the same instances again sends nothing */
+    size_t sent_len, sent_cap;
     bool finish_before_copy; /* Mesa's llvmpipe: see backdrop_copy */
     /* offscreen targets (made when first needed, again when the window's size changes) */
     struct
@@ -605,6 +607,7 @@ void gp_renderer_free(gp_renderer* r, gp_gfx* gfx)
     }
     gl.glDeleteProgram(r->prog);
     gl.glDeleteBuffers(1, &r->vbo);
+    free(r->sent);
     gl.glDeleteVertexArrays(1, &r->vao);
     gl.glDeleteTextures(1, &r->atlas);
     gl.glDeleteTextures(1, &r->color_atlas);
@@ -785,8 +788,19 @@ void gp_renderer_draw(gp_renderer* r, gp_text_system* ts, const gp_scene* scene,
     gl.glBindVertexArray(r->vao);
     gl.glBindBuffer(GL_ARRAY_BUFFER, r->vbo);
     size_t bytes = scene->len * sizeof(gp_instance);
-    gl.glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)bytes, NULL, GL_STREAM_DRAW); /* orphan */
-    gl.glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)bytes, scene->items, GL_STREAM_DRAW);
+    if(scene->len != r->sent_len || memcmp(scene->items, r->sent, bytes) != 0) {
+        gl.glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)bytes, NULL, GL_STREAM_DRAW); /* orphan */
+        gl.glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)bytes, scene->items, GL_STREAM_DRAW);
+        if(scene->len > r->sent_cap) {
+            r->sent_cap = scene->len;
+            r->sent = realloc(r->sent, bytes);
+            if(!r->sent) {
+                abort();
+            }
+        }
+        memcpy(r->sent, scene->items, bytes);
+        r->sent_len = scene->len;
+    }
     /* Everything but images and layers is one instanced draw. An image has a texture of its own, so it splits the scene: the run
      * before it, then the image alone, then on. A layer's BEGIN sends what follows into the layer's texture (only its region cleared), and its END
      * goes back to where it was and composites the region (the END is that quad). Order is kept, which is what painting needs. */

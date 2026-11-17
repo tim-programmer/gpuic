@@ -1641,6 +1641,7 @@ static gp_size layout_text(gp_el* n, float w, float h, float pw, float ph)
     gp_size t = gp_text_measure_dir(g_ts, GP_TEXT_SEL(n->ts), n->ts.size, n->text, aw, s->whitespace_pre, n->ts.dir, NULL, NULL, NULL);
     (void)ph;
     n->text_h = t.h + chrome_h; /* (the last call is the one laid out: for ink) */
+    n->text_w = t.w + chrome_w;
     return (gp_size){ def(w) ? w : ceilf(t.w) + chrome_w, def(h) ? h : t.h + chrome_h };
 }
 
@@ -1695,20 +1696,25 @@ static void extent(const gp_el* n, float lx, float ly, float* ext)
     }
 }
 
-/* How far up and down from its top `n` and everything in it can paint, once it and its children are laid out and placed, so that painting
- * can skip a subtree the clip leaves out. Vertical only (text overflowing sideways is common, upwards and downwards not), and generous: a
- * margin for glyphs reaching past their line, shadows. A box that clips stops there; something that could paint anywhere (a transform, a
- * filter, a mask, a curve, a state style that lays out) makes it ink_all. */
+/* How far up and down from its top, and left and right from its left edge, `n` and everything in it can paint, once it and its children are
+ * laid out and placed, so that painting can skip a subtree the clip leaves out. Generous: a margin for glyphs reaching past their line, text
+ * as wide as its widest line (which runs out of a box too narrow for it, to the left too when it is centered or set to the right), shadows. A
+ * box that clips stops there; something that could paint anywhere (a transform, a filter, a mask, a curve, a state style that lays out) makes
+ * it ink_all. */
 #define INK_MARGIN 8.f
 static void ink(gp_el* n)
 {
     const gp_style* s = &n->style;
     float m = INK_MARGIN + (n->kind == GP_EL_TEXT ? n->ts.size : 0.f);
-    float y0 = -m, y1 = fmaxf(n->size.h, n->kind == GP_EL_TEXT ? n->text_h : 0.f) + m;
+    bool text = n->kind == GP_EL_TEXT;
+    float y0 = -m, y1 = fmaxf(n->size.h, text ? n->text_h : 0.f) + m;
+    float x0 = fminf(0.f, text ? n->size.w - n->text_w : 0.f) - m, x1 = fmaxf(n->size.w, text ? n->text_w : 0.f) + m;
     if(s->has_shadow) {
         float b = s->shadow.blur * 1.5f + 2.f;
         y0 = fminf(y0, s->shadow.dy - b);
         y1 = fmaxf(y1, n->size.h + s->shadow.dy + b);
+        x0 = fminf(x0, s->shadow.dx - b);
+        x1 = fmaxf(x1, n->size.w + s->shadow.dx + b);
     }
     const gp_style* f = s->focus_style; /* (shown away from the mouse, so possibly outside the clip: its shadow or filters reach further) */
     n->ink_all = s->has_xf || s->nfilters || s->nbackdrop || n->mask || n->lstates || n->kind == GP_EL_CURVE || (f && (f->has_shadow || f->nfilters || f->nbackdrop));
@@ -1718,10 +1724,14 @@ static void ink(gp_el* n)
             n->ink_all |= c->ink_all;
             y0 = fminf(y0, c->pos.y + c->ink_y0);
             y1 = fmaxf(y1, c->pos.y + c->ink_y1);
+            x0 = fminf(x0, c->pos.x + c->ink_x0);
+            x1 = fmaxf(x1, c->pos.x + c->ink_x1);
         }
     }
     n->ink_y0 = y0;
     n->ink_y1 = y1;
+    n->ink_x0 = x0;
+    n->ink_x1 = x1;
 }
 
 static gp_size layout_node(gp_el* n, float fw, float fh, float pw, float ph, bool commit)

@@ -424,23 +424,38 @@ renders that card and the views above it, and the other 299 are not visited.
   subtree is laid out for some inputs (the size and space its parent gave it, the text style it inherits);
   if the next layout hands it the same ones, nothing in it is walked or measured. Its painted instances are
   reused while where it is, the clip and opacity around it, the scale and the glyph atlas are the same,
-  and, if it has focusable elements, focus; with hover styles or scrollbars, a mouse over anything in it
-  paints it in full and what is painted then is not kept.
-* **What the clip leaves out is not painted at all.** Layout records how far up and down each element and
-  everything in it can paint (`ink_y0`, `ink_y1`: its box, its shadow, a margin for glyphs reaching past their
-  line, its children unless it clips them), and painting skips a subtree wholly above or below the clip: the
-  cards of a long document scrolled out of view, the rows of a sidebar below its edge. Anything that could
-  paint anywhere is never skipped (a transform, a filter, a mask, a curve, a state style that lays out), and
-  sideways nothing is skipped (text running past its box is common). A painted copy of a cached view that had
-  something skipped inside it is reused in the same place only, never moved. Measured on a sidebar of 300 rows
+  and, if it has focusable elements, focus. With hover styles or scrollbars, the mouse coming over one of
+  them paints the view again (its visible part), and that copy is kept with the region the mouse can move in
+  without anything in the view looking different: moving within one row, a card, or between things with no
+  hover style paints nothing (a state style that lays out is the exception: painted again under the mouse).
+* **A copy that has only moved is moved, not painted again,** when it moved by whole device pixels (a row in
+  a scroller that is wheeled or dragged). A box inside it that clips (an overflow, a scroller, a list) moves
+  with it: the instances clipped to it are told from those clipped to what the view inherits by their clip,
+  so those boxes must lie strictly inside the inherited clip before and after the move, or it is painted.
+  Never moved: one with a transform, one with offscreen layers (an opacity group, a filter: a layer's region is
+  cut to the screen), one painted with the mouse over it, and one that had something skipped because the
+  inherited clip left it out (what a clip inside it skipped is skipped wherever it goes). Moving a cached view
+  with a layer was wrong before (`tests/paintshift_test.c` now has translucent rows).
+* **What the clip leaves out is not painted at all.** Layout records how far up, down, left and right each element and
+  everything in it can paint (`ink_y0`, `ink_y1`, `ink_x0`, `ink_x1`: its box, its shadow, a margin for glyphs reaching past their
+  line, text as wide as its widest line, which runs out of a box too narrow for it, to the left too when centered
+  or set to the right, its children unless it clips them), and painting skips a subtree wholly outside the clip: the
+  cards of a long document scrolled out of view, the rows of a sidebar below its edge, the clips of a timeline
+  scrolled sideways. Anything that could paint anywhere is never skipped (a transform, a filter, a mask, a curve,
+  a state style that lays out). Measured on a sidebar of 300 rows
   with hover colors beside a document of 40 cached cards, each with a clipped code box: scrolling the document
   went from 7.2 ms of paint a frame to 0.43 (only the cards in view are painted), the mouse moving over the
   sidebar from 1.36 to 0.09, and a frame where nothing changed from 0.43 ms of paint and 0.68 of GL submit to
-  0.09 and 0.10 (35,264 instances to 2,997). `tests/views_test.c` paints every frame it checks once more without
+  0.09 and 0.10 (35,264 instances to 2,997). With the hover regions and moved clips, on the same bench: the mouse
+  over the sidebar 0.094 ms of paint to 0.032, within one card 0.102 to 0.029, a frame where nothing changed 0.086
+  to 0.028 (the card under the mouse is no longer painted every frame), scrolling the document 0.40 to 0.25 (cards
+  wholly in view are moved). A frame that paints exactly what the last one did sends nothing to the GPU (the
+  buffer still holds it): GL submit 0.118 to 0.078 ms with nothing changing, 0.084 to 0.042 with the mouse over
+  the sidebar, the same as before when the scene changes. `tests/views_test.c` paints every frame it checks once more without
   culling and checks that only instances wholly outside their clip are missing; `tests/paintshift_test.c`
   scrolls a cached view taller than its scroller, and one around it; `tests/cull_test.c` compares frames with and without
   culling where it is easiest to get wrong (text given a height its lines run past, a focus style's glow from outside
-  the clip).
+  the clip, a long word running out of its box into a scroller along x, centered text reaching back into it).
 * **Scroll containers and lists inside a cached view are covered too.** The wheel and the scrollbar thumbs
   move them in place (the elements and the window's offsets stay in step), so those moves repaint just the
   cached views around the scroller and leave their layout alone. A change made from outside
@@ -1982,19 +1997,15 @@ mouse move/hover ─────────────────────
 
 Roughly in the order I'd tackle them:
 
-1. Plugins, the rest (see "Running inside a host"): the CLAP example in a real host on Windows (it was tried in REAPER on Linux only), in
-   other hosts (Bitwig); what a host's own shortcuts take before
-   the plugin's view sees a key; and the example built in CI.
+1. Plugins, the rest (see "Running inside a host"): the CLAP example in a real host on Windows (it was tried in REAPER on Linux only:
+   embedding, resizing docked, reopening, keys, and its state saved and loaded with the project), in other hosts (Bitwig); whether a host
+   shows the project as changed when the example calls `mark_dirty` (not yet seen in REAPER); what a host's own shortcuts take before the
+   plugin's view sees a key; and the example built in CI.
 2. Native Wayland/X11 backends without SDL (what a plugin host would rather not have in its process: SDL's process-wide state and event
    pumping) and a Vulkan renderer. Nothing needs Vulkan yet: OpenGL 3.3 works everywhere gpuic runs. Multi-window polish.
-3. What is left of painting in full, now that only what the clip shows is painted (see "Dirty tracking and cached views"): a cached view with
-   hover styles or scrollbars is painted again (its visible part) while the mouse is over it, and one that holds a scroller, a list or an
-   overflow clip is painted again, not moved, when it or its scroller moves (their clip moves with them). Measured at about 0.1 to 0.4 ms a
-   frame. Culling is vertical only. The scene is still re-uploaded and drawn as a whole every frame, which was measured and is not worth a
-   retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
-4. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
+3. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
    foreground color with the text color (it is black: color glyphs are cached untinted).
-5. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
+4. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
    of thousands of descriptors), and `examples/fd.c` on Windows (it is POSIX: stdin and BSD sockets as they are there).
-6. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
-7. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
+5. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
+6. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.

@@ -318,7 +318,7 @@ static void run(void)
         uint8_t* copy = malloc(n);
         memcpy(copy, a, n);
         gp_vviews* t = &win()->views;
-        for(size_t k = 0; k < t->len; k++) {
+        for(size_t k = 0; k < t->cap; k++) {
             t->v[k].chunk_valid = false;
         }
         uint8_t* b = frame();
@@ -372,7 +372,7 @@ static void run(void)
         uint8_t* copy = malloc(n);
         memcpy(copy, a, n);
         gp_vviews* t = &win()->views;
-        for(size_t q = 0; q < t->len; q++) {
+        for(size_t q = 0; q < t->cap; q++) {
             t->v[q].chunk_valid = false;
         }
         uint8_t* b = frame();

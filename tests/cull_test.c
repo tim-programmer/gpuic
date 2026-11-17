@@ -1,7 +1,9 @@
 /*
  * Painting skips what the clip leaves out (paint.c, from layout's ink). Whatever it skips must not have shown: a frame painted with culling must be
  * the frame painted without it, to the byte. The traps: text given a height its wrapped lines run past (its box above the scroller's top, its lines
- * inside), and a focused box just below the scroller's bottom whose focus style's glow reaches into it. Needs a display, at scale 1.
+ * inside), a focused box just below the scroller's bottom whose focus style's glow reaches into it, and sideways, in a scroller along x: a word
+ * too long for its narrow box (the box left of the scroller, the word running into it), and centered text too wide for its box (the box right of
+ * the scroller, the text reaching back into it). Needs a display, at scale 1.
  */
 #include "../src/internal.h"
 
@@ -22,12 +24,12 @@ static int failures;
 
 static gp_app* app;
 static gp_co* co_;
-static gp_scroll g_scroll;
+static gp_scroll g_scroll, g_hscroll;
 static gp_focus g_focus;
 
 static gp_node* view(void* self, gp_ctx* cx)
 {
-    return gp_div(gp_size_full(), gp_bg(gp_rgb(0x101018)), gp_div(gp_flex_col(), gp_h(150), gp_w_full(), gp_flex_none(), gp_overflow_y_scroll(), gp_track_scroll(g_scroll), gp_text("text whose wrapped lines run on well past the height of twenty pixels it was given, six lines or so of it in all", gp_h(20), gp_w(200), gp_flex_none(), gp_text_color(gp_rgb(0xffffff))), gp_div(gp_h(160), gp_flex_none()), gp_div(gp_track_focus(g_focus), gp_w(120), gp_h(20), gp_flex_none(), gp_bg(gp_rgb(0x335533)), gp_focus_style(gp_group(gp_shadow(0, 0, 24, gp_rgb(0xffcc00))))), gp_div(gp_h(400), gp_flex_none())));
+    return gp_div(gp_size_full(), gp_bg(gp_rgb(0x101018)), gp_div(gp_flex_col(), gp_h(150), gp_w_full(), gp_flex_none(), gp_overflow_y_scroll(), gp_track_scroll(g_scroll), gp_text("text whose wrapped lines run on well past the height of twenty pixels it was given, six lines or so of it in all", gp_h(20), gp_w(200), gp_flex_none(), gp_text_color(gp_rgb(0xffffff))), gp_div(gp_h(160), gp_flex_none()), gp_div(gp_track_focus(g_focus), gp_w(120), gp_h(20), gp_flex_none(), gp_bg(gp_rgb(0x335533)), gp_focus_style(gp_group(gp_shadow(0, 0, 24, gp_rgb(0xffcc00))))), gp_div(gp_h(400), gp_flex_none())), gp_div(gp_flex_row(), gp_h(40), gp_w(200), gp_flex_none(), gp_overflow_x_scroll(), gp_track_scroll(g_hscroll), gp_div(gp_w(300), gp_flex_none()), gp_text("averyveryverylongwordthatrunsonfarpastitsnarrowbox", gp_w(40), gp_flex_none(), gp_text_color(gp_rgb(0xffffff))), gp_div(gp_w(400), gp_flex_none()), gp_text("centered text much wider than its box", gp_w(40), gp_flex_none(), gp_text_center(), gp_whitespace_pre(), gp_text_color(gp_rgb(0xffccff))), gp_div(gp_w(600), gp_flex_none())));
 }
 
 static uint8_t* frame(void)
@@ -77,6 +79,13 @@ static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
         long diff = culled_vs_all();
         CHECK(diff == 0, "scrolled to %g: the frame painted with culling differs from one without in %ld bytes", (double)at[i], diff);
     }
+    const float hat[] = { 0, 200, 320, 500, 700 }; /* (500: the long word's box left of the view, the word in it; 700: the centered text's box right of it, its left end in it) */
+    for(int i = 0; i < 5; i++) {
+        gp_scroll_to(&c, g_hscroll, hat[i], 0);
+        gp_sleep(co, 0.05);
+        long diff = culled_vs_all();
+        CHECK(diff == 0, "scrolled sideways to %g: the frame painted with culling differs from one without in %ld bytes", (double)hat[i], diff);
+    }
     gp_quit(app);
 }
 
@@ -84,6 +93,7 @@ static void ready(gp_app* a, void* userdata)
 {
     app = a;
     g_scroll = gp_scroll_new(app);
+    g_hscroll = gp_scroll_new(app);
     g_focus = gp_focus_new(app);
     gp_entity v = gp_view_new(app, 1, &(char){ 0 }, view, NULL);
     gp_open_window(app, &(gp_window_options){ .title = "cull_test", .width = 300, .height = 200 }, v);

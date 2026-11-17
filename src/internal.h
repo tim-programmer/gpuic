@@ -366,8 +366,10 @@ struct gp_el
     uint32_t dyn_gen;      /* bumped when a scroller below moved in place (wheel, thumb): painting changed, layout did not */
     float ext[4];          /* x0 y0 x1 y1 of everything below that can show hover / a scrollbar, relative to the root's origin */
     float ink_y0, ink_y1;  /* how far up and down from its top it and everything in it can paint (layout.c), for painting to skip what the clip leaves out */
+    float ink_x0, ink_x1;  /* ... and left and right from its left edge */
     bool ink_all;          /* ...or it could paint anywhere (a transform, a filter, a curve...): never skipped */
     float text_h;          /* text: how tall its lines are, which are all painted even past a height it was given */
+    float text_w;          /* ... and how wide the widest is, which runs past a width it was given (to the left too, centered or to the right) */
     float thumb_alpha;     /* auto-hiding scrollbars: how visible the thumbs are now (scroll.c, set before every paint) */
     bool hide_below;       /* this element or one below it has auto-hiding scrollbars (lists always: their rows are built later) */
     gp_anim* anim;         /* gp_with_animation, in order */
@@ -1185,10 +1187,15 @@ typedef struct
     gp_instance* chunk;
     size_t nchunk, cap_chunk;
     bool chunk_valid;
-    bool chunk_partial;     /* something in it was outside the clip and not painted: reused in the same place only, never shifted */
+    bool chunk_partial;     /* something in it was outside the clip it inherits and not painted: reused in the same place only, never shifted */
     uint32_t chunk_gen;     /* layout_gen of the root when painted */
     uint32_t chunk_sig[32]; /* bits of: (origin, which is kept apart), clip, opacity, scale, atlas generation, focus id, dyn_gen, drag key, scrollbar visibility */
-    float chunk_x, chunk_y; /* where the root was when it was painted: a subtree with no clip of its own that has only moved by whole device pixels is the same instances moved */
+    float chunk_x, chunk_y; /* where the root was when it was painted: a subtree that has only moved by whole device pixels is the same instances moved (paint.c says when) */
+    bool chunk_layers;      /* it holds offscreen layers: never moved */
+    bool chunk_over;        /* painted with the mouse over it (with hover styles or scrollbars) */
+    uint8_t chunk_hstate;   /* ... with the mouse in the window (1) and a button down (2) */
+    float chunk_hr[4];      /* ... and the region (x0 y0 x1 y1, in the window) the mouse can move in with nothing in it painting differently */
+    float chunk_u[4];       /* the union of the boxes inside it that clip (x0 y0 x1 y1; empty if none) */
 } gp_vview;
 
 struct gp_vviews

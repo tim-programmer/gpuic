@@ -290,7 +290,7 @@ static void verify_frame(void)
         }
     }
     /* Culling: the same frame painted without skipping what is outside the clip has the same instances and more, each of them wholly
-     * above or below its clip (as far as it reaches: a shadow by its blur, anything by a pixel or two of antialiasing). */
+     * above, below, left or right of its clip (as far as it reaches: a shadow by its blur, anything by a pixel or two of antialiasing). */
     gp_scene all = { 0 };
     gp_arena scratch_all = { 0 };
     gp_paint_set_culling(false);
@@ -304,7 +304,7 @@ static void verify_frame(void)
             continue;
         }
         float m = (int)in->kind == GP_PRIM_SHADOW ? in->blur * 1.5f + 2.f : 2.f;
-        if(!(in->bounds[1] + in->bounds[3] + m <= in->clip[1] || in->bounds[1] - m >= in->clip[1] + in->clip[3])) {
+        if(!(in->bounds[1] + in->bounds[3] + m <= in->clip[1] || in->bounds[1] - m >= in->clip[1] + in->clip[3] || in->bounds[0] + in->bounds[2] + m <= in->clip[0] || in->bounds[0] - m >= in->clip[0] + in->clip[2])) {
             shown++;
         }
     }
@@ -684,7 +684,7 @@ static void test_frame_caches(void)
     notify_view(0);
     settle();
 
-    /* hover: a mouse over a subtree with hover styles is painted in full, and what is painted is not kept */
+    /* hover: a mouse over a subtree with hover styles paints it again, and what is painted holds while the mouse stays where nothing looks different */
     V(1)->hover = true;
     notify_view(1);
     settle();
@@ -698,7 +698,11 @@ static void test_frame_caches(void)
         gp_simulate_mouse(app, GP_SIM_MOVE, x + 4, y + 4, 0, 0);
         settle();
         CHECK(scene_has_color(HOVER_C), "no hover color with the mouse over a cached view");
-        gp_simulate_mouse(app, GP_SIM_MOVE, x + 4, y + 8, 0, 0);
+        c0 = counters();
+        gp_simulate_mouse(app, GP_SIM_MOVE, x + 4, y + 8, 0, 0); /* (within the same hovered box: nothing looks different) */
+        let_frame_pass();
+        c1 = counters();
+        CHECK(c1.hits > c0.hits && c1.misses == c0.misses, "the mouse moved within the hovered box: %lu painted again, %lu reused (want none painted)", c1.misses - c0.misses, c1.hits - c0.hits);
         settle();
         CHECK(scene_has_color(HOVER_C), "no hover color after the mouse moved inside the view");
         gp_simulate_mouse(app, GP_SIM_MOVE, 330, 590, 0, 0);
