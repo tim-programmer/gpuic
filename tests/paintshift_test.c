@@ -2,8 +2,9 @@
  * A cached view that only moves (a row in a scroller that is scrolled by whole pixels) is not painted again: its instances are moved. The frame it
  * gives must be the one a full paint gives, to the byte (the same view painted from scratch, with the painted copies dropped, is the oracle), for
  * text, gradients, rounded boxes, shadows and borders; it must not be shifted by a fraction of a pixel (text would land on another subpixel position),
- * nor when something below it is clipped to a box of its own (that clip moves with it and is not the one it inherits); and it must be counted as
- * a reuse (stat_paint_shifts). Needs a display, at scale 1.
+ * nor when something below it is clipped to a box of its own (that clip moves with it and is not the one it inherits), nor when part of it was
+ * outside the scroller and not painted (a tall row: what was skipped would be missing); and it must be counted as a reuse (stat_paint_shifts).
+ * Needs a display, at scale 1.
  */
 #include "../src/internal.h"
 
@@ -35,11 +36,24 @@ static gp_window* win(void)
 
 enum { PLAIN,
     CLIPPED,
+    TALL,
+    NESTED,             /* a cached view around a TALL one */
 };
+static gp_entity inner; /* the TALL view inside the NESTED row */
 
 static gp_node* row_view(void* self, gp_ctx* cx)
 {
     int kind = *(int*)self;
+    if(kind == NESTED) {
+        return gp_div(gp_w(420), gp_flex_none(), gp_child_view_cached(inner));
+    }
+    if(kind == TALL) { /* taller than the scroller: the lines below its edge are skipped when it is painted */
+        gp_node* lines[14];
+        for(int i = 0; i < 14; i++) {
+            lines[i] = gp_text(gp_fmt("line %d of a row taller than the scroller", i), gp_text_color(gp_rgb(0xffffff)));
+        }
+        return gp_div(gp_flex_col(), gp_w(420), gp_flex_none(), gp_p(4), gp_gap(4), gp_bg(gp_rgb(0x20243a)), gp_children(lines, 14));
+    }
     const gp_color_stop st[2] = {
         { gp_rgb(0xff4040), 0 },
         { gp_rgb(0x4040ff), 1 }
@@ -129,11 +143,12 @@ static void run(void)
     diff = cache_vs_fresh(&shifts, &misses);
     CHECK(diff == 0, "at rest the cached frame is the fresh one (%ld bytes differ)", diff);
 
-    for(int k = 0; k < 2; k++) {
-        const char* what = k == 0 ? "plain rows" : "rows with a clipped box";
-        if(k == 1) { /* the same, with every row holding an element clipped to its own box */
+    for(int k = 0; k < 3; k++) {
+        const char* what = k == 0 ? "plain rows" : k == 1 ? "rows with a clipped box"
+                                                          : "rows taller than the scroller";
+        if(k >= 1) { /* the same, with every row holding an element clipped to its own box, then with rows partly outside */
             for(int i = 0; i < 8; i++) {
-                *(int*)gp_entity_get(app, rows[i]) = CLIPPED;
+                *(int*)gp_entity_get(app, rows[i]) = k == 1 ? CLIPPED : TALL;
             }
             gp_app_notify(app);
             wait_draws(2);
@@ -150,10 +165,19 @@ static void run(void)
             CHECK(diff == 0, "%s, scrolled to %g, %g: %ld bytes differ from a full paint", what, (double)sx, (double)sy, diff);
             if(k == 0) {
                 CHECK(shifts >= 3, "%s: the rows are moved, not painted again (%lu shifted, %lu painted)", what, shifts, misses);
-            } else {
+            } else if(k == 1) {
                 CHECK(shifts == 0 && misses >= 3, "%s: a clip of its own below: painted again, not moved (%lu shifted, %lu painted)", what, shifts, misses);
             }
-            frame(); /* leaves the copies made again by the full paint */
+            frame();               /* leaves the copies made again by the full paint */
+        }
+        if(k == 2) {               /* further than the margin around what is painted: lines that were skipped come into view, so it is painted, not moved */
+            scroll_to(0, 0);
+            drop_painted_copies(); /* (painted here, with what is below the scroller skipped) */
+            frame();
+            scroll_to(0, 60);
+            diff = cache_vs_fresh(&shifts, &misses);
+            CHECK(diff == 0, "%s, scrolled 60 px down at once: %ld bytes differ from a full paint", what, diff);
+            frame();
         }
         /* along one axis only: the other stays where it was */
         scroll_to(30, 35);
@@ -193,10 +217,30 @@ static void run(void)
     }
 }
 
+/* A cached view painted again around one reused from its copy that skipped something: the outer copy holds what the inner one skipped, so it
+ * must not be moved either. */
+static void nested(void)
+{
+    *(int*)gp_entity_get(app, rows[0]) = NESTED;
+    gp_app_notify(app);
+    wait_draws(2);
+    scroll_to(0, 0);
+    drop_painted_copies();
+    frame();       /* both painted here, the inner one's lower lines skipped */
+    gp_ctx c = gp_ctx_for(app, rows[0]);
+    gp_notify(&c); /* the outer one renders and paints again; the inner one is reused */
+    frame();
+    scroll_to(0, 60);
+    unsigned long shifts, misses;
+    long diff = cache_vs_fresh(&shifts, &misses);
+    CHECK(diff == 0, "a cached view around a reused one that skipped lines, scrolled 60 px: %ld bytes differ from a full paint", diff);
+}
+
 static void driver(gp_co* co, void* self, gp_ctx* cx, void* data)
 {
     co_ = co;
     run();
+    nested();
     gp_quit(app);
 }
 
@@ -208,6 +252,7 @@ static void ready(gp_app* a, void* userdata)
         int init = PLAIN;
         rows[i] = gp_view_new(app, sizeof init, &init, row_view, NULL);
     }
+    inner = gp_view_new(app, sizeof(int), &(int){ TALL }, row_view, NULL);
     gp_entity v = gp_view_new(app, 1, &(char){ 0 }, view, NULL);
     gp_open_window(app, &(gp_window_options){ .title = "paintshift_test", .width = 300, .height = 200 }, v);
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);

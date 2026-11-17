@@ -221,6 +221,7 @@ static size_t restore_gens(gp_el* n, const uint32_t* gen, size_t at)
     return at;
 }
 
+static size_t stat_culled; /* instances culling skipped, over all frames checked: the check above must have had something to check */
 static void verify_frame(void)
 {
     gp_window* w = win();
@@ -288,6 +289,29 @@ static void verify_frame(void)
             printf("   fresh:  kind %.0f bounds %.2f %.2f %.2f %.2f color %.2f %.2f %.2f %.2f\n", b->kind, b->bounds[0], b->bounds[1], b->bounds[2], b->bounds[3], b->color[0], b->color[1], b->color[2], b->color[3]);
         }
     }
+    /* Culling: the same frame painted without skipping what is outside the clip has the same instances and more, each of them wholly
+     * above or below its clip (as far as it reaches: a shadow by its blur, anything by a pixel or two of antialiasing). */
+    gp_scene all = { 0 };
+    gp_arena scratch_all = { 0 };
+    gp_paint_set_culling(false);
+    gp_paint_tree(&all, &scratch_all, app->text, w->tree, w->scale, w->mouse, w->mouse_in, w->pressed, w->focused, w->drag_key, w->scroll_vis_gen, NULL, NULL);
+    gp_paint_set_culling(true);
+    size_t k = 0, shown = 0;
+    for(size_t i = 0; i < all.len; i++) {
+        const gp_instance* in = &all.items[i];
+        if(k < fresh.len && memcmp(in, &fresh.items[k], sizeof *in) == 0) {
+            k++;
+            continue;
+        }
+        float m = (int)in->kind == GP_PRIM_SHADOW ? in->blur * 1.5f + 2.f : 2.f;
+        if(!(in->bounds[1] + in->bounds[3] + m <= in->clip[1] || in->bounds[1] - m >= in->clip[1] + in->clip[3])) {
+            shown++;
+        }
+    }
+    CHECK(k == fresh.len && shown == 0, "[%s] culling: %zu of %zu instances kept in order, %zu skipped that would show (%zu without culling)", where, k, fresh.len, shown, all.len);
+    stat_culled += all.len - fresh.len;
+    free(all.items);
+    gp_arena_free(&scratch_all);
     free(fresh.items);
     gp_arena_free(&scratch);
 
@@ -1763,6 +1787,7 @@ int main(void)
     setenv("GPUIC_IGNORE_REAL_MOUSE", "1", 1); /* a physical pointer over the window is not part of the test */
     int rc = gp_application_run(ready, NULL);
     CHECK(rc == 0, "application_run returned %d", rc);
+    CHECK(stat_culled > 1000, "culling skipped only %zu instances in all the frames checked: the check of it checked little", stat_culled);
     printf(failures ? "views_test: %d FAILURE(S)\n" : "views_test: all checks passed\n", failures);
     return failures != 0;
 }

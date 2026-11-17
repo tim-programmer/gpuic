@@ -24,6 +24,7 @@ typedef struct
     uint32_t vis_gen; /* the window's scroll_vis_gen: auto-hiding scrollbars changed */
     gp_color tc;      /* with has_tc: the text color a state style above set, for everything below that does not set its own */
     bool has_tc;
+    size_t culled;    /* subtrees skipped for being outside the clip */
     /* offscreen layers open now (gp_paint_layer_begin): where each one's BEGIN is in the scene, and the box on screen of what was painted into it so far */
     int depth;
     size_t lbegin[GP_MAX_LAYERS];
@@ -1337,8 +1338,18 @@ static void paint_node_inner(paint_ctx* pc, gp_el* n, float ox, float oy, rect c
  * "Over it" means over anything below it that can paint differently, which may reach outside the root's own box
  * (gp_el.ext). Scrollers and lists move in place, without a layout: that is dyn_gen, and a thumb being
  * dragged is drag_key. */
+static bool g_cull = true;
+void gp_paint_set_culling(bool on)
+{
+    g_cull = on;
+}
+
 static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, float opacity)
 {
+    if(g_cull && !n->ink_all && !pc->has_xf && (oy + n->pos.y + n->ink_y1 <= clip.y0 || oy + n->pos.y + n->ink_y0 >= clip.y1)) {
+        pc->culled++; /* above or below the clip: nothing of it would show */
+        return;
+    }
     if(!pc->views || !n->cached_view.generation || n->prep_valid == false) {
         paint_node_inner(pc, n, ox, oy, clip, opacity);
         return;
@@ -1392,7 +1403,7 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
         float dx = x - vv->chunk_x, dy = y - vv->chunk_y;
         bool same_place = dx == 0.f && dy == 0.f;
         float sx = dx * pc->scale, sy = dy * pc->scale;
-        bool shiftable = !same_place && !(n->sub_flags & (GP_SUB_CLIP | GP_SUB_SCROLL | GP_SUB_LIST | GP_SUB_XF)) && !pc->has_xf && sx == roundf(sx) && sy == roundf(sy) && fabsf(dx) < 1e6f && fabsf(dy) < 1e6f;
+        bool shiftable = !same_place && !vv->chunk_partial && !(n->sub_flags & (GP_SUB_CLIP | GP_SUB_SCROLL | GP_SUB_LIST | GP_SUB_XF)) && !pc->has_xf && sx == roundf(sx) && sy == roundf(sy) && fabsf(dx) < 1e6f && fabsf(dy) < 1e6f;
         if(same_place || shiftable) {
             if(shiftable) {
                 for(size_t i = 0; i < vv->nchunk; i++) {
@@ -1408,13 +1419,16 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
             for(size_t i = 0; i < vv->nchunk; i++) {
                 scene_add(pc, &vv->chunk[i]);
             }
+            if(vv->chunk_partial) {
+                pc->culled++; /* (a copy around it that holds this one holds what this one skipped) */
+            }
             if(pc->app) {
                 pc->app->stat_paint_hits++;
             }
             return;
         }
     }
-    size_t start = pc->scene->len;
+    size_t start = pc->scene->len, culled = pc->culled;
     paint_node_inner(pc, n, ox, oy, clip, opacity);
     if(pc->app) {
         pc->app->stat_paint_misses++;
@@ -1443,6 +1457,7 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
     vv->chunk_y = y;
     vv->chunk_gen = n->layout_gen;
     vv->chunk_valid = true;
+    vv->chunk_partial = pc->culled != culled;
 }
 
 /* What a state style (gp_hover_style, gp_active_style, gp_focus_style) changes: the paint-only properties it sets (background, border

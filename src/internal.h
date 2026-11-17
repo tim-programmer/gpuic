@@ -365,6 +365,9 @@ struct gp_el
     uint32_t layout_gen;   /* bumped whenever the subtree is laid out */
     uint32_t dyn_gen;      /* bumped when a scroller below moved in place (wheel, thumb): painting changed, layout did not */
     float ext[4];          /* x0 y0 x1 y1 of everything below that can show hover / a scrollbar, relative to the root's origin */
+    float ink_y0, ink_y1;  /* how far up and down from its top it and everything in it can paint (layout.c), for painting to skip what the clip leaves out */
+    bool ink_all;          /* ...or it could paint anywhere (a transform, a filter, a curve...): never skipped */
+    float text_h;          /* text: how tall its lines are, which are all painted even past a height it was given */
     float thumb_alpha;     /* auto-hiding scrollbars: how visible the thumbs are now (scroll.c, set before every paint) */
     bool hide_below;       /* this element or one below it has auto-hiding scrollbars (lists always: their rows are built later) */
     gp_anim* anim;         /* gp_with_animation, in order */
@@ -1049,6 +1052,7 @@ void gp_paint_tree(gp_scene* scene, gp_arena* scratch, gp_text_system* ts, gp_el
 unsigned long gp_layout_skips(void); /* subtrees whose layout was skipped so far */
 void gp_debug_frame_caches(bool enabled);
 bool gp_frame_caches_enabled(void);
+void gp_paint_set_culling(bool on);  /* (tests) false: paint everything, however far outside the clip */
 
 /* ---------------------------------------------------------------- exec (timers, tasks, pool) */
 
@@ -1180,6 +1184,7 @@ typedef struct
     gp_instance* chunk;
     size_t nchunk, cap_chunk;
     bool chunk_valid;
+    bool chunk_partial;     /* something in it was outside the clip and not painted: reused in the same place only, never shifted */
     uint32_t chunk_gen;     /* layout_gen of the root when painted */
     uint32_t chunk_sig[32]; /* bits of: (origin, which is kept apart), clip, opacity, scale, atlas generation, focus id, dyn_gen, drag key, scrollbar visibility */
     float chunk_x, chunk_y; /* where the root was when it was painted: a subtree with no clip of its own that has only moved by whole device pixels is the same instances moved */
