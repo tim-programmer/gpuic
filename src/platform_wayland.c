@@ -59,6 +59,7 @@ struct wl_win
     int buffer_scale;         /* (without fractional scaling: what the surface is told) */
     bool configured;          /* the first configure came: the window may be drawn */
     bool text_input;          /* the app wants text input in it */
+    char* title;              /* the last given (the compositor gives none back) */
     struct wl_output* outputs[8];
     int noutputs;
 };
@@ -1190,7 +1191,8 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
     xdg_surface_add_listener(v->xdg, &xdg_surface_listener, v);
     v->top = xdg_surface_get_toplevel(v->xdg);
     xdg_toplevel_add_listener(v->top, &top_listener, v);
-    xdg_toplevel_set_title(v->top, opts->title ? opts->title : "gpuic");
+    v->title = strdup(opts->title ? opts->title : "gpuic");
+    xdg_toplevel_set_title(v->top, v->title);
     xdg_toplevel_set_app_id(v->top, "gpuic");
     if(g.deco) {
         v->deco = zxdg_decoration_manager_v1_get_toplevel_decoration(g.deco, v->top);
@@ -1269,6 +1271,7 @@ void gp_platform_close_window(gp_app* app, gp_window* w)
     xdg_surface_destroy(v->xdg);
     wl_surface_destroy(v->surface);
     wl_display_flush(g.display);
+    free(v->title);
     free(v);
     w->platform = NULL;
 }
@@ -1291,6 +1294,24 @@ void gp_platform_set_size(gp_window* w, int width, int height)
     xdg_surface_set_window_geometry(v->xdg, 0, 0, v->lw, v->lh); /* (what the window is now: the compositor may ask for another size later) */
     apply_size(v);
     gp_window_on_resize(w);
+}
+
+void gp_platform_set_title(gp_window* w, const char* title)
+{
+    wl_win* v = win_of(w);
+    char* t = strdup(title);
+    if(!t) {
+        return; /* (it keeps the one it has) */
+    }
+    free(v->title);
+    v->title = t;
+    xdg_toplevel_set_title(v->top, t);
+    wl_display_flush(g.display);
+}
+
+const char* gp_platform_title(gp_window* w)
+{
+    return win_of(w)->title;
 }
 
 void gp_platform_make_current(gp_window* w)

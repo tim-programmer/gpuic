@@ -1927,6 +1927,13 @@ public:
     {
         return w_ != nullptr;
     }
+    /** Changes its title (UTF-8; nullptr: "gpuic"). */
+    void set_title(const char* title) const
+    {
+        if(w_) {
+            gp_window_set_title(w_, title);
+        }
+    }
     /** Closes it at the next turn of the loop; the app ends with its last window. */
     void close() const
     {

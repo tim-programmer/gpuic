@@ -1512,5 +1512,7 @@ bool gp_platform_rename(const char* from, const char* to);
 void gp_platform_pump(gp_app* app, int timeout_ms);
 void* gp_platform_native(gp_window* w);                         /* an X11 Window (as an integer) or an HWND; NULL where there is none to give */
 void gp_platform_set_size(gp_window* w, int width, int height); /* logical pixels */
+void gp_platform_set_title(gp_window* w, const char* title);
+const char* gp_platform_title(gp_window* w);                    /* (tests: the title the window has now) */
 
 #endif

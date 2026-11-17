@@ -196,6 +196,16 @@ static void driver(gp_co* co, void* self, gp_ctx* appcx, void* data)
     /* a window made after: new window, none of A's leftovers */
     gp_window* win_c = gp_open_window(app, &(gp_window_options){ .title = "window_test C", .width = 200, .height = 100 }, view_a);
     CHECK(win_c != NULL, "could not open a third window");
+    if(win_c) { /* its title, after it opened: what it was given, then changed, then back to the default for NULL */
+        const char* t = gp_platform_title(win_c);
+        CHECK(t && strcmp(t, "window_test C") == 0, "the title is what it opened with (%s)", t ? t : "(none)");
+        gp_window_set_title(win_c, "window_test C, renamed \xc3\xa9");
+        t = gp_platform_title(win_c);
+        CHECK(t && strcmp(t, "window_test C, renamed \xc3\xa9") == 0, "the title is what was set (%s)", t ? t : "(none)");
+        gp_window_set_title(win_c, NULL);
+        t = gp_platform_title(win_c);
+        CHECK(t && strcmp(t, "gpuic") == 0, "a NULL title is the default (%s)", t ? t : "(none)");
+    }
     gp_sleep(co, 0.15);
     CHECK(ca.calls == a_calls, "A's timer ticked after a new window took its place");
 #ifdef GP_HAS_FD

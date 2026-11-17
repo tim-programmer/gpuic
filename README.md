@@ -2034,19 +2034,22 @@ Roughly in the order I'd tackle them:
    shows the project as changed when the example calls `mark_dirty` (not yet seen in REAPER); what a host's own shortcuts take before the
    plugin's view sees a key; and the example built in CI.
 2. Native backends, the rest: X11 without SDL (what a plugin host would rather not have in its process: SDL's process-wide state and event
-   pumping), and for Wayland a title bar of gpuic's own where the compositor draws none (GNOME), a scale other than 1 and an IME tried,
-   cursors from the theme where there is no cursor-shape-v1, and outputs or input devices that go away while it runs
-   (an unplugged mouse keeps its state; a removed output stays in the list). Multi-window polish. Vulkan, the rest: choosing it from the API (only `GPUIC_RENDERER` does now), CI running the `_vk` tests
-   (Mesa's lavapipe), a real Windows machine (it was run under Wine only), and offscreen targets per window (they are shared, as GL's are: two
-   windows of different sizes drawn in turn make them again every frame).
-3. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
+   pumping), so that a plugin can have no SDL either. For the Wayland one (`GPUIC_PLATFORM=wayland`): a title bar of gpuic's own where the
+   compositor draws none (GNOME), a scale other than 1 and an IME tried, cursors from the theme where there is no cursor-shape-v1, outputs or
+   input devices that go away while it runs (an unplugged mouse keeps its state; a removed output stays in the list), windows still open at
+   shutdown (they leak), and that build run in CI.
+3. Vulkan, the rest: choosing it from the API (only `GPUIC_RENDERER` does now), CI running the `_vk` tests (Mesa's lavapipe), a real Windows
+   machine (it was run under Wine only), and offscreen targets per window (they are shared, as GL's are: two windows of different sizes drawn in
+   turn make them again every frame).
+4. Multi-window polish: child and modal windows, placing a window relative to another, focus moving between an app's windows.
+5. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
    foreground color with the text color (it is black: color glyphs are cached untinted).
-4. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
+6. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
    of thousands of descriptors), and `examples/fd.c` on Windows (it is POSIX: stdin and BSD sockets as they are there).
-5. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
-6. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
+7. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
+8. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
    frame, so only worth it if a real app shows it): a cached view whose own scroller moves (its visible part), one moved while it holds an
    offscreen layer (an opacity group, a filter) or a transform, and one turned by a transform of its own while the mouse is in the window.
    A scene that changes is sent to the GPU whole (only an unchanged one is not sent). The tests that compare cached frames with full ones
    each carry their own helpers for it, which is how two of them came to drop only part of the cached copies: one shared header would do.
-7. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
+9. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.

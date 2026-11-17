@@ -1101,6 +1101,11 @@ void gp_window_set_size(gp_window* w, int width, int height)
     gp_platform_set_size(w, width, height);
 }
 
+void gp_window_set_title(gp_window* w, const char* title)
+{
+    gp_platform_set_title(w, title ? title : "gpuic");
+}
+
 /* ---------------------------------------------------------------- clipboard / synthetic input */
 
 /* The platform clipboard can refuse us (Wayland only lets a focused client set it; headless

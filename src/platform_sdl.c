@@ -373,6 +373,16 @@ void gp_platform_set_size(gp_window* w, int width, int height)
     gp_platform_update_size(w);
 }
 
+void gp_platform_set_title(gp_window* w, const char* title)
+{
+    SDL_SetWindowTitle(sdl_win(w), title);
+}
+
+const char* gp_platform_title(gp_window* w)
+{
+    return SDL_GetWindowTitle(sdl_win(w));
+}
+
 void gp_platform_make_current(gp_window* w)
 {
     if(plat(w->app)->gl) {
