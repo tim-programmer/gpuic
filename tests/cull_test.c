@@ -27,12 +27,7 @@ static gp_focus g_focus;
 
 static gp_node* view(void* self, gp_ctx* cx)
 {
-    return gp_div(gp_size_full(), gp_bg(gp_rgb(0x101018)),
-        gp_div(gp_flex_col(), gp_h(150), gp_w_full(), gp_flex_none(), gp_overflow_y_scroll(), gp_track_scroll(g_scroll),
-            gp_text("text whose wrapped lines run on well past the height of twenty pixels it was given, six lines or so of it in all", gp_h(20), gp_w(200), gp_flex_none(), gp_text_color(gp_rgb(0xffffff))),
-            gp_div(gp_h(160), gp_flex_none()),
-            gp_div(gp_track_focus(g_focus), gp_w(120), gp_h(20), gp_flex_none(), gp_bg(gp_rgb(0x335533)), gp_focus_style(gp_group(gp_shadow(0, 0, 24, gp_rgb(0xffcc00))))),
-            gp_div(gp_h(400), gp_flex_none())));
+    return gp_div(gp_size_full(), gp_bg(gp_rgb(0x101018)), gp_div(gp_flex_col(), gp_h(150), gp_w_full(), gp_flex_none(), gp_overflow_y_scroll(), gp_track_scroll(g_scroll), gp_text("text whose wrapped lines run on well past the height of twenty pixels it was given, six lines or so of it in all", gp_h(20), gp_w(200), gp_flex_none(), gp_text_color(gp_rgb(0xffffff))), gp_div(gp_h(160), gp_flex_none()), gp_div(gp_track_focus(g_focus), gp_w(120), gp_h(20), gp_flex_none(), gp_bg(gp_rgb(0x335533)), gp_focus_style(gp_group(gp_shadow(0, 0, 24, gp_rgb(0xffcc00))))), gp_div(gp_h(400), gp_flex_none())));
 }
 
 static uint8_t* frame(void)
