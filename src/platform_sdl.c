@@ -30,8 +30,9 @@ typedef struct
 typedef struct
 {
     SDL_Window* window;
+    bool embedded; /* inside a host's window: takes the keyboard focus when pressed (the host's top-level has it) */
 #ifdef _WIN32
-    HWND child; /* an embedded window: the child of the host's that SDL wraps (ours to destroy) */
+    HWND child;    /* an embedded window: the child of the host's that SDL wraps (ours to destroy) */
 #endif
 } sdl_window;
 
@@ -112,25 +113,59 @@ void gp_platform_shutdown(gp_app* app)
 
 #ifdef GP_X11_EMBED
 /* The X11 calls embedding needs, from the libX11 SDL has loaded (so that gpuic does not link it itself). */
+static void* x11_fn(const char* name)
+{
+    static void* lib;
+    if(!lib) {
+        lib = dlopen("libX11.so.6", RTLD_NOW | RTLD_NOLOAD);
+        lib = lib ? lib : dlopen("libX11.so.6", RTLD_NOW);
+    }
+    return lib ? dlsym(lib, name) : NULL;
+}
+static bool x11_window(SDL_Window* win, void** display, unsigned long* xwin)
+{
+    SDL_PropertiesID props = SDL_GetWindowProperties(win);
+    *display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+    *xwin = (unsigned long)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+    return *display && *xwin;
+}
 static bool x11_reparent(SDL_Window* win, unsigned long parent)
 {
-    static int (*reparent)(void*, unsigned long, unsigned long, int, int);
-    static int (*flush)(void*);
-    if(!reparent) {
-        void* lib = dlopen("libX11.so.6", RTLD_NOW | RTLD_NOLOAD);
-        lib = lib ? lib : dlopen("libX11.so.6", RTLD_NOW);
-        reparent = lib ? (int (*)(void*, unsigned long, unsigned long, int, int))dlsym(lib, "XReparentWindow") : NULL;
-        flush = lib ? (int (*)(void*))dlsym(lib, "XFlush") : NULL;
-    }
-    SDL_PropertiesID props = SDL_GetWindowProperties(win);
-    void* display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
-    unsigned long xwin = (unsigned long)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
-    if(!reparent || !flush || !display || !xwin) {
+    int (*reparent)(void*, unsigned long, unsigned long, int, int) = (int (*)(void*, unsigned long, unsigned long, int, int))x11_fn("XReparentWindow");
+    int (*flush)(void*) = (int (*)(void*))x11_fn("XFlush");
+    void* display;
+    unsigned long xwin;
+    if(!reparent || !flush || !x11_window(win, &display, &xwin)) {
         return false;
     }
     reparent(display, xwin, parent, 0, 0);
     flush(display);
     return true;
+}
+/* The keyboard focus to an embedded window: the host's top-level window has it, and keys reach a child only under the pointer otherwise.
+ * When the window goes, the focus goes back to its parent. */
+static int x11_ignore_error(void* display, void* error)
+{
+    (void)display, (void)error;
+    return 0;
+}
+static void x11_take_focus(SDL_Window* win)
+{
+    typedef int (*handler_fn)(void*, void*);
+    int (*set_focus)(void*, unsigned long, int, unsigned long) = (int (*)(void*, unsigned long, int, unsigned long))x11_fn("XSetInputFocus");
+    int (*sync)(void*, int) = (int (*)(void*, int))x11_fn("XSync");
+    handler_fn (*set_handler)(handler_fn) = (handler_fn (*)(handler_fn))x11_fn("XSetErrorHandler");
+    void* display;
+    unsigned long xwin;
+    if(set_focus && sync && set_handler && x11_window(win, &display, &xwin)) {
+        /* a window that cannot take it (hidden with its host: BadMatch; gone: BadWindow) keeps what it has: Xlib's own handler would end the
+         * host's process over it */
+        sync(display, 0);
+        handler_fn old = set_handler(x11_ignore_error);
+        set_focus(display, xwin, 2 /* RevertToParent */, 0 /* CurrentTime */);
+        sync(display, 0);
+        set_handler(old);
+    }
 }
 #endif
 
@@ -199,7 +234,9 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
             return false;
         }
         if(win) {
+            SDL_SetWindowPosition(win, 0, 0); /* (where SDL had it on the screen is now a place inside the parent: centered, off its corner) */
             SDL_ShowWindow(win);
+            SDL_SyncWindow(win);
         }
 #else
         fprintf(stderr, "gpuic: a window inside another (gp_window_options.parent) is not supported on this platform\n");
@@ -234,6 +271,7 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
     SDL_GL_MakeCurrent(win, p->gl);
     sdl_window* sw = calloc(1, sizeof *sw);
     sw->window = win;
+    sw->embedded = opts->parent != NULL;
 #ifdef _WIN32
     sw->child = child;
 #endif
@@ -257,6 +295,17 @@ void gp_platform_close_window(gp_app* app, gp_window* w)
 #endif
     free(w->platform);
     w->platform = NULL;
+}
+
+static void take_focus(gp_window* w)
+{
+#if defined(_WIN32)
+    SetFocus(((sdl_window*)w->platform)->child);
+#elif defined(GP_X11_EMBED)
+    x11_take_focus(sdl_win(w));
+#else
+    (void)w;
+#endif
 }
 
 void* gp_platform_native(gp_window* w)
@@ -540,6 +589,9 @@ static void dispatch(gp_app* app, const SDL_Event* e)
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP:
+            if(e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && (w = gp_app_window_by_id(app, e->button.windowID)) && ((sdl_window*)w->platform)->embedded) {
+                take_focus(w); /* (a press in a host's window: its keys are ours from now on) */
+            }
             if(real_mouse(e->button.which)) {
                 break;
             }

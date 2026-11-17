@@ -28,6 +28,10 @@ endif()
 # What the sources, tests and examples ask of the Windows C library: M_PI, and no warnings about strdup or fopen.
 set(GPUIC_WIN32_DEFINITIONS _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
 option(GPUIC_BUILD_EXAMPLES "Build the example programs" ${_gpuic_top})
+option(GPUIC_BUILD_CLAP_EXAMPLE "Build examples/clap_view.c, a CLAP plugin whose editor is a gpuic view (fetches the CLAP headers)" OFF)
+if(GPUIC_BUILD_CLAP_EXAMPLE)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)   # a plugin is a shared library: gpuic and what it links go into it
+endif()
 option(GPUIC_BUILD_TESTS "Build and register the tests" ${_gpuic_top})
 option(GPUIC_INSTALL "Generate install rules" ${_gpuic_top})
 option(GPUIC_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer; any undefined behavior ends the program (GCC or clang)" OFF)
@@ -120,6 +124,27 @@ add_library(gpuic::cpp ALIAS gpuic_cpp)
 target_link_libraries(gpuic_cpp INTERFACE gpuic)
 target_compile_features(gpuic_cpp INTERFACE cxx_std_20)
 set_target_properties(gpuic_cpp PROPERTIES EXPORT_NAME cpp)
+
+if(GPUIC_BUILD_CLAP_EXAMPLE)
+  include(FetchContent)
+  FetchContent_Declare(gpuic_clap
+    URL https://github.com/free-audio/clap/archive/refs/tags/1.2.9.tar.gz
+    URL_HASH SHA256=0241a9b7b3a3156c780484231885ee0ffa13fe3ff41acfcf3a32c63715926e48
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR _headers_only)   # (its headers only: none of its own targets or install rules)
+  FetchContent_MakeAvailable(gpuic_clap)
+  add_library(clap_view MODULE examples/clap_view.c)
+  target_include_directories(clap_view PRIVATE ${gpuic_clap_SOURCE_DIR}/include)
+  target_link_libraries(clap_view PRIVATE gpuic)
+  set_target_properties(clap_view PROPERTIES PREFIX "" SUFFIX ".clap" C_VISIBILITY_PRESET hidden)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(clap_view PRIVATE -Wl,--exclude-libs,ALL)   # what it links stays inside it: another plugin may bring its own SDL
+  endif()
+  target_compile_options(clap_view PRIVATE ${GPUIC_WARNING_FLAGS})
+  if(WIN32)
+    target_compile_definitions(clap_view PRIVATE ${GPUIC_WIN32_DEFINITIONS})
+  endif()
+endif()
 
 if(GPUIC_BUILD_EXAMPLES)
   set(_gpuic_examples counter form scroll list async inputs bidi observe animate fonts gradients images svg)

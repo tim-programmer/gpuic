@@ -177,11 +177,24 @@ gp_app_free(app);                                 /* the view closes: windows, t
   thread's message loop to the host (`SDL_HINT_WINDOWS_ENABLE_MESSAGELOOP`). Wayland and macOS have no such parent here: the window does not
   open (a plugin can still open a window of its own, which CLAP allows). Close the embedded window (or free the app) before the host
   destroys its parent: X11 takes the child with it. `gp_window_native(w)` gives a window's own handle, the same kinds.
-* Not done: keyboard focus inside a host's window is whatever the windowing system gives the child (X11 gives it on a click only if the
-  host asks), native backends without SDL, and macOS.
+* **Keys:** the host's top-level window holds the keyboard focus, and a child window would get keys only while the pointer is over it (X11)
+  or not at all (Windows). So a press in an embedded window takes the focus (`XSetInputFocus`, falling back to the parent when the window
+  goes; `SetFocus`), as plugin views do; the host gets it back when the user clicks the host. SDL also gives a window the focus when it opens.
+* **`examples/clap_view.c`** is all of this as a CLAP plugin: a stereo effect that passes audio through, whose editor is a gpuic view
+  with a text field and a button, stepped from the host's timer (`clap.timer-support`) and embedded with `gui.set_parent`. Build it with
+  `cmake -B build -DGPUIC_BUILD_CLAP_EXAMPLE=ON` (fetches the CLAP headers; gpuic and its dependencies are then compiled position-independent,
+  and on Linux everything but `clap_entry` stays inside the plugin, so another plugin's SDL does not meet this one's) and copy
+  `clap_view.clap` to `~/.clap`. In REAPER 7 on Linux (X11 through XWayland) it scans, opens in a floating FX window at the editor's
+  size, takes clicks, takes the keyboard focus on a click and types into its field; the host's own window, menus and shortcuts are unchanged.
+  That test found that SDL put a reparented window where it would have centered it on the screen, now inside the parent: it is moved to the
+  parent's corner, and `tests/host_test.c` checks where it sits after opening and after a resize.
+* Not done: native backends without SDL, and macOS.
 
 `tests/host_test.c` steps two apps by hand: timers and drawing through steps, a click on one app's window taken by the other's step, one
-app freed while the other goes on, and a window embedded in another (its native parent checked) and resized. It runs on X11 and Windows.
+app freed while the other goes on, and a window embedded in another (its native parent checked) and resized; then, with the focus on the
+parent, a press in an embedded window takes it, and on X11 a real key typed through the X server (XTest) reaches the window's key handler.
+It runs on X11 and Windows. (A desktop's XWayland may drop XTest's keys: the test tries a window of its own first, and judges only if
+they arrive. A private X server, `Xwayland :77` then `DISPLAY=:77`, or Xvfb as CI uses, does not drop them.)
 
 ## How GPUI's model maps to C
 
@@ -1957,10 +1970,19 @@ mouse move/hover ─────────────────────
 
 Roughly in the order I'd tackle them:
 
-1. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short of thousands of descriptors).
-2. What is left of painting in full, now that only what the clip shows is painted (see "Dirty tracking and cached views"): a cached view with hover styles or scrollbars is painted
-   again (its visible part) while the mouse is over it, and one that holds a scroller, a list or an overflow clip is painted again, not moved, when it or its scroller moves
-   (their clip moves with them). Measured at about 0.1 to 0.4 ms a frame in the case above. Culling is vertical only. The scene is still re-uploaded and drawn as a whole every
-   frame, which was measured and is not worth a retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
-3. Native Wayland/X11 backends (without SDL: what a plugin host would rather not have in its process) and a Vulkan renderer; embedding on macOS; multi-window polish. (Plugins have the host-driven loop and X11 / Windows embedding: "Running inside a host".)
-4. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
+1. Plugins, the rest (see "Running inside a host"): the CLAP example in a real host on Windows (it was tried in REAPER on Linux only), in
+   other hosts (Bitwig), and inside REAPER's FX chain window (docked) as well as the floating one; what a host's own shortcuts take before
+   the plugin's view sees a key; and the example built in CI.
+2. Native Wayland/X11 backends without SDL (what a plugin host would rather not have in its process: SDL's process-wide state and event
+   pumping) and a Vulkan renderer. Nothing needs Vulkan yet: OpenGL 3.3 works everywhere gpuic runs. Multi-window polish.
+3. What is left of painting in full, now that only what the clip shows is painted (see "Dirty tracking and cached views"): a cached view with
+   hover styles or scrollbars is painted again (its visible part) while the mouse is over it, and one that holds a scroller, a list or an
+   overflow clip is painted again, not moved, when it or its scroller moves (their clip moves with them). Measured at about 0.1 to 0.4 ms a
+   frame. Culling is vertical only. The scene is still re-uploaded and drawn as a whole every frame, which was measured and is not worth a
+   retained scene: `GPUIC_STATS=1` shows ~0.05 ms of GL submit for ~1,700 instances, so it only starts to matter in the tens of thousands.
+4. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
+   foreground color with the text color (it is black: color glyphs are cached untinted).
+5. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
+   of thousands of descriptors), and `examples/fd.c` on Windows (it is POSIX: stdin and BSD sockets as they are there).
+6. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
+7. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
