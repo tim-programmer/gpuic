@@ -79,7 +79,6 @@ add_library(gpuic
   src/layout.c
   src/observe.c
   src/paint.c
-  src/platform_sdl.c
   src/render_gl.c
   src/render_vk.c
   src/scroll.c
@@ -88,6 +87,13 @@ add_library(gpuic
   src/views.c
   src/vlist.c)
 add_library(gpuic::gpuic ALIAS gpuic)
+if(GPUIC_PLATFORM STREQUAL "wayland")   # (the protocols' code is made by tools/gen_wayland.sh and committed)
+  target_sources(gpuic PRIVATE src/platform_wayland.c src/wayland/xdg-shell.c src/wayland/xdg-decoration-unstable-v1.c src/wayland/text-input-unstable-v3.c
+    src/wayland/fractional-scale-v1.c src/wayland/viewporter.c src/wayland/primary-selection-unstable-v1.c src/wayland/cursor-shape-v1.c src/wayland/tablet-v2.c)
+  target_compile_definitions(gpuic PRIVATE GPUIC_PLATFORM_WAYLAND)
+else()
+  target_sources(gpuic PRIVATE src/platform_sdl.c)
+endif()
 # The Vulkan renderer needs only the Vulkan headers to build (the loader is found at run time, through SDL): where they are not on the include
 # path (the Vulkan SDK on Windows), they are looked for; without them render_vk.c builds a stub and GPUIC_RENDERER=vulkan says so.
 find_path(GPUIC_VULKAN_INCLUDE vulkan/vulkan.h HINTS $ENV{VULKAN_SDK}/Include $ENV{VULKAN_SDK}/include)
@@ -132,6 +138,9 @@ target_link_libraries(gpuic_cpp INTERFACE gpuic)
 target_compile_features(gpuic_cpp INTERFACE cxx_std_20)
 set_target_properties(gpuic_cpp PROPERTIES EXPORT_NAME cpp)
 
+if(GPUIC_BUILD_CLAP_EXAMPLE AND GPUIC_PLATFORM STREQUAL "wayland")
+  message(FATAL_ERROR "gpuic: the CLAP example opens its editor inside the host's window, which needs GPUIC_PLATFORM=sdl (X11)")
+endif()
 if(GPUIC_BUILD_CLAP_EXAMPLE)
   include(FetchContent)
   FetchContent_Declare(gpuic_clap
@@ -200,6 +209,9 @@ if(GPUIC_BUILD_TESTS)
   list(APPEND _gpuic_tests fd_test)
   if(NOT WIN32)
     list(APPEND _gpuic_tests text_test)
+  endif()
+  if(GPUIC_PLATFORM STREQUAL "wayland")   # (SDL's: embedding in an X11 window, and SDL's own shutdown order)
+    list(REMOVE_ITEM _gpuic_tests host_test shutdown_test)
   endif()
   foreach(test IN LISTS _gpuic_tests)
     add_executable(${test} tests/${test}.c)

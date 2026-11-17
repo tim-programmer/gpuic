@@ -9,7 +9,11 @@
 /* SDL ships its own copy of the GL headers, so neither libGL nor Mesa headers
  * are needed to build; every entry point is loaded at runtime. */
 #define GL_GLEXT_PROTOTYPES 1 /* declarations only: they give the table its types */
-#include <SDL3/SDL_opengl.h>
+#ifdef GPUIC_PLATFORM_WAYLAND
+# include <GL/glcorearb.h>    /* (no SDL in that build: the system's headers, Khronos's) */
+#else
+# include <SDL3/SDL_opengl.h>
+#endif
 
 #define GL_FUNCS(X)              \
     X(glActiveTexture)           \

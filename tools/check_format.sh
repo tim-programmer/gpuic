@@ -5,7 +5,7 @@
 #   tools/check_format.sh --fix    formats them (repeated until nothing changes: aligned comments can move again on a second pass)
 #
 # Files not yet added to git are checked too (a new file would otherwise slip through until after it was committed).
-# Left out: third_party/ (vendored code, kept as upstream wrote it) and generated files (tools/gen_*.py make
+# Left out: third_party/ (vendored code, kept as upstream wrote it), src/wayland/ (tools/gen_wayland.sh) and generated files (tools/gen_*.py make
 # them; two of them are compared with their generators by ctest). The .clang-format sets InsertBraces: every if, else, for, while and do
 # body has braces.
 #
@@ -27,6 +27,7 @@ fi
 
 FILES=$(git ls-files --cached --others --exclude-standard '*.c' '*.h' '*.cpp' '*.hpp' \
     | grep -v '^third_party/' \
+    | grep -v '^src/wayland/' \
     | grep -v -x -e 'src/grapheme_data.h' -e 'tests/image_fixtures.h' -e 'tests/svgfont_fixture.h' -e 'tests/colr_fixture.h')
 
 if [ "${1:-}" = "--fix" ]; then

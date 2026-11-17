@@ -137,6 +137,21 @@ pixels a level apart (the animated one excepted). Per frame, once the GPU has cl
 0.04 for GL's (GL's wait is in the swap, which is not counted). The Windows build was run under Wine (whose Vulkan is the host's driver): the
 tests tried pass, and a Vulkan that cannot start falls back to OpenGL there as it should.
 
+**Native Wayland (no SDL).** `cmake -B build-wl -DGPUIC_PLATFORM=wayland` builds `src/platform_wayland.c` instead of `platform_sdl.c`, and
+links no SDL at all: wayland-client, wayland-egl, EGL and xkbcommon (system packages, through pkg-config). It does what the SDL platform does:
+xdg-shell windows with decorations asked of the compositor (xdg-decoration; GNOME draws none, so there a window has no title bar yet), OpenGL
+through EGL or a Vulkan surface (`GPUIC_RENDERER=vulkan` works there too, through `libvulkan.so.1`), the pointer (clicks counted as SDL counts
+them, the wheel in 120ths of a notch, a touchpad's units as SDL takes them), the keyboard with xkbcommon and key repeat done by gpuic, touch
+(the first finger), text input and IME (text-input-v3), the clipboard and the primary selection, cursors (cursor-shape-v1), fractional scaling
+(fractional-scale-v1 and a viewport, else the surface's integer scale) and the output's refresh rate. Buffers are swapped without waiting for
+the compositor (the app paces its frames, as the Vulkan renderer's mailbox does). Not there: a window inside another (Wayland has no foreign
+windows: plugins stay on the SDL build, on X11), so the CLAP example, `host_test` and `shutdown_test` (SDL's own) are left out of that build.
+The protocols' code (`src/wayland/`) is made by `tools/gen_wayland.sh` from the XML SDL ships, and committed. Tried: the whole suite passes in
+that build, drawn with GL and with Vulkan; the clipboard and the primary selection go between two processes (in a nested KWin) and come from
+the desktop's; the refresh rate is the display's (240 Hz here); KWin draws the title bar; and the `inputs` and `form` examples, tried by hand on
+KDE Plasma, worked (the tests do not reach real input: they inject events above the platform). Not tried: a scale other than 1 (this desktop
+is at 1, and a nested KWin's output is too), and an input method (IME).
+
 Headless checks: `GPUIC_SCREENSHOT=out.ppm` renders a few frames, writes a PPM and exits.
 Inject input after the second frame with `GPUIC_HOVER=x,y`, `GPUIC_CLICK=x,y` and
 `GPUIC_KEYS="tab h i shift-tab enter"` and `GPUIC_WHEEL="x,y,dx,dy;..."` (real SDL key / wheel
@@ -2007,8 +2022,8 @@ mouse move/hover ─────────────────────
 * **Renderer** (`render_gl.c`, or `render_vk.c` with `GPUIC_RENDERER=vulkan`, behind `gp_renderer_ops`): quads, gradients, shadows and glyphs
   (coverage, LCD and color) are all instances of one SDF shader (`src/shaders/`); paint order is draw order. Images have textures of their own,
   so they split the one instanced draw.
-* **Platform** (`platform_sdl.c`): the only file that knows about SDL. A native
-  Wayland/X11 backend means reimplementing the `gp_platform_*` functions.
+* **Platform** (`platform_sdl.c`, or `platform_wayland.c` with `-DGPUIC_PLATFORM=wayland`): the only files that know about windows and input.
+  Another backend (native X11, Windows without SDL) means reimplementing the `gp_platform_*` functions.
 
 ## Not done yet
 
@@ -2018,8 +2033,10 @@ Roughly in the order I'd tackle them:
    embedding, resizing docked, reopening, keys, and its state saved and loaded with the project), in other hosts (Bitwig); whether a host
    shows the project as changed when the example calls `mark_dirty` (not yet seen in REAPER); what a host's own shortcuts take before the
    plugin's view sees a key; and the example built in CI.
-2. Native Wayland/X11 backends without SDL (what a plugin host would rather not have in its process: SDL's process-wide state and event
-   pumping). Multi-window polish. Vulkan, the rest: choosing it from the API (only `GPUIC_RENDERER` does now), CI running the `_vk` tests
+2. Native backends, the rest: X11 without SDL (what a plugin host would rather not have in its process: SDL's process-wide state and event
+   pumping), and for Wayland a title bar of gpuic's own where the compositor draws none (GNOME), a scale other than 1 and an IME tried,
+   cursors from the theme where there is no cursor-shape-v1, and outputs or input devices that go away while it runs
+   (an unplugged mouse keeps its state; a removed output stays in the list). Multi-window polish. Vulkan, the rest: choosing it from the API (only `GPUIC_RENDERER` does now), CI running the `_vk` tests
    (Mesa's lavapipe), a real Windows machine (it was run under Wine only), and offscreen targets per window (they are shared, as GL's are: two
    windows of different sizes drawn in turn make them again every frame).
 3. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
