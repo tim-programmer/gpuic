@@ -693,6 +693,25 @@ uint64_t gp_exec_wake_background(gp_app* app, uint64_t co_job, gp_work_fn work, 
     return j->id;
 }
 
+uint64_t gp_exec_pending(gp_ctx* cx, gp_task_fn done, void* data, gp_drop_fn free_data)
+{
+    gp_job* j = new_job(cx->app, JOB_BG, cx);
+    j->fn = done;
+    j->data = data;
+    j->free_data = free_data;
+    j->bg_running = true; /* (kept until completed, like work on a pool thread) */
+    return j->id;
+}
+
+void gp_exec_complete(gp_app* app, uint64_t id)
+{
+    gp_exec* ex = app->exec;
+    gp_mutex_lock(&ex->lock);
+    VEC_PUSH(ex->completed, ex->ncompleted, ex->cap_completed, id);
+    gp_mutex_unlock(&ex->lock);
+    gp_platform_wake(app);
+}
+
 void gp_post(gp_app* app, gp_entity entity, gp_task_fn fn, void* data)
 {
     gp_exec* ex = app->exec;

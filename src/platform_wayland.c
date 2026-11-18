@@ -12,11 +12,14 @@
 #define _GNU_SOURCE
 #include "internal.h"
 
+#include <ctype.h>
+#include <dbus/dbus.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -35,6 +38,7 @@
 #include "wayland/text-input-unstable-v3-client.h"
 #include "wayland/viewporter-client.h"
 #include "wayland/xdg-decoration-unstable-v1-client.h"
+#include "wayland/xdg-foreign-unstable-v2-client.h"
 #include "wayland/xdg-shell-client.h"
 
 /* ---------------------------------------------------------------- state */
@@ -60,6 +64,8 @@ struct wl_win
     bool configured;          /* the first configure came: the window may be drawn */
     bool text_input;          /* the app wants text input in it */
     char* title;              /* the last given (the compositor gives none back) */
+    struct zxdg_exported_v2* exported;
+    char* export_handle;      /* what names it to other programs (a dialog's parent), once the compositor gave it */
     struct wl_output* outputs[8];
     int noutputs;
 };
@@ -94,6 +100,7 @@ static struct
     struct wp_viewporter* viewporter;
     struct wp_cursor_shape_manager_v1* cursor_mgr;
     struct wp_cursor_shape_device_v1* cursor_dev;
+    struct zxdg_exporter_v2* exporter;
     wl_out outputs[8];
     int noutputs;
     wl_win* windows;
@@ -997,6 +1004,14 @@ static uint32_t min_u(uint32_t a, uint32_t b)
     return a < b ? a : b;
 }
 
+static void exported_handle(void* d, struct zxdg_exported_v2* e, const char* handle)
+{
+    wl_win* v = d;
+    free(v->export_handle);
+    v->export_handle = strdup(handle);
+}
+static const struct zxdg_exported_v2_listener exported_listener = { exported_handle };
+
 static void registry_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t version)
 {
     if(strcmp(iface, wl_compositor_interface.name) == 0) {
@@ -1026,6 +1041,8 @@ static void registry_global(void* d, struct wl_registry* r, uint32_t name, const
         g.viewporter = wl_registry_bind(r, name, &wp_viewporter_interface, 1);
     } else if(strcmp(iface, wp_cursor_shape_manager_v1_interface.name) == 0) {
         g.cursor_mgr = wl_registry_bind(r, name, &wp_cursor_shape_manager_v1_interface, 1);
+    } else if(strcmp(iface, zxdg_exporter_v2_interface.name) == 0) {
+        g.exporter = wl_registry_bind(r, name, &zxdg_exporter_v2_interface, 1);
     }
 }
 static void registry_remove(void* d, struct wl_registry* r, uint32_t name)
@@ -1198,6 +1215,10 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
         v->deco = zxdg_decoration_manager_v1_get_toplevel_decoration(g.deco, v->top);
         zxdg_toplevel_decoration_v1_set_mode(v->deco, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
+    if(g.exporter) {
+        v->exported = zxdg_exporter_v2_export_toplevel(g.exporter, v->surface);
+        zxdg_exported_v2_add_listener(v->exported, &exported_listener, v);
+    }
     wl_surface_commit(v->surface);
     v->next = g.windows;
     g.windows = v;
@@ -1267,6 +1288,10 @@ void gp_platform_close_window(gp_app* app, gp_window* w)
     if(v->frac) {
         wp_fractional_scale_v1_destroy(v->frac);
     }
+    if(v->exported) {
+        zxdg_exported_v2_destroy(v->exported);
+    }
+    free(v->export_handle);
     xdg_toplevel_destroy(v->top);
     xdg_surface_destroy(v->xdg);
     wl_surface_destroy(v->surface);
@@ -1312,6 +1337,259 @@ void gp_platform_set_title(gp_window* w, const char* title)
 const char* gp_platform_title(gp_window* w)
 {
     return win_of(w)->title;
+}
+
+/* ---------------------------------------------------------------- file dialogs: the portal's FileChooser, over D-Bus
+ * The call is made on the main thread's behalf by a thread of its own, on a private connection, which waits for the Response signal the
+ * portal sends when the user is done (minutes, maybe): nothing in the loop polls for it. */
+
+static void opt_open(DBusMessageIter* dict, const char* key, const char* sig, DBusMessageIter* entry, DBusMessageIter* var)
+{
+    dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY, NULL, entry);
+    dbus_message_iter_append_basic(entry, DBUS_TYPE_STRING, &key);
+    dbus_message_iter_open_container(entry, DBUS_TYPE_VARIANT, sig, var);
+}
+static void opt_close(DBusMessageIter* dict, DBusMessageIter* entry, DBusMessageIter* var)
+{
+    dbus_message_iter_close_container(entry, var);
+    dbus_message_iter_close_container(dict, entry);
+}
+static void opt_string(DBusMessageIter* dict, const char* key, const char* value)
+{
+    DBusMessageIter e, v;
+    opt_open(dict, key, "s", &e, &v);
+    dbus_message_iter_append_basic(&v, DBUS_TYPE_STRING, &value);
+    opt_close(dict, &e, &v);
+}
+static void opt_bool(DBusMessageIter* dict, const char* key, bool value)
+{
+    DBusMessageIter e, v;
+    dbus_bool_t b = value;
+    opt_open(dict, key, "b", &e, &v);
+    dbus_message_iter_append_basic(&v, DBUS_TYPE_BOOLEAN, &b);
+    opt_close(dict, &e, &v);
+}
+static void opt_path(DBusMessageIter* dict, const char* key, const char* path) /* a byte string, with its terminating zero */
+{
+    DBusMessageIter e, v, a;
+    opt_open(dict, key, "ay", &e, &v);
+    dbus_message_iter_open_container(&v, DBUS_TYPE_ARRAY, "y", &a);
+    dbus_message_iter_append_fixed_array(&a, DBUS_TYPE_BYTE, &path, (int)strlen(path) + 1);
+    dbus_message_iter_close_container(&v, &a);
+    opt_close(dict, &e, &v);
+}
+static void opt_filters(DBusMessageIter* dict, const gp_file_filter* f, int n)
+{
+    DBusMessageIter e, v, list, filter, globs, glob;
+    opt_open(dict, "filters", "a(sa(us))", &e, &v);
+    dbus_message_iter_open_container(&v, DBUS_TYPE_ARRAY, "(sa(us))", &list);
+    for(int i = 0; i < n; i++) {
+        dbus_message_iter_open_container(&list, DBUS_TYPE_STRUCT, NULL, &filter);
+        dbus_message_iter_append_basic(&filter, DBUS_TYPE_STRING, &f[i].name);
+        dbus_message_iter_open_container(&filter, DBUS_TYPE_ARRAY, "(us)", &globs);
+        for(const char* p = f[i].extensions; *p;) {
+            size_t len = strcspn(p, ";");
+            char pat[256] = "*", *o = pat + 1; /* "*.obj" as "*.[oO][bB][jJ]": the portal's globs match case */
+            if(!(len == 1 && *p == '*')) {
+                *o++ = '.';
+                for(size_t k = 0; k < len && o < pat + sizeof pat - 5; k++) {
+                    char c = p[k];
+                    if(isalpha((unsigned char)c)) {
+                        o += sprintf(o, "[%c%c]", tolower((unsigned char)c), toupper((unsigned char)c));
+                    } else {
+                        *o++ = c;
+                    }
+                }
+            }
+            *o = 0;
+            const char* pp = pat;
+            dbus_uint32_t kind = 0;
+            dbus_message_iter_open_container(&globs, DBUS_TYPE_STRUCT, NULL, &glob);
+            dbus_message_iter_append_basic(&glob, DBUS_TYPE_UINT32, &kind);
+            dbus_message_iter_append_basic(&glob, DBUS_TYPE_STRING, &pp);
+            dbus_message_iter_close_container(&globs, &glob);
+            p += len + (p[len] == ';');
+        }
+        dbus_message_iter_close_container(&filter, &globs);
+        dbus_message_iter_close_container(&list, &filter);
+    }
+    dbus_message_iter_close_container(&v, &list);
+    opt_close(dict, &e, &v);
+}
+
+/* "file:///a%20b" -> "/a b"; NULL for anything but a local file */
+static char* uri_path(const char* uri)
+{
+    if(strncmp(uri, "file://", 7) != 0) {
+        return NULL;
+    }
+    const char* s = uri + 7;
+    char* out = malloc(strlen(s) + 1);
+    char* o = out;
+    while(*s) {
+        unsigned hex;
+        if(s[0] == '%' && isxdigit((unsigned char)s[1]) && isxdigit((unsigned char)s[2]) && sscanf(s + 1, "%2x", &hex) == 1) {
+            *o++ = (char)hex;
+            s += 3;
+        } else {
+            *o++ = *s++;
+        }
+    }
+    *o = 0;
+    return out;
+}
+
+/* Answers `d` from the portal's Response: (u code, a{sv} results), code 0 = chosen, 1 = cancelled, 2 = ended some other way. */
+static void portal_response(gp_dialog* d, DBusMessage* m)
+{
+    DBusMessageIter it, dict, entry, var, uris;
+    dbus_uint32_t code = 2;
+    dbus_message_iter_init(m, &it);
+    if(dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_UINT32) {
+        dbus_message_iter_get_basic(&it, &code);
+    }
+    char** paths = NULL;
+    int n = 0;
+    if(code == 0 && dbus_message_iter_next(&it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_ARRAY) {
+        for(dbus_message_iter_recurse(&it, &dict); dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY; dbus_message_iter_next(&dict)) {
+            const char* key;
+            dbus_message_iter_recurse(&dict, &entry);
+            dbus_message_iter_get_basic(&entry, &key);
+            dbus_message_iter_next(&entry);
+            dbus_message_iter_recurse(&entry, &var);
+            if(strcmp(key, "uris") != 0 || dbus_message_iter_get_arg_type(&var) != DBUS_TYPE_ARRAY) {
+                continue;
+            }
+            for(dbus_message_iter_recurse(&var, &uris); dbus_message_iter_get_arg_type(&uris) == DBUS_TYPE_STRING; dbus_message_iter_next(&uris)) {
+                const char* uri;
+                dbus_message_iter_get_basic(&uris, &uri);
+                char* p = uri_path(uri);
+                if(p) {
+                    paths = realloc(paths, (size_t)(n + 1) * sizeof *paths);
+                    paths[n++] = p;
+                }
+            }
+        }
+    }
+    gp_dialog_answer(d, (const char* const*)paths, n, code == 0 && !n ? "the dialog chose no local file" : NULL);
+    for(int i = 0; i < n; i++) {
+        free(paths[i]);
+    }
+    free(paths);
+}
+
+typedef struct
+{
+    gp_dialog* d;
+    DBusMessage* call; /* made on the main thread, from d's request */
+} portal_job;
+
+static void* portal_thread(void* arg)
+{
+    portal_job* job = arg;
+    gp_dialog* d = job->d;
+    DBusError err;
+    dbus_error_init(&err);
+    DBusConnection* c = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+    DBusMessage* reply = NULL;
+    char msg[512] = "";
+    if(c) {
+        dbus_connection_set_exit_on_disconnect(c, FALSE);
+        dbus_bus_add_match(c, "type='signal',interface='org.freedesktop.portal.Request',member='Response'", &err); /* (before the call: no race) */
+    }
+    if(c && !dbus_error_is_set(&err)) {
+        reply = dbus_connection_send_with_reply_and_block(c, job->call, DBUS_TIMEOUT_USE_DEFAULT, &err);
+    }
+    const char* handle = NULL;
+    if(reply && !dbus_message_get_args(reply, &err, DBUS_TYPE_OBJECT_PATH, &handle, DBUS_TYPE_INVALID)) {
+        handle = NULL;
+    }
+    if(!handle) {
+        snprintf(msg, sizeof msg, "no file dialog: the desktop portal (org.freedesktop.portal.FileChooser) did not answer: %s", dbus_error_is_set(&err) ? err.message : "no session bus");
+    }
+    bool answered = !handle;
+    while(!answered) {
+        DBusMessage* m;
+        while(!answered && (m = dbus_connection_pop_message(c))) {
+            if(dbus_message_is_signal(m, "org.freedesktop.portal.Request", "Response") && strcmp(dbus_message_get_path(m), handle) == 0) {
+                portal_response(d, m);
+                answered = true;
+            }
+            dbus_message_unref(m);
+        }
+        if(!answered && !dbus_connection_read_write(c, -1)) {
+            snprintf(msg, sizeof msg, "no file dialog: the session bus went away");
+            break;
+        }
+    }
+    if(msg[0]) {
+        gp_dialog_answer(d, NULL, 0, msg);
+    }
+    dbus_error_free(&err);
+    if(reply) {
+        dbus_message_unref(reply);
+    }
+    if(c) {
+        dbus_connection_close(c);
+        dbus_connection_unref(c);
+    }
+    dbus_message_unref(job->call);
+    free(job);
+    return NULL;
+}
+
+void gp_platform_file_dialog(gp_window* w, gp_dialog* d)
+{
+    static unsigned serial;
+    wl_win* v = w ? win_of(w) : NULL;
+    char parent[300] = "", token[32];
+    if(v && v->export_handle) {
+        snprintf(parent, sizeof parent, "wayland:%s", v->export_handle);
+    }
+    const char* pp = parent;
+    const char* title = d->save ? "Save File" : d->many ? "Open Files"
+                                                        : "Open File";
+    DBusMessage* call = dbus_message_new_method_call("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser", d->save ? "SaveFile" : "OpenFile");
+    DBusMessageIter args, dict;
+    dbus_message_iter_init_append(call, &args);
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &pp);
+    dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &title);
+    dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "{sv}", &dict);
+    snprintf(token, sizeof token, "gpuic%u", ++serial);
+    opt_string(&dict, "handle_token", token);
+    opt_bool(&dict, "modal", parent[0] != 0);
+    if(d->many) {
+        opt_bool(&dict, "multiple", true);
+    }
+    if(d->nfilters) {
+        opt_filters(&dict, d->filters, d->nfilters);
+    }
+    struct stat st;
+    if(d->start && d->save && !(stat(d->start, &st) == 0 && S_ISDIR(st.st_mode))) { /* a folder and a name, or just a name */
+        char* slash = strrchr(d->start, '/');
+        if(slash) {
+            char folder[4096];
+            snprintf(folder, sizeof folder, "%.*s", slash == d->start ? 1 : (int)(slash - d->start), d->start);
+            opt_path(&dict, "current_folder", folder);
+        }
+        if((slash ? slash + 1 : d->start)[0]) {
+            opt_string(&dict, "current_name", slash ? slash + 1 : d->start);
+        }
+    } else if(d->start) {
+        opt_path(&dict, "current_folder", d->start);
+    }
+    dbus_message_iter_close_container(&args, &dict);
+
+    portal_job* job = malloc(sizeof *job);
+    *job = (portal_job){ d, call };
+    pthread_t t;
+    if(pthread_create(&t, NULL, portal_thread, job) != 0) {
+        dbus_message_unref(call);
+        free(job);
+        gp_dialog_answer(d, NULL, 0, "no file dialog: could not start a thread");
+        return;
+    }
+    pthread_detach(t);
 }
 
 void gp_platform_make_current(gp_window* w)

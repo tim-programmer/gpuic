@@ -877,6 +877,37 @@ gp_task f = gp_watch_path(cx, "/home/me/settings.json", 0, reload, NULL);       
   system lets one observe (a defensive wait for a rename's second half, a separator for the root `/`, two guards repeated elsewhere).
   Under Wine, a recursive watch sees only one level down (Wine's emulation); Windows itself sees the whole tree.
 
+### File dialogs
+
+The desktop's own open and save dialogs: SDL's on the SDL platform (the xdg-desktop-portal, else zenity, on Linux; the system's
+elsewhere), and the portal's FileChooser over D-Bus on the native Wayland platform (which links `dbus-1` for it).
+
+```c
+static const gp_file_filter kinds[] = { { "Effects", "json" }, { "Meshes", "obj;fbx;gltf;glb" } };
+static void opened(void *self, gp_ctx *cx, const char *const *paths, int count, const char *error, void *data) {
+    if (error) show_error(error);             /* no dialog could be shown: no portal, no zenity, ... */
+    else if (count) load(self, paths[0]);     /* count 0, error NULL: cancelled */
+}
+gp_open_file_dialog(cx, kinds, 2, "/home/me/effects", false, opened, NULL);     /* true: several files */
+gp_save_file_dialog(cx, kinds, 1, "/home/me/effects/untitled.json", saved, NULL); /* a folder, and a suggested name */
+```
+
+* **Main thread, owned like any task:** `done` runs on the main thread whichever thread the platform answers on; `gp_cancel`, or the
+  entity's release, drops the answer (the dialog stays up until the user closes it).
+* **Parent:** the dialog belongs to the window of `cx` (else the app's first window) and stays above it; on Wayland through an
+  xdg-foreign handle.
+* **Save:** the name comes back as typed: gpuic does not add the selected filter's extension (some dialogs, KDE's, do), so check it.
+* **Tests:** `gp_simulate_file_dialog(app, path)` answers the next dialog with `path` (NULL: cancelled) without showing it.
+* C++: `cx.open_file_dialog({{"Effects", "json"}}, start, many, f)` and `cx.save_file_dialog(filters, start, f)`, with
+  `f(Self&, Ctx, const FileChoice&)` (`paths`, `count`, `error`).
+* **Where to start:** `gp_user_folder(app, GP_FOLDER_DOCUMENTS)` (and HOME, DESKTOP, DOWNLOADS, MUSIC, PICTURES, PUBLICSHARE, SAVEDGAMES,
+  SCREENSHOTS, TEMPLATES, VIDEOS) and `gp_app_data_folder(app, "ppedit")` (made if missing). On Linux gpuic reads `XDG_<NAME>_DIR` from
+  `user-dirs.dirs` itself, falling back to `$HOME/Documents` and the like, and the data folder is `$XDG_DATA_HOME/<name>`
+  (`~/.local/share/<name>`); elsewhere SDL answers (`SDL_GetUserFolder`, `SDL_GetPrefPath`). NULL where there is none; no trailing
+  separator; the strings live as long as the app.
+* `tests/dialog_test.c`: a path and a cancel through the hook, on a later turn and the main thread; cancelled and released (not called,
+  closure dropped); a completion from another thread wakes the loop; the platform's own failure (no driver / no session bus) is an error; the user's folders under a made-up `$HOME`.
+
 ### Watching file descriptors
 
 On Linux, pipes, sockets, eventfds, inotify, a child process's stdout: anything `poll(2)` understands wakes the

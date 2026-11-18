@@ -778,6 +778,56 @@ typedef struct
 typedef void (*gp_path_fn)(void* self, gp_ctx* cx, const gp_path_event* ev, void* data);
 gp_task gp_watch_path(gp_ctx* cx, const char* path, int flags, gp_path_fn fn, void* data);
 
+/* ---- file dialogs ----------------------------------------------------------------------- */
+
+/* The desktop's own open and save dialogs: SDL's (the xdg-desktop-portal, else zenity, on Linux; the system's elsewhere), or, on the
+ * native Wayland platform, the portal's FileChooser over D-Bus.
+ *
+ *   static const gp_file_filter kinds[] = { { "Effects", "json" }, { "Meshes", "obj;fbx;gltf;glb" } };
+ *   gp_open_file_dialog(cx, kinds, 2, "/home/me/effects", false, opened, NULL);
+ *   static void opened(void *self, gp_ctx *cx, const char *const *paths, int count, const char *error, void *data) { ... }
+ *
+ * `done` runs once, on the main thread, like every callback here: `paths` are what was chosen (valid during the call), `count` 0 and `error`
+ * NULL if the user cancelled, `error` a message if no dialog could be shown (no portal, no zenity, ...). It is not called if the task is
+ * cancelled or its entity released first (the dialog itself stays up until the user closes it; its answer is dropped). The dialog belongs
+ * to the window of `cx` (or the app's first window, for a ctx without one) and stays above it.
+ *
+ * `extensions` are separated by ';', without dots; "*" matches everything. `start` (may be NULL) is an absolute path: for open, the folder to
+ * start in; for save, a folder, or a folder and a suggested name ("/home/me/effects/untitled.json"; the folder must exist). A save dialog
+ * returns the name as the user typed it: gpuic does not add the selected filter's extension (some dialogs do, KDE's among them), so check
+ * the extension yourself. A save dialog asks before replacing an existing file; an open dialog only returns files that exist. */
+typedef struct
+{
+    const char* name;       /* "Meshes" */
+    const char* extensions; /* "obj;fbx;gltf;glb" */
+} gp_file_filter;
+typedef void (*gp_file_dialog_fn)(void* self, gp_ctx* cx, const char* const* paths, int count, const char* error, void* data);
+gp_task gp_open_file_dialog(gp_ctx* cx, const gp_file_filter* filters, int nfilters, const char* start, bool many, gp_file_dialog_fn done, void* data);
+gp_task gp_save_file_dialog(gp_ctx* cx, const gp_file_filter* filters, int nfilters, const char* start, gp_file_dialog_fn done, void* data);
+/* The user's folders, for a dialog's `start` or an app's files. Linux (and other XDG systems): XDG_<NAME>_DIR from user-dirs.dirs, else
+ * $HOME/Documents and the like (the folder may not exist); elsewhere the system's. NULL where the platform has none (saved games and
+ * screenshots on Linux). The string has no trailing separator and lives as long as the app. */
+typedef enum {
+    GP_FOLDER_HOME,
+    GP_FOLDER_DESKTOP,
+    GP_FOLDER_DOCUMENTS,
+    GP_FOLDER_DOWNLOADS,
+    GP_FOLDER_MUSIC,
+    GP_FOLDER_PICTURES,
+    GP_FOLDER_PUBLICSHARE,
+    GP_FOLDER_SAVEDGAMES,
+    GP_FOLDER_SCREENSHOTS,
+    GP_FOLDER_TEMPLATES,
+    GP_FOLDER_VIDEOS,
+    GP_FOLDER_COUNT,
+} gp_folder;
+const char* gp_user_folder(gp_app* app, gp_folder which);
+/* Where an app keeps its settings and data, made if missing: $XDG_DATA_HOME/<app_name> (~/.local/share/<app_name>) on Linux, as
+ * SDL_GetPrefPath elsewhere (%APPDATA%\<app_name> on Windows). NULL if it cannot be made. Lives as long as the app. */
+const char* gp_app_data_folder(gp_app* app, const char* app_name);
+/* Tests: the next dialog opened is answered with `path` (NULL: cancelled) instead of being shown, as if the user had chosen it. */
+void gp_simulate_file_dialog(gp_app* app, const char* path);
+
 /* ---- coroutines: async/await for C ------------------------------------------------------ */
 
 /* A coroutine is sequential code that may suspend at await points while the event loop keeps

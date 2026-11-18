@@ -4,7 +4,8 @@
 #                        AUTO   use what is installed, download the rest
 #                        SYSTEM never download; fail if something is missing
 #   GPUIC_PLATFORM     = sdl      windows and input through SDL3 (default)
-#                        wayland  native Wayland, no SDL: needs wayland-client, wayland-egl, EGL and xkbcommon (pkg-config)
+#                        wayland  native Wayland, no SDL: needs wayland-client, wayland-egl, EGL, xkbcommon and dbus-1 (pkg-config;
+#                                 D-Bus is how file dialogs reach the desktop portal)
 #   GPUIC_FONTCONFIG   = AUTO   use fontconfig when found, else scan font directories
 #                        ON     require fontconfig
 #                        OFF    scan font directories
@@ -176,7 +177,7 @@ _gpuic_want_system(_system_ok)
 if(GPUIC_PLATFORM STREQUAL "wayland")
   # (system libraries only: they are the desktop's own)
   add_library(gpuic_wayland_system INTERFACE)
-  foreach(_m wayland-client wayland-egl egl xkbcommon)
+  foreach(_m wayland-client wayland-egl egl xkbcommon dbus-1)
     _gpuic_pkgconfig(_pc ${_m})
     if(NOT _pc)
       message(FATAL_ERROR "gpuic: GPUIC_PLATFORM=wayland needs ${_m} (pkg-config)")

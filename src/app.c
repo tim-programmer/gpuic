@@ -1134,6 +1134,7 @@ static void app_free(gp_app* app)
             app->stat_paint_hits,
             app->stat_paint_misses);
     }
+    gp_dialogs_shutdown(app);                     /* (dialogs still open answer to no one) */
     gp_exec_shutdown(app);                        /* cancel tasks, unwind coroutines, join the pool: entities still alive */
     renderer_release(app, app->nwindows ? app->windows[0] : NULL);
     for(int i = app->nwindows - 1; i >= 0; i--) { /* the newest first: a window inside another goes before it (X11 would take it along) */
@@ -1159,6 +1160,7 @@ static void app_free(gp_app* app)
     free(app->primary_local);
     gp_text_system_free(app->text);
     gp_gfx_free(app->gfx);
+    gp_folders_free(app);
     gp_platform_shutdown(app);
     gp_arena_holds_free();
     free(app);

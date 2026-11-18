@@ -1128,6 +1128,10 @@ bool gp_win_is_socket(int fd);  /* a SOCKET passed as an int (starts Winsock) */
 void* gp_win_fd_handle(int fd); /* a CRT descriptor's HANDLE, or INVALID_HANDLE_VALUE (not the CRT's fatal error) */
 #endif
 uint64_t gp_exec_wake_background(gp_app* app, uint64_t co_job, gp_work_fn work, void* data);
+/* A background task whose work is done elsewhere (a dialog, by the platform): `done` and `free_data` as gp_background's, once
+ * gp_exec_complete(id) is called, from any thread. */
+uint64_t gp_exec_pending(gp_ctx* cx, gp_task_fn done, void* data, gp_drop_fn free_data);
+void gp_exec_complete(gp_app* app, uint64_t id);
 void gp_exec_cancel_id(gp_app* app, uint64_t id);
 
 /* ---------------------------------------------------------------- app / window */
@@ -1424,6 +1428,10 @@ struct gp_app
     /* test hooks, driven by GPUIC_* env vars */
     const char* shot_path;
     bool debug_ignore_platform_ime; /* tests: the display server's own composition updates (empty ones, on a timer) are dropped, so a simulated composition stays */
+    bool sim_dialog;                /* gp_simulate_file_dialog: the next dialog is answered with sim_dialog_path (NULL: cancelled) */
+    char* sim_dialog_path;
+    char** folders;                 /* folders.c: the strings gp_user_folder / gp_app_data_folder gave out */
+    size_t nfolders;
     /* Test hook: gp_debug_capture_next makes the next window_draw read its frame back (before it is swapped away). */
     gp_gfx* gfx;                    /* gradients and images (gfx.c) */
     struct gp_custom_slot* customs; /* gp_custom_new */
@@ -1531,5 +1539,35 @@ void* gp_platform_native(gp_window* w);                         /* an X11 Window
 void gp_platform_set_size(gp_window* w, int width, int height); /* logical pixels */
 void gp_platform_set_title(gp_window* w, const char* title);
 const char* gp_platform_title(gp_window* w);                    /* (tests: the title the window has now) */
+/* File dialogs (dialog.c). The platform shows `d` above `w` (may be NULL) and calls gp_dialog_answer exactly once, from any thread, even
+ * before gp_platform_file_dialog returns; d's request fields stay valid until then. */
+typedef struct gp_dialog gp_dialog;
+struct gp_dialog
+{
+    gp_app* app; /* NULL once the app is gone (the answer then just frees it); guarded by dialog.c's lock */
+    gp_dialog* next;
+    uint64_t job;
+    gp_file_dialog_fn fn;
+    void* data;
+    bool save, many; /* the request */
+    char* start;
+    gp_file_filter* filters;
+    int nfilters;
+    void* platform_data; /* the platform's, free()d with the dialog */
+    char** paths;        /* the answer */
+    int count;
+    char* error;
+};
+void gp_platform_file_dialog(gp_window* w, gp_dialog* d);
+void gp_dialog_answer(gp_dialog* d, const char* const* paths, int count, const char* error);
+/* The user's folders (folders.c): gpuic's own lookup on XDG systems, the platform's (SDL's) elsewhere; malloc()ed, NULL for none. */
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+# define GP_XDG_FOLDERS 1
+#else
+char* gp_platform_user_folder(int which);
+char* gp_platform_data_folder(const char* app_name);
+#endif
+void gp_folders_free(gp_app* app);
+void gp_dialogs_shutdown(gp_app* app); /* before the executor goes: dialogs still open are left to free themselves */
 
 #endif

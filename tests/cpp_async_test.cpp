@@ -482,6 +482,23 @@ static void test_loaders(Co& co, Ctx cx)
     }
     std::remove(path.c_str());
 
+    { // file dialogs, answered by the test hook
+        Tok tok = make_tok();
+        std::string chosen;
+        gp_simulate_file_dialog(app, "/tmp/a.json");
+        cx.open_file_dialog({
+                                { "Effects", "json" }
+        },
+            nullptr,
+            false,
+            [tok, &chosen](const FileChoice& c) { chosen = c.count == 1 ? c.paths[0] : "?"; });
+        int count = -1;
+        gp_simulate_file_dialog(app, nullptr);
+        cx.save_file_dialog({}, "/tmp/untitled.json", [&count](const FileChoice& c) { count = c.count + (c.error ? 10 : 0); });
+        co.sleep(0.1);
+        CHECK(chosen == "/tmp/a.json" && count == 0 && tok.use_count() == 1, "open/save_file_dialog: a path, a cancel, closure destroyed (%s %d %ld)", chosen.c_str(), count, tok.use_count());
+    }
+
     const char* svg = "<svg width='10' height='10'><rect width='10' height='10' fill='red'/></svg>";
     gp_svg s = app.load_svg(std::string_view(svg));
     float sw = 0, sh = 0;

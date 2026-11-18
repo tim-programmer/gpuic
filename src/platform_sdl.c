@@ -383,6 +383,49 @@ const char* gp_platform_title(gp_window* w)
     return SDL_GetWindowTitle(sdl_win(w));
 }
 
+#ifndef GP_XDG_FOLDERS
+char* gp_platform_user_folder(int which)
+{
+    static const SDL_Folder map[GP_FOLDER_COUNT] = { SDL_FOLDER_HOME, SDL_FOLDER_DESKTOP, SDL_FOLDER_DOCUMENTS, SDL_FOLDER_DOWNLOADS, SDL_FOLDER_MUSIC, SDL_FOLDER_PICTURES, SDL_FOLDER_PUBLICSHARE, SDL_FOLDER_SAVEDGAMES, SDL_FOLDER_SCREENSHOTS, SDL_FOLDER_TEMPLATES, SDL_FOLDER_VIDEOS };
+    const char* dir = SDL_GetUserFolder(map[which]);
+    return dir ? strdup(dir) : NULL;
+}
+
+char* gp_platform_data_folder(const char* app_name)
+{
+    char* dir = SDL_GetPrefPath(NULL, app_name); /* (made if missing) */
+    char* copy = dir ? strdup(dir) : NULL;
+    SDL_free(dir);
+    return copy;
+}
+#endif
+
+/* SDL may answer on another thread (zenity), or during a later SDL_PumpEvents (the portal). */
+static void dialog_answered(void* user, const char* const* list, int filter)
+{
+    (void)filter;
+    int n = 0;
+    while(list && list[n]) {
+        n++;
+    }
+    gp_dialog_answer(user, list, n, list ? NULL : SDL_GetError());
+}
+
+void gp_platform_file_dialog(gp_window* w, gp_dialog* d)
+{
+    SDL_DialogFileFilter* f = d->nfilters ? calloc((size_t)d->nfilters, sizeof *f) : NULL; /* (SDL reads them until it answers) */
+    for(int i = 0; i < d->nfilters; i++) {
+        f[i] = (SDL_DialogFileFilter){ d->filters[i].name, d->filters[i].extensions };
+    }
+    d->platform_data = f;
+    SDL_Window* win = w ? sdl_win(w) : NULL;
+    if(d->save) {
+        SDL_ShowSaveFileDialog(dialog_answered, d, win, f, d->nfilters, d->start);
+    } else {
+        SDL_ShowOpenFileDialog(dialog_answered, d, win, f, d->nfilters, d->start, d->many);
+    }
+}
+
 void gp_platform_make_current(gp_window* w)
 {
     if(plat(w->app)->gl) {

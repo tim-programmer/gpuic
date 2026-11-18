@@ -501,6 +501,14 @@ struct FdEvent
     int events;
 };
 
+/** What a file dialog answered: the paths chosen (valid during the callback), none if cancelled, `error` set if no dialog could be shown. */
+struct FileChoice
+{
+    const char* const* paths;
+    int count;
+    const char* error;
+};
+
 /** What a coroutine started with Ctx::spawn awaits with. Every await returns false once the coroutine is cancelled (its entity or
  *  window went away, or Task::cancel): clean up and return then, and do not touch the entity's state. */
 class Co
@@ -789,6 +797,11 @@ public:
     /** Decodes on a pool thread; `f(Self&, Ctx, gp_image)` gets GP_IMAGE_NULL if it failed. */
     template <class F>
     Task load_image(const char* path, F&& f) const;
+    /** The desktop's file dialogs (see gp_open_file_dialog); `f(Self&, Ctx, const FileChoice&)` on the main thread. */
+    template <class F>
+    Task open_file_dialog(std::initializer_list<gp_file_filter> filters, const char* start, bool many, F&& f) const;
+    template <class F>
+    Task save_file_dialog(std::initializer_list<gp_file_filter> filters, const char* start, F&& f) const;
 
     // Observation. `f(Self&, Ctx, gp_entity observed)`.
     template <class F>
@@ -2218,6 +2231,13 @@ void image_tramp(void* self, gp_ctx* cx, gp_image image, void* data)
     call(*static_cast<D*>(data), self, ctx, cx, image);
 }
 template <class D>
+void dialog_tramp(void* self, gp_ctx* cx, const char* const* paths, int count, const char* error, void* data)
+{
+    Ctx ctx(cx);
+    FileChoice choice{ paths, count, error };
+    call(*static_cast<D*>(data), self, ctx, cx, choice);
+}
+template <class D>
 void co_tramp(gp_co* co, void* self, gp_ctx* cx, void* data)
 {
     Co c(co);
@@ -2408,6 +2428,24 @@ Task Ctx::load_image(const char* path, F&& f) const
     using D = std::decay_t<F>;
     D* d = detail::own<D>(std::forward<F>(f));
     Task t(c_->app, gp_image_load_file_async(c_, path, &detail::image_tramp<D>, d));
+    gp_task_on_drop(c_->app, t.raw(), &detail::drop_box<D>, d);
+    return t;
+}
+template <class F>
+Task Ctx::open_file_dialog(std::initializer_list<gp_file_filter> filters, const char* start, bool many, F&& f) const
+{
+    using D = std::decay_t<F>;
+    D* d = detail::own<D>(std::forward<F>(f));
+    Task t(c_->app, gp_open_file_dialog(c_, filters.begin(), (int)filters.size(), start, many, &detail::dialog_tramp<D>, d));
+    gp_task_on_drop(c_->app, t.raw(), &detail::drop_box<D>, d);
+    return t;
+}
+template <class F>
+Task Ctx::save_file_dialog(std::initializer_list<gp_file_filter> filters, const char* start, F&& f) const
+{
+    using D = std::decay_t<F>;
+    D* d = detail::own<D>(std::forward<F>(f));
+    Task t(c_->app, gp_save_file_dialog(c_, filters.begin(), (int)filters.size(), start, &detail::dialog_tramp<D>, d));
     gp_task_on_drop(c_->app, t.raw(), &detail::drop_box<D>, d);
     return t;
 }
