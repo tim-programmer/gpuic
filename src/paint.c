@@ -1308,6 +1308,33 @@ static void paint_image(paint_ctx* pc, gp_el* n, float x, float y, rect clip, fl
     push(pc, &inst);
 }
 
+/* a custom's content box: an image instance the renderer gives the custom's texture (see gp_inst_custom) */
+static void paint_custom(paint_ctx* pc, gp_el* n, float x, float y, rect clip, float opacity)
+{
+    const gp_style* s = &n->style;
+    float bw = s->border_w;
+    float cx = x + s->pad[0] + bw, cy = y + s->pad[1] + bw;
+    float cw = n->size.w - (s->pad[0] + s->pad[2] + 2 * bw), ch = n->size.h - (s->pad[1] + s->pad[3] + 2 * bw);
+    if(cw <= 0 || ch <= 0) {
+        return;
+    }
+    gp_instance inst = { 0 };
+    set4(inst.bounds, cx, cy, cw, ch);
+    set_clip(&inst, clip);
+    set4(inst.color, 1, 1, 1, opacity);
+    float r4[4], b4[4], half = fminf(cw, ch) / 2;
+    corner_radii(s, n->size.w, n->size.h, r4);
+    border_widths(s, b4);
+    set4(inst.radii, fminf(fmaxf(r4[0] - (b4[0] + b4[1]) * 0.5f, 0.f), half), fminf(fmaxf(r4[1] - (b4[2] + b4[1]) * 0.5f, 0.f), half), fminf(fmaxf(r4[2] - (b4[2] + b4[3]) * 0.5f, 0.f), half), fminf(fmaxf(r4[3] - (b4[0] + b4[3]) * 0.5f, 0.f), half));
+    bool flip = pc->app && pc->app->renderer && pc->app->renderer->flip_y;
+    set4(inst.uv, 0, flip ? 1.f : 0.f, 1, flip ? -1.f : 1.f);
+    inst.kind = GP_PRIM_IMAGE;
+    inst._pad = (float)n->custom.index;
+    inst.side[2][2] = (float)n->custom.generation;
+    inst.side[2][3] = 1.f;
+    push(pc, &inst);
+}
+
 static void paint_scrollbars(paint_ctx* pc, gp_el* n, float x, float y, rect clip, float opacity)
 {
     gp_color base = n->style.has_scrollbar_color ? n->style.scrollbar_color
@@ -1641,7 +1668,7 @@ static bool wants_group(const gp_el* n, const gp_style* s)
     }
     bool box = (s->has_bg && s->bg.a > 0.f) || s->bg_gradient || s->border_w > 0.f || s->has_border_sides || s->has_hover_bg || s->has_active_bg || s->has_focus_bg;
     bool shadow = s->has_shadow && s->shadow.color.a > 0.f;
-    bool content = n->kind == GP_EL_TEXT || n->kind == GP_EL_IMAGE || n->kind == GP_EL_SVG;
+    bool content = n->kind == GP_EL_TEXT || n->kind == GP_EL_IMAGE || n->kind == GP_EL_SVG || n->custom.generation;
     bool scrolls = s->overflow_x_scroll || s->overflow_y_scroll;
     return (shadow && (box || content)) || (box && (content || scrolls));
 }
@@ -1923,6 +1950,9 @@ static void paint_node_body(paint_ctx* pc, gp_el* n, float ox, float oy, rect cl
     if(n->kind == GP_EL_IMAGE || n->kind == GP_EL_SVG) {
         paint_image(pc, n, x, y, clip, opacity);
         goto done;
+    }
+    if(n->custom.generation) {
+        paint_custom(pc, n, x, y, clip, opacity);
     }
 
     bool scrolls = s->overflow_x_scroll || s->overflow_y_scroll;

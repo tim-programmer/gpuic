@@ -657,6 +657,7 @@ gp_renderer* gp_vk_renderer_new(gp_app* app, gp_window* first)
         vk_free(&r->base, NULL);
         return NULL;
     }
+    r->base.gpu = (gp_gpu){ .backend = GP_GPU_VULKAN, .vk_get_instance_proc_addr = (void (*(*)(void*, const char*))(void))(void (*)(void))r->fn.vkGetInstanceProcAddr, .vk_instance = r->instance, .vk_physical_device = r->gpu, .vk_device = r->device, .vk_queue = r->queue, .vk_queue_family = r->family };
     return &r->base;
 }
 
@@ -821,6 +822,7 @@ static void vk_free(gp_renderer* base, gp_gfx* gfx)
     vk_renderer* r = (vk_renderer*)base;
     if(r->device) {
         r->fn.vkDeviceWaitIdle(r->device);
+        gp_custom_teardown(base->app, base);
         while(r->windows) {
             vk_window* vw = r->windows;
             r->windows = vw->next;
@@ -1103,7 +1105,8 @@ static void vk_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
     vk_window* vw = window_state(r, w);
     wait_frame(r);
     vw->pending = -1;
-    { /* textures of images that were released (nothing draws with them now: the last frame is done) */
+    gp_custom_begin(w->app, base); /* (released ones are destroyed: the last frame is done) */
+    {                              /* textures of images that were released (nothing draws with them now: the last frame is done) */
         gp_gfx* g = gp_text_gfx(ts);
         uint32_t dead[32];
         size_t n;
@@ -1162,6 +1165,11 @@ static void vk_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
     r->staged = 0;
     image_ready(r, &vw->main);
     uploads(r, ts, scene);
+    for(size_t i = 0; i < scene->len; i++) { /* custom drawing, recorded by the app outside rendering, before the walk reads it */
+        if(gp_inst_custom(&scene->items[i])) {
+            gp_custom_texture(w->app, base, &scene->items[i], w->scale, r->cmd);
+        }
+    }
     VkClearColorValue cc = {
         { clear.r, clear.g, clear.b, clear.a }
     };
@@ -1286,6 +1294,15 @@ static void vk_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
             unbind(r);
             cur = -1;
             mask = NULL;
+        } else if(gp_inst_custom(in)) { /* the view the app drew (above) */
+            uint64_t view = gp_custom_texture(w->app, base, in, scale, r->cmd);
+            if(!view) {
+                continue;
+            }
+            r->bind_view[B_IMAGE] = (VkImageView)view;
+            r->bind_sampler[B_IMAGE] = r->linear;
+            draw_run(r, i, 1, r->blended);
+            unbind(r);
         } else {          /* an image: its texture */
             gp_gfx_image* im = gp_gfx_image_get(gfx, (uint32_t)in->_pad, (uint32_t)in->border_color[0]);
             if(!im || !im->tex) {

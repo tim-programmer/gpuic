@@ -303,6 +303,7 @@ struct gp_el
     const char* text;
     gp_image image;      /* GP_EL_IMAGE */
     gp_svg svg;          /* GP_EL_SVG */
+    gp_custom custom;    /* a div whose content box the app draws (gp_custom_el) */
     gp_point* curve_pts; /* GP_EL_CURVE: the points, relative to the element's box (4 for a Bezier, any number for a polyline) */
     uint32_t curve_n;
     uint8_t curve_kind;  /* 0 a cubic Bezier, 1 a polyline */
@@ -931,10 +932,24 @@ typedef struct
 struct gp_renderer
 {
     const gp_renderer_ops* ops;
+    gp_app* app; /* (set by app.c once made) */
+    gp_gpu gpu;  /* what custom drawing is handed */
+    bool flip_y; /* a custom texture's rows go up (GL) */
 };
+
+/* Custom GPU drawing (app.c). An instance of one is an image's (kind GP_PRIM_IMAGE, no image: border_color[0] 0) marked by side[2][3] = 1, with
+ * the custom's slot in _pad and its generation in side[2][2]. A renderer calls gp_custom_begin once a draw has started (GL: current; Vulkan: the
+ * last frame done, the command buffer recording), and gp_custom_texture for each such instance; gp_custom_teardown before it is freed. */
+static inline bool gp_inst_custom(const gp_instance* in)
+{
+    return (int)in->kind == GP_PRIM_IMAGE && in->side[2][3] == 1.f;
+}
+void gp_custom_begin(gp_app* app, gp_renderer* r);
+uint64_t gp_custom_texture(gp_app* app, gp_renderer* r, const gp_instance* in, float scale, void* vk_cmd); /* 0: nothing to show */
+void gp_custom_teardown(gp_app* app, gp_renderer* r);
 gp_renderer* gp_gl_renderer_new(void* (*get_proc)(const char*));
-gp_renderer* gp_vk_renderer_new(gp_app* app, gp_window* first); /* NULL (with a message) where Vulkan cannot draw */
-void gp_debug_capture_next(gp_app* app);                        /* tests: app->capture_px holds the next frame drawn */
+gp_renderer* gp_vk_renderer_new(gp_app* app, gp_window* first);                                            /* NULL (with a message) where Vulkan cannot draw */
+void gp_debug_capture_next(gp_app* app);                                                                   /* tests: app->capture_px holds the next frame drawn */
 
 /* ---------------------------------------------------------------- scrolling */
 
@@ -1410,11 +1425,13 @@ struct gp_app
     const char* shot_path;
     bool debug_ignore_platform_ime; /* tests: the display server's own composition updates (empty ones, on a timer) are dropped, so a simulated composition stays */
     /* Test hook: gp_debug_capture_next makes the next window_draw read its frame back (before it is swapped away). */
-    gp_gfx* gfx;         /* gradients and images (gfx.c) */
+    gp_gfx* gfx;                    /* gradients and images (gfx.c) */
+    struct gp_custom_slot* customs; /* gp_custom_new */
+    uint32_t ncustoms, cap_customs, custom_serial;
     bool capture_next;
-    uint8_t* capture_px; /* RGB, top row first; replaced by each capture */
+    uint8_t* capture_px;            /* RGB, top row first; replaced by each capture */
     int capture_w, capture_h;
-    bool on_hover_seen;  /* a gp_on_hover was built (in a list's rows, which the root's flags do not show): look for the pointer in the tree after each change */
+    bool on_hover_seen;             /* a gp_on_hover was built (in a list's rows, which the root's flags do not show): look for the pointer in the tree after each change */
     bool has_click, has_hover;
     gp_point click_at, hover_at;
     int64_t start_ns;

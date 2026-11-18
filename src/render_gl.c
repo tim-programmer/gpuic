@@ -21,6 +21,7 @@
     X(glBlendFunc)               \
     X(glClear)                   \
     X(glClearColor)              \
+    X(glColorMask)               \
     X(glDeleteTextures)          \
     X(glEnable)                  \
     X(glGenTextures)             \
@@ -137,6 +138,8 @@ gp_renderer* gp_gl_renderer_new(void* (*get_proc)(const char*))
 
     gl_renderer* r = calloc(1, sizeof *r);
     r->base.ops = &gl_ops;
+    r->base.gpu = (gp_gpu){ .backend = GP_GPU_GL, .gl_get_proc_address = get_proc };
+    r->base.flip_y = true;                                            /* (an FBO's rows go up) */
     const char* renderer = (const char*)gl.glGetString(GL_RENDERER);
     r->finish_before_copy = renderer && strstr(renderer, "llvmpipe"); /* (see backdrop_copy) */
     GLuint vs = compile(GL_VERTEX_SHADER, vs_src), fs = compile(GL_FRAGMENT_SHADER, fs_src);
@@ -223,6 +226,7 @@ gp_renderer* gp_gl_renderer_new(void* (*get_proc)(const char*))
 static void gl_free(gp_renderer* base, gp_gfx* gfx)
 {
     gl_renderer* r = (gl_renderer*)base;
+    gp_custom_teardown(base->app, base);
     { /* the images' textures go with the context; they are made again if a new renderer draws them */
         uint32_t tex[64];
         size_t n;
@@ -356,6 +360,32 @@ static void gl_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
     int px_w = w->px_w, px_h = w->px_h;
     float scale = w->scale;
     gp_platform_make_current(w);
+    gp_custom_begin(w->app, base);
+    bool customs = false;
+    for(size_t i = 0; i < scene->len; i++) { /* custom drawing first, into the app's own targets: then what it may change is set back */
+        if(gp_inst_custom(&scene->items[i])) {
+            if(!customs) {
+                gl.glBindVertexArray(0);     /* (so that attributes set without an array of its own do not land in ours) */
+                customs = true;
+            }
+            gp_custom_texture(w->app, base, &scene->items[i], scale, NULL);
+        }
+    }
+    if(customs) {
+        gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        gl.glDisable(GL_DEPTH_TEST);
+        gl.glDisable(GL_STENCIL_TEST);
+        gl.glDisable(GL_CULL_FACE);
+        gl.glDisable(GL_SCISSOR_TEST);
+        gl.glDisable(GL_PROGRAM_POINT_SIZE);
+        gl.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        for(GLenum u = GL_TEXTURE4; u <= GL_TEXTURE7; u++) {
+            gl.glActiveTexture(u);
+            gl.glBindTexture(GL_TEXTURE_2D, 0);
+        }
+    }
     gl.glViewport(0, 0, px_w, px_h);
     gl.glClearColor(clear.r, clear.g, clear.b, clear.a);
     gl.glClear(GL_COLOR_BUFFER_BIT);
@@ -643,6 +673,23 @@ static void gl_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
             continue;
         }
         if(kind != GP_PRIM_IMAGE) {
+            continue;
+        }
+        if(gp_inst_custom(in)) { /* the texture the app drew (above) */
+            if(i > run) {
+                draw_run(r, scene, run, i - run);
+            }
+            run = i + 1;
+            GLuint tex = (GLuint)gp_custom_texture(w->app, base, in, scale, NULL);
+            if(!tex) {
+                continue;
+            }
+            gl.glActiveTexture(GL_TEXTURE4);
+            gl.glBindTexture(GL_TEXTURE_2D, tex);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            gl.glActiveTexture(GL_TEXTURE0);
+            draw_run(r, scene, i, 1);
             continue;
         }
         gp_gfx_image* im = gp_gfx_image_get(gfx, (uint32_t)in->_pad, (uint32_t)in->border_color[0]);

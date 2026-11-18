@@ -2353,6 +2353,17 @@ gp_node* gp_img_(gp_image image, int unused, ...)
     return &el->base;
 }
 
+gp_node* gp_custom_el_(uint32_t index, uint32_t generation, ...)
+{
+    gp_el* el = gp_el_new(g_bc->arena, GP_EL_DIV);
+    el->custom = (gp_custom){ index, generation };
+    va_list ap;
+    va_start(ap, generation);
+    collect(el, ap, true); /* (children are drawn over the content) */
+    va_end(ap);
+    return &el->base;
+}
+
 gp_node* gp_svg_img_(gp_svg svg, int unused, ...)
 {
     gp_el* el = gp_el_new(g_bc->arena, GP_EL_SVG);

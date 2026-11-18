@@ -978,6 +978,9 @@ gp_node* gp_fill_nonzero(void);
 gp_node* gp_path_text(const char* text);
 gp_node* gp_path_text_dy(float px);
 gp_node* gp_svg_img_(gp_svg svg, int unused, ...);
+/* custom GPU drawing (gp_custom, below): a div whose content box the app draws */
+gp_node* gp_custom_el_(uint32_t index, uint32_t generation, ...);
+#define gp_custom_el(c, ...) gp_custom_el_((c).index, (c).generation __VA_OPT__(, ) __VA_ARGS__, GP_END)
 #define gp_div(...)          gp_div_(0 __VA_OPT__(, ) __VA_ARGS__, GP_END)
 #define gp_text(str, ...)    gp_text_((str)__VA_OPT__(, ) __VA_ARGS__, GP_END)
 #define gp_img(image, ...)   gp_img_((image), 0 __VA_OPT__(, ) __VA_ARGS__, GP_END)
@@ -1245,6 +1248,74 @@ gp_task gp_image_load_file_async(gp_ctx* cx, const char* path, gp_image_fn done,
 bool gp_image_size(gp_app* app, gp_image image, int* width, int* height); /* false for a released or null image */
 /* Frees the pixels and the texture. Elements that still show it draw nothing (and, laid out by it, are 0 x 0). */
 void gp_image_release(gp_app* app, gp_image image);
+
+/* ---- custom GPU drawing ----
+ * An element whose content the app draws on the GPU itself, with its own shaders, buffers and depth: a particle system, a 3D viewport, a plot.
+ * Each frame the element is shown, gpuic calls `draw` before its own pass. The app renders into a texture of its own, with its own targets,
+ * and returns it; gpuic then draws that texture in the element's content box, as it draws an image. So the content is clipped, rounded
+ * (gp_rounded), faded, transformed, put in layers and filtered exactly as a gp_img is. Painting order is kept, and children are drawn
+ * on top of it. Pointer and wheel handlers on the element work as they do on any div.
+ *
+ *   gp_custom c = gp_custom_new(app, &(gp_custom_fns){ .init = my_init, .destroy = my_destroy, .draw = my_draw }, &my_state);
+ *   ... gp_custom_el(c, gp_flex_1(), gp_rounded(8), gp_on_drag(orbit)) ...
+ *   gp_custom_invalidate(app, c);   // the content changed: one more frame (from a gp_next_frame to animate)
+ *
+ * The texture: premultiplied RGBA, shown stretched to the content box (make it f->px_width x f->px_height to be pixel for pixel). In GL it is a
+ * texture name whose rows go up, as an FBO renders them, so a usual projection shows upright. gpuic sets its min and mag filters to linear.
+ * In Vulkan it is a VkImageView, as (uint64_t)view, of an image left in VK_IMAGE_LAYOUT_GENERAL, whose rows go down. Return 0 to draw nothing.
+ *
+ * The backends:
+ *   GL       a 3.3 core context, current while the callbacks run. Load functions with gl_get_proc_address. `draw` may change the framebuffer
+ *            binding, viewport, scissor, depth, stencil and cull tests, GL_PROGRAM_POINT_SIZE, GL_BLEND and glBlendFunc, the color mask, the
+ *            program, the vertex array and array buffer, the 2D texture bindings and active unit, and the unpack alignment and row length: gpuic
+ *            sets them again. Restore anything else it changes (glBlendEquation, polygon mode, GL_FRAMEBUFFER_SRGB...).
+ *   Vulkan   a 1.3 device with dynamic rendering and only the features gpuic needs (no largePoints, wideLines, geometryShader...: draw quads,
+ *            not wide points). Load functions with vk_get_instance_proc_addr. `draw` records into f->vk_command_buffer, outside any rendering;
+ *            gpuic puts a full barrier after it. One frame is in flight, and the last one is done before `draw` is called: buffers the last
+ *            frame read may be written. Do not submit to the queue from `draw`.
+ *
+ * Lifetime: `init` runs before the first `draw` with a renderer; `destroy` when the custom is released (at the next frame drawn, or when
+ * the app ends) and when the renderer goes (the last window closes, the app ends). A later window has a new renderer, so `init` runs again.
+ * So everything made in `init` or `draw` is freed in `destroy`. `data` must live until `destroy` has run (or gp_custom_release, for a
+ * custom never drawn). Either of `init` and `destroy` may be NULL.
+ *
+ * `draw` is called once for each frame of each window that shows the element, whether or not it was invalidated (hover changes repaint):
+ * keep the last texture and return it when nothing changed. Shown twice in one frame, it is drawn once, at the first place's size.
+ * The texture is as big as the content box on the window, times the window's scale: under a gp_scale it is stretched, as an image is. */
+typedef enum {
+    GP_GPU_GL = 1,
+    GP_GPU_VULKAN,
+} gp_gpu_backend;
+typedef struct
+{
+    gp_gpu_backend backend;
+    void* (*gl_get_proc_address)(const char* name);                               /* GL */
+    void (*(*vk_get_instance_proc_addr)(void* instance, const char* name))(void); /* Vulkan: a PFN_vkGetInstanceProcAddr; the rest are VkInstance... */
+    void *vk_instance, *vk_physical_device, *vk_device, *vk_queue;
+    uint32_t vk_queue_family;
+} gp_gpu;
+typedef struct
+{
+    const gp_gpu* gpu;
+    float width, height;     /* the content box, logical px */
+    int px_width, px_height; /* ... in device pixels: the size to render at (at least 1) */
+    float scale;             /* device pixels per logical one */
+    void* vk_command_buffer; /* Vulkan: a VkCommandBuffer to record into */
+} gp_custom_frame;
+typedef struct
+{
+    void (*init)(void* data, const gp_gpu* gpu);
+    void (*destroy)(void* data, const gp_gpu* gpu);
+    uint64_t (*draw)(void* data, const gp_custom_frame* f); /* the texture to show (see above), or 0 */
+} gp_custom_fns;
+typedef struct
+{
+    uint32_t index, generation;
+} gp_custom;
+gp_custom gp_custom_new(gp_app* app, const gp_custom_fns* fns, void* data); /* fns is copied */
+void gp_custom_release(gp_app* app, gp_custom c);                           /* elements that still show it draw nothing in their content box */
+/* Draws the windows again with nothing built or laid out and no cache dropped (cached views stay cached): `draw` makes the new content. */
+void gp_custom_invalidate(gp_app* app, gp_custom c);
 #define gp_stop(color, at) GP_LIT(gp_color_stop, (color), (at))
 /* `angle_deg` as in CSS: 0 points up, 90 right, 180 down; the line is as long as the box needs to reach its corners. */
 gp_node* gp_bg_linear_gradient(float angle_deg, const gp_color_stop* stops, int n);

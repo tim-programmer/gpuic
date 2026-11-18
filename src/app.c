@@ -101,6 +101,122 @@ void gp_app_request_paint(gp_app* app)
     }
 }
 
+/* ---------------------------------------------------------------- custom GPU drawing */
+
+struct gp_custom_slot
+{
+    gp_custom_fns fns;
+    void* data;
+    uint32_t generation;
+    bool live;       /* not released */
+    bool inited;     /* `init` ran with the renderer there is now */
+    uint32_t serial; /* the draw `tex` was made for (app->custom_serial) */
+    uint64_t tex;
+};
+
+static struct gp_custom_slot* custom_slot(gp_app* app, uint32_t index, uint32_t generation)
+{
+    if(index >= app->ncustoms || !generation || app->customs[index].generation != generation || !app->customs[index].live) {
+        return NULL;
+    }
+    return &app->customs[index];
+}
+
+gp_custom gp_custom_new(gp_app* app, const gp_custom_fns* fns, void* data)
+{
+    if(!fns || !fns->draw) {
+        return (gp_custom){ 0, 0 };
+    }
+    uint32_t i = 0;
+    while(i < app->ncustoms && (app->customs[i].live || app->customs[i].inited)) {
+        i++;
+    }
+    if(i == app->ncustoms) {
+        if(app->ncustoms == app->cap_customs) {
+            app->cap_customs = app->cap_customs ? app->cap_customs * 2 : 8;
+            app->customs = realloc(app->customs, app->cap_customs * sizeof *app->customs);
+            if(!app->customs) {
+                abort();
+            }
+        }
+        app->customs[app->ncustoms++] = (struct gp_custom_slot){ 0 };
+    }
+    struct gp_custom_slot* s = &app->customs[i];
+    uint32_t gen = (s->generation + 1) & 0xffffff; /* (instances carry it as a float: exact below 2^24) */
+    *s = (struct gp_custom_slot){ .fns = *fns, .data = data, .generation = gen ? gen : 1, .live = true };
+    return (gp_custom){ i, s->generation };
+}
+
+/* (one drawn with a renderer keeps its slot until `destroy` runs: at the next draw, or when the renderer goes) */
+void gp_custom_release(gp_app* app, gp_custom c)
+{
+    struct gp_custom_slot* s = custom_slot(app, c.index, c.generation);
+    if(s) {
+        s->live = false;
+        gp_app_request_paint(app);
+    }
+}
+
+void gp_custom_invalidate(gp_app* app, gp_custom c)
+{
+    if(custom_slot(app, c.index, c.generation)) {
+        gp_app_request_paint(app);
+    }
+}
+
+void gp_custom_begin(gp_app* app, gp_renderer* r)
+{
+    app->custom_serial++;
+    for(uint32_t i = 0; i < app->ncustoms; i++) {
+        struct gp_custom_slot* s = &app->customs[i];
+        if(!s->live && s->inited) {
+            s->inited = false;
+            if(s->fns.destroy) {
+                s->fns.destroy(s->data, &r->gpu);
+            }
+        }
+    }
+}
+
+uint64_t gp_custom_texture(gp_app* app, gp_renderer* r, const gp_instance* in, float scale, void* vk_cmd)
+{
+    uint32_t idx = (uint32_t)in->_pad;
+    struct gp_custom_slot* s = custom_slot(app, idx, (uint32_t)in->side[2][2]);
+    if(!s) {
+        return 0;
+    }
+    if(s->serial == app->custom_serial) {
+        return s->tex;
+    }
+    if(!s->inited) {
+        s->inited = true;
+        if(s->fns.init) {
+            s->fns.init(s->data, &r->gpu);
+            s = &app->customs[idx]; /* (a callback that made a custom may have moved the table) */
+        }
+    }
+    int pw = (int)lroundf(in->bounds[2] * scale), ph = (int)lroundf(in->bounds[3] * scale);
+    gp_custom_frame f = { &r->gpu, in->bounds[2], in->bounds[3], pw > 1 ? pw : 1, ph > 1 ? ph : 1, scale, vk_cmd };
+    s->serial = app->custom_serial;
+    uint64_t tex = s->fns.draw(s->data, &f);
+    app->customs[idx].tex = tex; /* (again) */
+    return tex;
+}
+
+void gp_custom_teardown(gp_app* app, gp_renderer* r)
+{
+    for(uint32_t i = 0; app && i < app->ncustoms; i++) {
+        struct gp_custom_slot* s = &app->customs[i];
+        if(s->inited) {
+            s->inited = false;
+            s->serial = 0;
+            if(s->fns.destroy) {
+                s->fns.destroy(s->data, &r->gpu);
+            }
+        }
+    }
+}
+
 void gp_app_stats(gp_app* app, gp_stats* out)
 {
     *out = (gp_stats){
@@ -232,6 +348,7 @@ gp_window* gp_open_window(gp_app* app, const gp_window_options* opts, gp_entity 
             free(w);
             return NULL;
         }
+        app->renderer->app = app;
     }
     w->anims.app = app;
     w->anims.window = w;
@@ -1036,6 +1153,7 @@ static void app_free(gp_app* app)
     free(app->slots);
     free(app->free_slots);
     gp_input_free(app);
+    free(app->customs); /* (their `destroy` ran with the renderer) */
     free(app->capture_px);
     free(app->clip_local);
     free(app->primary_local);
