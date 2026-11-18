@@ -321,6 +321,7 @@ static std::vector<Pair> pairs(Fix& f)
                      return e;
                  }() });
     p.push_back({ "right to left", gp_div(gp_size_full(), gp_flex_row(), gp_text_dir_rtl(), c_box(30, 30, RED), c_box(50, 20, C2)), div().size_full().flex_row().text_dir_rtl().children({ box(30, 30, RED), box(50, 20, C2) }) });
+    p.push_back({ "custom", gp_div(gp_p(6), gp_custom_el(gp_custom{}, gp_size_px(30), gp_rounded(5), gp_bg(C1), c_box(10, 10, RED))), div().p_1p5().child(custom(gp_custom{}).size(30).rounded(5).bg(C1).child(box(10, 10, RED))) });
     {
         static const gp_point zig[4] = {
             {  10, 10 },
@@ -340,7 +341,7 @@ static std::vector<Pair> pairs(Fix& f)
 }
 
 static constexpr int kHandlerBoxes = 18; // the boxes after the pairs, before the style carriers
-static constexpr int kCellW = 200, kCellH = 70, kPairs = 25;
+static constexpr int kCellW = 200, kCellH = 70, kPairs = 26;
 
 Element Fix::render(Ctx)
 {

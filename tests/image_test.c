@@ -569,6 +569,12 @@ static void async_tests(void)
     gp_image sync = gp_image_load_file(app, path);
     CHECK(sync.generation && gp_image_size(app, sync, &w, &h) && w == 8 && h == 6, "a file, synchronously");
     gp_image_release(app, sync);
+    int dw = 0, dh = 0;
+    uint8_t* rgba = gp_image_decode_file(path, &dw, &dh); /* (the bottom-right quadrant is white at alpha 128: not premultiplied) */
+    CHECK(rgba && dw == 8 && dh == 6 && rgba[0] == 255 && rgba[1] == 0 && rgba[3] == 255 && rgba[47 * 4] == 255 && rgba[47 * 4 + 3] == 128, "decoded to straight RGBA");
+    free(rgba);
+    CHECK(!gp_image_decode_file("/nonexistent/x.png", &dw, &dh) && !gp_image_decode_file(NULL, &dw, &dh), "decoding a missing file");
+    CHECK(gp_gfx_image_count(app->gfx) == base, "decoding registers nothing");
 
     Done ok = { 0 };
     gp_task t = gp_image_load_file_async(&cx, path, on_done, &ok);

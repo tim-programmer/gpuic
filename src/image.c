@@ -11,6 +11,7 @@
 #include <string.h>
 
 #define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC /* (an app may link its own stb_image) */
 #define STBI_NO_STDIO
 #define STBI_NO_HDR
 #define STBI_NO_LINEAR
@@ -48,7 +49,8 @@ void gp_image_premultiply(uint8_t* p, size_t pixels)
     }
 }
 
-uint8_t* gp_image_decode(const void* data, size_t size, int* w, int* h)
+/* Straight alpha. */
+static uint8_t* decode(const void* data, size_t size, int* w, int* h)
 {
     if(!data || size == 0 || size > MAX_FILE_BYTES || size > 0x7fffffffu) {
         return NULL;
@@ -65,10 +67,18 @@ uint8_t* gp_image_decode(const void* data, size_t size, int* w, int* h)
     if(!px) {
         return NULL;
     }
-    gp_image_premultiply(px, (size_t)iw * (size_t)ih);
     *w = iw;
     *h = ih;
     return px; /* malloc'd by stb: free() */
+}
+
+uint8_t* gp_image_decode(const void* data, size_t size, int* w, int* h)
+{
+    uint8_t* px = decode(data, size, w, h);
+    if(px) {
+        gp_image_premultiply(px, (size_t)*w * (size_t)*h);
+    }
+    return px;
 }
 
 /* ---------------------------------------------------------------- public */
@@ -137,6 +147,18 @@ gp_image gp_image_load_file(gp_app* app, const char* path)
     gp_image im = gp_image_load_memory(app, bytes, size);
     free(bytes);
     return im;
+}
+
+uint8_t* gp_image_decode_file(const char* path, int* width, int* height)
+{
+    size_t size;
+    uint8_t* bytes = path && width && height ? read_file(path, &size) : NULL;
+    if(!bytes) {
+        return NULL;
+    }
+    uint8_t* px = decode(bytes, size, width, height);
+    free(bytes);
+    return px;
 }
 
 gp_image gp_image_from_rgba(gp_app* app, int width, int height, const void* rgba)

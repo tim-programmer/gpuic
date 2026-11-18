@@ -1,8 +1,8 @@
 # Finds gpuic's dependencies, downloading the ones that are missing.
 #
-#   GPUIC_DEPENDENCIES = AUTO   use what is installed, download the rest (default)
+#   GPUIC_DEPENDENCIES = FETCH  always download SDL3, FreeType (with zlib and libpng, CMake 3.24+), HarfBuzz and FriBidi (default)
+#                        AUTO   use what is installed, download the rest
 #                        SYSTEM never download; fail if something is missing
-#                        FETCH  always download SDL3, FreeType, HarfBuzz and FriBidi
 #   GPUIC_PLATFORM     = sdl      windows and input through SDL3 (default)
 #                        wayland  native Wayland, no SDL: needs wayland-client, wayland-egl, EGL and xkbcommon (pkg-config)
 #   GPUIC_FONTCONFIG   = AUTO   use fontconfig when found, else scan font directories
@@ -48,6 +48,10 @@ set(GPUIC_HARFBUZZ_URL "https://github.com/harfbuzz/harfbuzz/releases/download/1
 set(GPUIC_HARFBUZZ_HASH "SHA256=d07a007327277708a2a73ae437887cdbaf282937f6d03ca5467723e9099af586")
 set(GPUIC_FRIBIDI_URL "https://github.com/fribidi/fribidi/releases/download/v1.0.17/fribidi-1.0.17.tar.xz")
 set(GPUIC_FRIBIDI_HASH "SHA256=6949dcde27d41cebad1fd741fcafc36d55a1020d2d872d4a6eb3914caabbada2")
+set(GPUIC_ZLIB_URL "https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.xz")
+set(GPUIC_ZLIB_HASH "SHA256=4f11c512053d7bab8d9e9b89bde3575add3e4c50a383b42ef6cb837035fc5a7c")
+set(GPUIC_LIBPNG_URL "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.59.tar.gz")
+set(GPUIC_LIBPNG_HASH "SHA256=2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5")
 
 set(GPUIC_FETCHED "")
 set(_gpuic_targets "")
@@ -77,7 +81,11 @@ function(_gpuic_missing name)
   if(GPUIC_DEPENDENCIES STREQUAL "SYSTEM")
     message(FATAL_ERROR "gpuic: ${name} was not found and GPUIC_DEPENDENCIES=SYSTEM forbids downloading it")
   endif()
-  message(STATUS "gpuic: ${name} not found, downloading it")
+  if(GPUIC_DEPENDENCIES STREQUAL "FETCH")
+    message(STATUS "gpuic: downloading ${name}")
+  else()
+    message(STATUS "gpuic: ${name} not found, downloading it")
+  endif()
 endfunction()
 
 # Settings for downloaded projects are plain variables, so they stay inside the
@@ -90,13 +98,50 @@ function(_gpuic_fetch_sdl3)
   set(SDL_EXAMPLES OFF)
   set(SDL_INSTALL OFF)
   set(SDL_DISABLE_INSTALL_DOCS ON)
+  set(SDL_FRIBIDI OFF)   # (SDL would load the system FriBidi at run time; gpuic does its own bidi)
   FetchContent_Declare(gpuic_sdl3 URL ${GPUIC_SDL3_URL} URL_HASH ${GPUIC_SDL3_HASH} DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(gpuic_sdl3)
 endfunction()
 
+# zlib and libpng, for a downloaded FreeType's color emoji (CBDT). OVERRIDE_FIND_PACKAGE
+# answers libpng's find_package(ZLIB) and FreeType's find_package(PNG) with them.
+function(_gpuic_fetch_png)
+  set(BUILD_SHARED_LIBS OFF)
+  set(ZLIB_BUILD_SHARED OFF)
+  set(ZLIB_BUILD_TESTING OFF)
+  set(ZLIB_INSTALL OFF)
+  set(PNG_SHARED OFF)
+  set(PNG_TESTS OFF)
+  set(PNG_TOOLS OFF)
+  set(SKIP_INSTALL_ALL ON)
+  FetchContent_Declare(ZLIB URL ${GPUIC_ZLIB_URL} URL_HASH ${GPUIC_ZLIB_HASH} DOWNLOAD_EXTRACT_TIMESTAMP TRUE OVERRIDE_FIND_PACKAGE)
+  FetchContent_MakeAvailable(ZLIB)
+  if(NOT TARGET ZLIB::ZLIB)
+    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+  endif()
+  set(ZLIB_INCLUDE_DIRS ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})   # (libpng generates its config against this zlib.h)
+  FetchContent_Declare(PNG URL ${GPUIC_LIBPNG_URL} URL_HASH ${GPUIC_LIBPNG_HASH} DOWNLOAD_EXTRACT_TIMESTAMP TRUE OVERRIDE_FIND_PACKAGE)
+  FetchContent_MakeAvailable(PNG)
+  if(NOT TARGET PNG::PNG)
+    add_library(PNG::PNG ALIAS png_static)
+  endif()
+endfunction()
+
 function(_gpuic_fetch_freetype)
-  # Compressed fonts use FreeType's own gzip; no optional libraries are pulled in
-  # except libpng, which FreeType finds itself and which color emoji (CBDT) needs.
+  # Compressed fonts use FreeType's own gzip. libpng (color emoji) is downloaded
+  # with it under FETCH; under AUTO, FreeType uses the system's if there is one.
+  if(GPUIC_DEPENDENCIES STREQUAL "FETCH")
+    if(CMAKE_VERSION VERSION_LESS 3.24)
+      message(STATUS "gpuic: CMake 3.24 is needed to download libpng; FreeType is built without it (no CBDT color emoji)")
+      set(FT_DISABLE_PNG ON)
+    else()
+      _gpuic_missing("zlib and libpng")
+      _gpuic_fetch_png()
+      list(APPEND GPUIC_FETCHED zlib libpng)
+      set(GPUIC_FETCHED "${GPUIC_FETCHED}" PARENT_SCOPE)
+      set(FT_REQUIRE_PNG ON)
+    endif()
+  endif()
   set(BUILD_SHARED_LIBS OFF)
   set(FT_DISABLE_ZLIB ON)
   set(FT_DISABLE_BZIP2 ON)

@@ -45,6 +45,7 @@
 
 #include <gpuic/gpuic.h>
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1026,9 +1027,12 @@ public:
                 return gp_uniform_list_(count_, height_, list_fn_, data_, mods, GP_END);
             case Kind::List:
                 return gp_list_(count_, height_, list_fn_, data_, mods, GP_END);
+            case Kind::Custom:
+                return gp_custom_el_(custom_.index, custom_.generation, mods, kids, GP_END);
             case Kind::Group:
                 return gp_mods(mods_.p, mods_.n);
             case Kind::Raw:
+                assert(!mods && !kids && "raw() takes no modifiers or children: they would be dropped (custom() is the chainable gp_custom_el)");
                 return raw_;
         }
         return nullptr;
@@ -1612,6 +1616,7 @@ private:
     friend Element curve(gp_point, gp_point, gp_point, gp_point);
     friend Element polyline(const gp_point*, size_t);
     friend Element style();
+    friend Element custom(gp_custom);
     friend Element raw(gp_node*);
     template <class F>
     friend Element uniform_list(size_t, float, F&&);
@@ -1626,6 +1631,7 @@ private:
         Polyline,
         UList,
         List,
+        Custom,
         Group,
         Raw,
     };
@@ -1644,6 +1650,7 @@ private:
     const char* str_ = nullptr;
     gp_image img_{};
     gp_svg svg_{};
+    gp_custom custom_{};
     gp_point* pts_ = nullptr; // a curve's four points, a polyline's n (copied into the frame's memory)
     size_t npts_ = 0;
     gp_node* raw_ = nullptr;
@@ -1676,6 +1683,13 @@ inline Element svg_img(gp_svg svg)
 {
     Element e(Element::Kind::Svg);
     e.svg_ = svg;
+    return e;
+}
+/** An element whose content box the app draws on the GPU (gp_custom_el): a div otherwise, so it takes modifiers, handlers and children. */
+inline Element custom(gp_custom c)
+{
+    Element e(Element::Kind::Custom);
+    e.custom_ = c;
     return e;
 }
 /** A point, for the curve and polyline below: `xy(10, 20)` (or a braced `{10, 20}`). */
@@ -1755,7 +1769,7 @@ gp_node* state_style(F& f)
     return s.build();
 }
 } // namespace detail
-/** Wraps a node made by the C API (no modifiers can be added to it afterwards). */
+/** Wraps a node made by the C API. Modifiers and children cannot be added to it afterwards (an assert says so, in debug builds): put them in the C call. */
 inline Element raw(gp_node* node)
 {
     Element e(Element::Kind::Raw);

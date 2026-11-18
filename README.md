@@ -34,22 +34,23 @@ only when gpuic is the top-level project (`GPUIC_BUILD_EXAMPLES`, `GPUIC_BUILD_T
 
 ### Dependencies
 
-Each dependency is looked for first (an existing CMake target, a CMake package, then pkg-config)
-and **downloaded and built from source when it isn't found**, pinned to a release and checked by
-SHA-256:
+By default each dependency is **downloaded and built from source**, pinned to a release and checked by
+SHA-256; with `AUTO` (below) it is looked for first (an existing CMake target, a CMake package, then
+pkg-config) and downloaded only when it isn't found:
 
 | Dependency | Version fetched | How | Notes |
 |---|---|---|---|
-| SDL3 | 3.4.20 | CMake, static | windowing and input; OpenGL (or the Vulkan loader) is loaded at runtime through it, so there is no GL or Vulkan link dependency |
-| FreeType | 2.14.3 | CMake, static | color emoji (CBDT) needs libpng, which FreeType picks up if present |
+| SDL3 | 3.4.20 | CMake, static | windowing and input; OpenGL (or the Vulkan loader) is loaded at runtime through it, so there is no GL or Vulkan link dependency; built without its own FriBidi |
+| FreeType | 2.14.3 | CMake, static | color emoji (CBDT) need libpng: under `FETCH` it is downloaded with zlib (CMake 3.24 or later; earlier ones build FreeType without it), under `AUTO` FreeType uses the system's if present |
+| zlib, libpng | 1.4, 1.6.59 | CMake, static | only with a FreeType downloaded under `FETCH`, for it |
 | HarfBuzz | 14.6.0 | CMake, static | its CMake build enables C++, so fetching it needs a C++ compiler |
 | FriBidi | 1.0.17 | built by `cmake/GpuicFriBidi.cmake` | upstream has no CMake build; the release tarball ships the generated tables |
 | fontconfig | never fetched | system only | optional; see below |
 | stb_image | 2.30 | vendored in `third_party/stb/` | image decoding (PNG, JPEG, GIF, BMP); one public-domain header, hash recorded next to it |
 
-`-DGPUIC_DEPENDENCIES=` chooses the policy: `AUTO` (default: system first, download what is
-missing), `SYSTEM` (never download; fail with a clear message instead) or `FETCH` (always download
-the four above). A parent project that already provides `SDL3::SDL3`, `Freetype::Freetype`,
+`-DGPUIC_DEPENDENCIES=` chooses the policy: `FETCH` (default: always download the four above, and zlib and libpng with FreeType),
+`AUTO` (system first, download what is missing) or `SYSTEM` (never download; fail with a clear
+message instead). A parent project that already provides `SDL3::SDL3`, `Freetype::Freetype`,
 `harfbuzz::harfbuzz` or `FriBidi::FriBidi` has its targets reused rather than duplicated.
 
 **fontconfig** can't be downloaded: upstream builds with meson or autotools and needs generated
@@ -289,8 +290,8 @@ int main() {
 Link `gpuic::cpp` (CMake: `target_link_libraries(app PRIVATE gpuic::cpp)`; it is `gpuic` plus `cxx_std_20`). `examples/counter_cpp.cpp` is
 `examples/counter.c` in this style.
 
-* **Elements and the chain.** `div()`, `text("...")`, `img(image)`, `svg_img(svg)`, `uniform_list(count, h, row)`, `list(count, h, row)`
-  and `style()` (modifiers on their own) make an `Element`; every method adds to it and returns it, by reference on a named element and as a
+* **Elements and the chain.** `div()`, `text("...")`, `img(image)`, `svg_img(svg)`, `custom(c)` (a `gp_custom_el`), `uniform_list(count, h, row)`,
+  `list(count, h, row)` and `style()` (modifiers on their own) make an `Element`, and `raw(node)` wraps a C node (it takes no modifiers or children: an assert says so, in debug builds); every method adds to it and returns it, by reference on a named element and as a
   temporary on a temporary, so `div().flex().child(x)` and `e.flex(); e.child(x);` both work. An `Element` converts to a `gp_node *` where
   the C API wants one, copies deeply (`Element b = a; b.bg(red)` leaves `a` alone), and as in C a later modifier wins over an earlier one.
 * **Every C modifier is a method**, named like the function without `gp_` (`gp_flex_row()` is `.flex_row()`, `gp_gap(8)` is `.gap(8)`,
@@ -1676,14 +1677,15 @@ gp_image_load_file_async(&cx, "photo.jpg", on_loaded, data);               /* de
 * **API.** `gp_image` is a generational handle (`GP_IMAGE_NULL` is zero); `gp_image_load_file`, `_load_memory`,
   `gp_image_from_rgba` (straight alpha, copied), `gp_image_size`, `gp_image_release`, and `gp_image_load_file_async`, which
   reads and decodes on a pool thread and calls you back on the main thread with the image (or `GP_IMAGE_NULL`);
-  cancelling it frees what the worker made and never calls back. An image is made once and drawn by any number of elements and
+  cancelling it frees what the worker made and never calls back. `gp_image_decode_file` only decodes, into RGBA bytes (straight
+  alpha) for an app's own textures; the caller frees them. An image is made once and drawn by any number of elements and
   windows; a released handle, or one whose slot now holds another picture, draws nothing (and an element that only has it is
   0 x 0), never somebody else's pixels.
 * **Decoding** is `stb_image` (vendored in `third_party/stb/`, public domain, v2.30, SHA-256
   `594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3`), restricted to PNG, JPEG, GIF and BMP. A picture over
   16384 pixels a side or 100 million pixels is refused, from the header, before anything is allocated. EXIF orientation of
   JPEGs and animated GIF frames are not handled. Pixels are premultiplied once at decode. No image library to find or fetch,
-  so all four dependency configurations build alike.
+  so all four dependency configurations build alike. It is compiled `STB_IMAGE_STATIC`, so an app may link its own stb_image.
 * **Sizing.** `gp_img` is a leaf element, as big as the picture (1 image pixel = 1 logical px) unless the style says: a width
   alone or a height alone keeps the proportions (`gp_img(i, gp_w_full())` in a column is as tall as it needs at that width,
   including when it is stretched by the column and has no width of its own), both fix the box. Padding and border go around it.
@@ -2085,3 +2087,6 @@ Roughly in the order I'd tackle them:
    `__sanitizer_finish_switch_fiber`), which can make it report falsely about a coroutine's stack. Nothing has been reported (the sanitizer
    builds pass); worth doing if something is. Their stack is 1 MB there (256 KB elsewhere), since it pads every frame.
 10. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
+11. Small ones from an app's feedback: `gp_image_decode_memory` (the bytes already in memory), `SDL_LIBTHAI` off in a downloaded SDL (it
+    loads the system's libthai at run time, as `SDL_FRIBIDI` did), and a file of exactly 512 MiB, which the image reader refuses while the
+    decoder takes that size.

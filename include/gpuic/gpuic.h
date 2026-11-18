@@ -1241,6 +1241,9 @@ gp_node* gp_bg(gp_color c);
 gp_image gp_image_load_file(gp_app* app, const char* path);                        /* GP_IMAGE_NULL if it can't be read or decoded */
 gp_image gp_image_load_memory(gp_app* app, const void* data, size_t size);         /* the file's bytes; not kept */
 gp_image gp_image_from_rgba(gp_app* app, int width, int height, const void* rgba); /* 4 bytes a pixel, straight (not premultiplied) alpha; copied */
+/* Only decodes, for an app's own textures: width * height * 4 bytes of RGBA, straight alpha, the top row first. NULL if the file can't
+ * be read or decoded; free() it. Any thread. */
+uint8_t* gp_image_decode_file(const char* path, int* width, int* height);
 /* Decodes on a pool thread. `done` runs on the main thread with the image, or GP_IMAGE_NULL on failure (it is not called
  * if the task was cancelled, or the entity of `cx` is gone: the image is dropped then). */
 typedef void (*gp_image_fn)(void* self, gp_ctx* cx, gp_image image, void* data);
@@ -1267,8 +1270,8 @@ void gp_image_release(gp_app* app, gp_image image);
  * The backends:
  *   GL       a 3.3 core context, current while the callbacks run. Load functions with gl_get_proc_address. `draw` may change the framebuffer
  *            binding, viewport, scissor, depth, stencil and cull tests, GL_PROGRAM_POINT_SIZE, GL_BLEND and glBlendFunc, the color mask, the
- *            program, the vertex array and array buffer, the 2D texture bindings and active unit, and the unpack alignment and row length: gpuic
- *            sets them again. Restore anything else it changes (glBlendEquation, polygon mode, GL_FRAMEBUFFER_SRGB...).
+ *            clear color, the program, the vertex array and array buffer, the 2D texture bindings and active unit, and the unpack alignment and
+ *            row length: gpuic sets them again. Restore anything else it changes (glBlendEquation, polygon mode, GL_FRAMEBUFFER_SRGB...).
  *   Vulkan   a 1.3 device with dynamic rendering and only the features gpuic needs (no largePoints, wideLines, geometryShader...: draw quads,
  *            not wide points). Load functions with vk_get_instance_proc_addr. `draw` records into f->vk_command_buffer, outside any rendering;
  *            gpuic puts a full barrier after it. One frame is in flight, and the last one is done before `draw` is called: buffers the last
