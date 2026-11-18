@@ -2047,6 +2047,15 @@ public:
         o.background = background;
         return Window(a_, gp_open_window(a_, &o, root_view));
     }
+    /** The user's folders and the app's data folder (made if missing); nullptr where there is none. They live as long as the app. */
+    const char* user_folder(gp_folder which) const
+    {
+        return gp_user_folder(a_, which);
+    }
+    const char* data_folder(const char* app_name) const
+    {
+        return gp_app_data_folder(a_, app_name);
+    }
     /** Pictures and fonts (main thread). A null image / svg means it could not be read or decoded. */
     gp_image load_image(const char* path) const
     {

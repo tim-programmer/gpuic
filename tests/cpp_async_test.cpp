@@ -460,6 +460,8 @@ static void test_loaders(Co& co, Ctx cx)
     CHECK(im.generation != 0 && gp_image_size(app, im, &w, &h) && w == 2 && h == 2, "load_image decoded the file (%d x %d)", w, h);
     app.release(im);
     CHECK(app.load_image("/nonexistent/x.png").generation == 0, "a missing file is a null image");
+    CHECK(app.user_folder(GP_FOLDER_HOME) == gp_user_folder(app, GP_FOLDER_HOME) && app.user_folder(GP_FOLDER_HOME), "user_folder");
+    CHECK(app.data_folder("") == nullptr, "data_folder: no name, no folder");
     unsigned char rgba[4 * 4] = { 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255 };
     gp_image raw = app.image_from_rgba(2, 2, rgba);
     CHECK(raw.generation != 0, "image_from_rgba");
