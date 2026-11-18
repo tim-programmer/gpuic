@@ -403,12 +403,11 @@ char* gp_platform_data_folder(const char* app_name)
 /* SDL may answer on another thread (zenity), or during a later SDL_PumpEvents (the portal). */
 static void dialog_answered(void* user, const char* const* list, int filter)
 {
-    (void)filter;
     int n = 0;
     while(list && list[n]) {
         n++;
     }
-    gp_dialog_answer(user, list, n, list ? NULL : SDL_GetError());
+    gp_dialog_answer(user, list, n, filter, list ? NULL : SDL_GetError());
 }
 
 void gp_platform_file_dialog(gp_window* w, gp_dialog* d)

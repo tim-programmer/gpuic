@@ -501,11 +501,13 @@ struct FdEvent
     int events;
 };
 
-/** What a file dialog answered: the paths chosen (valid during the callback), none if cancelled, `error` set if no dialog could be shown. */
+/** What a file dialog answered: the paths chosen (valid during the callback), none if cancelled, `error` set if no dialog could be shown;
+ *  `filter` the index of the filter selected, -1 if the dialog did not say. */
 struct FileChoice
 {
     const char* const* paths;
     int count;
+    int filter;
     const char* error;
 };
 
@@ -2240,10 +2242,10 @@ void image_tramp(void* self, gp_ctx* cx, gp_image image, void* data)
     call(*static_cast<D*>(data), self, ctx, cx, image);
 }
 template <class D>
-void dialog_tramp(void* self, gp_ctx* cx, const char* const* paths, int count, const char* error, void* data)
+void dialog_tramp(void* self, gp_ctx* cx, const char* const* paths, int count, int filter, const char* error, void* data)
 {
     Ctx ctx(cx);
-    FileChoice choice{ paths, count, error };
+    FileChoice choice{ paths, count, filter, error };
     call(*static_cast<D*>(data), self, ctx, cx, choice);
 }
 template <class D>

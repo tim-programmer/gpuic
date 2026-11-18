@@ -487,15 +487,15 @@ static void test_loaders(Co& co, Ctx cx)
     { // file dialogs, answered by the test hook
         Tok tok = make_tok();
         std::string chosen;
-        gp_simulate_file_dialog(app, "/tmp/a.json");
+        gp_simulate_file_dialog(app, "/tmp/a.json", 0);
         cx.open_file_dialog({
                                 { "Effects", "json" }
         },
             nullptr,
             false,
-            [tok, &chosen](const FileChoice& c) { chosen = c.count == 1 ? c.paths[0] : "?"; });
+            [tok, &chosen](const FileChoice& c) { chosen = c.count == 1 && c.filter == 0 ? c.paths[0] : "?"; });
         int count = -1;
-        gp_simulate_file_dialog(app, nullptr);
+        gp_simulate_file_dialog(app, nullptr, -1);
         cx.save_file_dialog({}, "/tmp/untitled.json", [&count](const FileChoice& c) { count = c.count + (c.error ? 10 : 0); });
         co.sleep(0.1);
         CHECK(chosen == "/tmp/a.json" && count == 0 && tok.use_count() == 1, "open/save_file_dialog: a path, a cancel, closure destroyed (%s %d %ld)", chosen.c_str(), count, tok.use_count());

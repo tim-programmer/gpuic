@@ -1439,7 +1439,8 @@ static char* uri_path(const char* uri)
     return out;
 }
 
-/* Answers `d` from the portal's Response: (u code, a{sv} results), code 0 = chosen, 1 = cancelled, 2 = ended some other way. */
+/* Answers `d` from the portal's Response: (u code, a{sv} results), code 0 = chosen, 1 = cancelled, 2 = ended some other way. The results
+ * have "uris" (as) and "current_filter" ((sa(us)): the one selected, known to us by its name). */
 static void portal_response(gp_dialog* d, DBusMessage* m)
 {
     DBusMessageIter it, dict, entry, var, uris;
@@ -1449,7 +1450,7 @@ static void portal_response(gp_dialog* d, DBusMessage* m)
         dbus_message_iter_get_basic(&it, &code);
     }
     char** paths = NULL;
-    int n = 0;
+    int n = 0, filter = -1;
     if(code == 0 && dbus_message_iter_next(&it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_ARRAY) {
         for(dbus_message_iter_recurse(&it, &dict); dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_DICT_ENTRY; dbus_message_iter_next(&dict)) {
             const char* key;
@@ -1457,6 +1458,19 @@ static void portal_response(gp_dialog* d, DBusMessage* m)
             dbus_message_iter_get_basic(&entry, &key);
             dbus_message_iter_next(&entry);
             dbus_message_iter_recurse(&entry, &var);
+            if(strcmp(key, "current_filter") == 0 && dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_STRUCT) {
+                DBusMessageIter fs;
+                const char* name;
+                dbus_message_iter_recurse(&var, &fs);
+                if(dbus_message_iter_get_arg_type(&fs) == DBUS_TYPE_STRING) {
+                    dbus_message_iter_get_basic(&fs, &name);
+                    for(int i = 0; i < d->nfilters; i++) {
+                        if(filter < 0 && strcmp(d->filters[i].name, name) == 0) {
+                            filter = i;
+                        }
+                    }
+                }
+            }
             if(strcmp(key, "uris") != 0 || dbus_message_iter_get_arg_type(&var) != DBUS_TYPE_ARRAY) {
                 continue;
             }
@@ -1471,7 +1485,7 @@ static void portal_response(gp_dialog* d, DBusMessage* m)
             }
         }
     }
-    gp_dialog_answer(d, (const char* const*)paths, n, code == 0 && !n ? "the dialog chose no local file" : NULL);
+    gp_dialog_answer(d, (const char* const*)paths, n, filter, code == 0 && !n ? "the dialog chose no local file" : NULL);
     for(int i = 0; i < n; i++) {
         free(paths[i]);
     }
@@ -1523,7 +1537,7 @@ static void* portal_thread(void* arg)
         }
     }
     if(msg[0]) {
-        gp_dialog_answer(d, NULL, 0, msg);
+        gp_dialog_answer(d, NULL, 0, -1, msg);
     }
     dbus_error_free(&err);
     if(reply) {
@@ -1586,7 +1600,7 @@ void gp_platform_file_dialog(gp_window* w, gp_dialog* d)
     if(pthread_create(&t, NULL, portal_thread, job) != 0) {
         dbus_message_unref(call);
         free(job);
-        gp_dialog_answer(d, NULL, 0, "no file dialog: could not start a thread");
+        gp_dialog_answer(d, NULL, 0, -1, "no file dialog: could not start a thread");
         return;
     }
     pthread_detach(t);

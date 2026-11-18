@@ -31,15 +31,16 @@ static _Thread_local bool is_main; /* (set on the main thread only) */
 
 typedef struct
 {
-    int calls, count, drops;
+    int calls, count, drops, filter;
     char path[256], error[256];
     bool on_main;
     void* self;
 } Got;
 
-static void answered(void* self, gp_ctx* cx, const char* const* paths, int count, const char* error, void* data)
+static void answered(void* self, gp_ctx* cx, const char* const* paths, int count, int filter, const char* error, void* data)
 {
     Got* g = data;
+    g->filter = filter;
     g->calls++;
     g->count = count;
     g->self = self;
@@ -61,25 +62,25 @@ static void test_simulated(gp_co* co, gp_app* app)
 {
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     static Got a, b;
-    gp_simulate_file_dialog(app, "/tmp/effects/fire.json");
+    gp_simulate_file_dialog(app, "/tmp/effects/fire.json", 1);
     gp_task t = gp_open_file_dialog(&cx, kinds, 2, "/tmp", false, answered, &a);
     gp_task_on_drop(app, t, dropped, &a);
     CHECK(a.calls == 0 && gp_task_active(app, t), "the answer comes on a later turn, not inside the call");
     gp_sleep(co, 0.05);
-    CHECK(a.calls == 1 && a.count == 1 && strcmp(a.path, "/tmp/effects/fire.json") == 0 && !a.error[0] && a.on_main, "a chosen path, on the main thread (%d %d %s %s)", a.calls, a.count, a.path, a.error);
+    CHECK(a.calls == 1 && a.count == 1 && strcmp(a.path, "/tmp/effects/fire.json") == 0 && !a.error[0] && a.on_main && a.filter == 1, "a chosen path and filter, on the main thread (%d %d %s %s %d)", a.calls, a.count, a.path, a.error, a.filter);
     CHECK(!gp_task_active(app, t) && a.drops == 1, "the task ends and its closure is dropped once (%d)", a.drops);
 
-    gp_simulate_file_dialog(app, NULL);
+    gp_simulate_file_dialog(app, NULL, 5);
     gp_save_file_dialog(&cx, kinds, 1, "/tmp/untitled.json", answered, &b);
     gp_sleep(co, 0.05);
-    CHECK(b.calls == 1 && b.count == 0 && !b.error[0], "a cancel: no paths and no error (%d %d %s)", b.calls, b.count, b.error);
+    CHECK(b.calls == 1 && b.count == 0 && !b.error[0] && b.filter == -1, "a cancel: no paths and no error; a filter index out of range is -1 (%d %d %s %d)", b.calls, b.count, b.error, b.filter);
 }
 
 static void test_cancelled(gp_co* co, gp_app* app)
 {
     static Got a, b;
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
-    gp_simulate_file_dialog(app, "/tmp/x.json");
+    gp_simulate_file_dialog(app, "/tmp/x.json", -1);
     gp_task t = gp_open_file_dialog(&cx, NULL, 0, NULL, true, answered, &a);
     gp_task_on_drop(app, t, dropped, &a);
     gp_cancel(app, t);
@@ -88,7 +89,7 @@ static void test_cancelled(gp_co* co, gp_app* app)
 
     gp_entity e = gp_entity_new(app, sizeof(int), NULL, NULL);
     gp_ctx ecx = gp_ctx_for(app, e);
-    gp_simulate_file_dialog(app, "/tmp/y.json");
+    gp_simulate_file_dialog(app, "/tmp/y.json", -1);
     t = gp_open_file_dialog(&ecx, NULL, 0, NULL, false, answered, &b);
     gp_task_on_drop(app, t, dropped, &b);
     gp_entity_release(app, e);
@@ -96,7 +97,7 @@ static void test_cancelled(gp_co* co, gp_app* app)
     CHECK(b.calls == 0 && b.drops == 1, "entity released: not called, dropped (%d %d)", b.calls, b.drops);
 
     static Got c;
-    gp_simulate_file_dialog(app, "/tmp/z.json");
+    gp_simulate_file_dialog(app, "/tmp/z.json", -1);
     e = gp_entity_new(app, sizeof(int), NULL, NULL);
     void* state = gp_entity_get(app, e);
     ecx = gp_ctx_for(app, e);
@@ -142,6 +143,7 @@ static void test_platform_failure(gp_co* co, gp_app* app)
         gp_sleep(co, 0.01);
     }
     CHECK(a.calls == 1 && a.count == 0 && a.error[0] && a.on_main, "no dialog can be shown: an error, not a cancel (%d '%s')", a.calls, a.error);
+    CHECK(a.filter == -1, "no filter with an error");
 }
 
 static char home[256];

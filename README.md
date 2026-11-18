@@ -884,7 +884,7 @@ elsewhere), and the portal's FileChooser over D-Bus on the native Wayland platfo
 
 ```c
 static const gp_file_filter kinds[] = { { "Effects", "json" }, { "Meshes", "obj;fbx;gltf;glb" } };
-static void opened(void *self, gp_ctx *cx, const char *const *paths, int count, const char *error, void *data) {
+static void opened(void *self, gp_ctx *cx, const char *const *paths, int count, int filter, const char *error, void *data) {
     if (error) show_error(error);             /* no dialog could be shown: no portal, no zenity, ... */
     else if (count) load(self, paths[0]);     /* count 0, error NULL: cancelled */
 }
@@ -897,9 +897,11 @@ gp_save_file_dialog(cx, kinds, 1, "/home/me/effects/untitled.json", saved, NULL)
 * **Parent:** the dialog belongs to the window of `cx` (else the app's first window) and stays above it; on Wayland through an
   xdg-foreign handle.
 * **Save:** the name comes back as typed: gpuic does not add the selected filter's extension (some dialogs, KDE's, do), so check it.
-* **Tests:** `gp_simulate_file_dialog(app, path)` answers the next dialog with `path` (NULL: cancelled) without showing it.
+  `filter` is the index of the filter selected, or -1 where the dialog does not say (SDL's portal and zenity dialogs on Linux; the
+  native Wayland platform's portal, Windows and macOS do say).
+* **Tests:** `gp_simulate_file_dialog(app, path, filter)` answers the next dialog with `path` (NULL: cancelled) and `filter` without showing it.
 * C++: `cx.open_file_dialog({{"Effects", "json"}}, start, many, f)` and `cx.save_file_dialog(filters, start, f)`, with
-  `f(Self&, Ctx, const FileChoice&)` (`paths`, `count`, `error`); `app.user_folder(GP_FOLDER_DOCUMENTS)`, `app.data_folder("ppedit")`.
+  `f(Self&, Ctx, const FileChoice&)` (`paths`, `count`, `filter`, `error`); `app.user_folder(GP_FOLDER_DOCUMENTS)`, `app.data_folder("ppedit")`.
 * **Where to start:** `gp_user_folder(app, GP_FOLDER_DOCUMENTS)` (and HOME, DESKTOP, DOWNLOADS, MUSIC, PICTURES, PUBLICSHARE, SAVEDGAMES,
   SCREENSHOTS, TEMPLATES, VIDEOS) and `gp_app_data_folder(app, "ppedit")` (made if missing). On Linux gpuic reads `XDG_<NAME>_DIR` from
   `user-dirs.dirs` itself, falling back to `$HOME/Documents` and the like, and the data folder is `$XDG_DATA_HOME/<name>`

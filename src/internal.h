@@ -1430,6 +1430,7 @@ struct gp_app
     bool debug_ignore_platform_ime; /* tests: the display server's own composition updates (empty ones, on a timer) are dropped, so a simulated composition stays */
     bool sim_dialog;                /* gp_simulate_file_dialog: the next dialog is answered with sim_dialog_path (NULL: cancelled) */
     char* sim_dialog_path;
+    int sim_dialog_filter;
     char** folders;                 /* folders.c: the strings gp_user_folder / gp_app_data_folder gave out */
     size_t nfolders;
     /* Test hook: gp_debug_capture_next makes the next window_draw read its frame back (before it is swapped away). */
@@ -1556,10 +1557,11 @@ struct gp_dialog
     void* platform_data; /* the platform's, free()d with the dialog */
     char** paths;        /* the answer */
     int count;
+    int filter;
     char* error;
 };
 void gp_platform_file_dialog(gp_window* w, gp_dialog* d);
-void gp_dialog_answer(gp_dialog* d, const char* const* paths, int count, const char* error);
+void gp_dialog_answer(gp_dialog* d, const char* const* paths, int count, int filter, const char* error); /* filter: an index, else -1 */
 /* The user's folders (folders.c): gpuic's own lookup on XDG systems, the platform's (SDL's) elsewhere; malloc()ed, NULL for none. */
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
 # define GP_XDG_FOLDERS 1

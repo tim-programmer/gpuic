@@ -36,10 +36,10 @@ static void dialog_free(void* p)
 static void dialog_done(void* self, gp_ctx* cx, void* data)
 {
     gp_dialog* d = data;
-    d->fn(self, cx, (const char* const*)d->paths, d->count, d->error, d->data);
+    d->fn(self, cx, (const char* const*)d->paths, d->count, d->filter, d->error, d->data);
 }
 
-void gp_dialog_answer(gp_dialog* d, const char* const* paths, int count, const char* error)
+void gp_dialog_answer(gp_dialog* d, const char* const* paths, int count, int filter, const char* error)
 {
     gp_mutex_lock(&g_lock);
     if(!d->app) {
@@ -58,6 +58,7 @@ void gp_dialog_answer(gp_dialog* d, const char* const* paths, int count, const c
         d->paths[i] = strdup(paths[i]);
     }
     d->count = count;
+    d->filter = filter >= 0 && filter < d->nfilters ? filter : -1;
     d->error = dup_or_null(error);
     gp_exec_complete(d->app, d->job);
     gp_mutex_unlock(&g_lock);
@@ -92,7 +93,7 @@ static gp_task show(gp_ctx* cx, bool save, const gp_file_filter* filters, int nf
     if(app->sim_dialog) {
         app->sim_dialog = false;
         const char* p = app->sim_dialog_path;
-        gp_dialog_answer(d, &p, p ? 1 : 0, NULL);
+        gp_dialog_answer(d, &p, p ? 1 : 0, app->sim_dialog_filter, NULL);
         free(app->sim_dialog_path);
         app->sim_dialog_path = NULL;
         return t;
@@ -113,10 +114,11 @@ gp_task gp_save_file_dialog(gp_ctx* cx, const gp_file_filter* filters, int nfilt
     return show(cx, true, filters, nfilters, start, false, done, data);
 }
 
-void gp_simulate_file_dialog(gp_app* app, const char* path)
+void gp_simulate_file_dialog(gp_app* app, const char* path, int filter)
 {
     free(app->sim_dialog_path);
     app->sim_dialog = true;
+    app->sim_dialog_filter = filter;
     app->sim_dialog_path = dup_or_null(path);
 }
 
