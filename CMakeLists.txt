@@ -187,7 +187,7 @@ endif()
 
 if(GPUIC_BUILD_TESTS)
   enable_testing()
-  # exec_test, fd_test, anim_test, window_test, autohide_test, fonts_test, lcd_test, input_test, list_test, observe_test and views_test open a window and need a display; the others do not.
+  # exec_test, fd_test, anim_test, window_test, autohide_test, close_test, fonts_test, lcd_test, input_test, list_test, observe_test and views_test open a window and need a display; the others do not.
   add_executable(cables_bench tests/cables_bench.c)   # not a test: a measurement (needs a display)
   target_link_libraries(cables_bench PRIVATE gpuic gpuic_deps)
   # On Windows every test starts with tests/compat.h (setenv, usleep).
@@ -208,7 +208,7 @@ if(GPUIC_BUILD_TESTS)
     endif()
     option(GPUIC_TEST_VULKAN "Run every test a second time with GPUIC_RENDERER=vulkan" ${_gpuic_has_vk})
   endif()
-  set(_gpuic_tests exec_test anim_test window_test autohide_test fonts_test lcd_test gfx_test gradient_test image_test svg_test svgx_test svgx2_test svgfont_test colr_test fswatch_test dialog_test box_test flex_test minwidth_test reveal_test track_test smooth_test bigdoc_test grapheme_test variations_test gamma_test touch_test sticky_test hlist_test hvlist_test border_style_test state_style_test paintshift_test cull_test host_test transform_test curve_test stroke_test xform2_test lstate_test layer_test effects_test shapes_test xform3d_test textscale_test svgrelease_test pointer_test emptyview_test wheel_test shutdown_test keys_test input_test ime_wrap_test dualcaret_test wrapedit_test lazywrap_test longline_test custom_test list_test vlist_test observe_test views_test)
+  set(_gpuic_tests exec_test anim_test window_test autohide_test fonts_test lcd_test gfx_test gradient_test image_test svg_test svgx_test svgx2_test svgfont_test colr_test fswatch_test dialog_test box_test flex_test minwidth_test reveal_test track_test smooth_test bigdoc_test grapheme_test variations_test gamma_test touch_test sticky_test hlist_test hvlist_test border_style_test state_style_test paintshift_test cull_test host_test transform_test curve_test stroke_test xform2_test lstate_test layer_test effects_test shapes_test xform3d_test textscale_test svgrelease_test pointer_test emptyview_test wheel_test shutdown_test close_test keys_test input_test ime_wrap_test dualcaret_test wrapedit_test lazywrap_test longline_test custom_test list_test vlist_test observe_test views_test)
   list(APPEND _gpuic_tests fd_test)
   if(NOT WIN32)
     list(APPEND _gpuic_tests text_test)

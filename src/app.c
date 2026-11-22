@@ -390,6 +390,9 @@ static void window_destroy(gp_app* app, gp_window* w)
         app->renderer->ops->window_gone(app->renderer, w);
     }
     gp_platform_close_window(app, w);
+    if(w->close_drop) {
+        w->close_drop(w->close_data);
+    }
     for(int b = 0; b < 3; b++) {
         gp_arena_release(w->capture[b].hold);
     }
@@ -425,7 +428,26 @@ void gp_quit(gp_app* app)
 
 void gp_window_on_close(gp_window* w)
 {
+    if(w->close_request && !w->closed) { /* (already closing: nothing to ask) */
+        gp_ctx cx = gp_ctx_for_window(w->app, w, w->root_view);
+        if(!w->close_request(gp_entity_get(w->app, w->root_view), &cx, w->close_data)) {
+            return;
+        }
+    }
     w->closed = true;
+}
+void gp_window_on_close_request(gp_window* w, gp_close_request_fn fn, void* data, gp_drop_fn drop)
+{
+    if(w->close_drop) {
+        w->close_drop(w->close_data);
+    }
+    w->close_request = fn;
+    w->close_data = data;
+    w->close_drop = drop;
+}
+void gp_simulate_close_request(gp_window* w)
+{
+    gp_window_on_close(w);
 }
 void gp_window_close(gp_window* w)
 {

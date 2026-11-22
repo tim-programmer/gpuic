@@ -1970,6 +1970,10 @@ public:
             gp_window_close(w_);
         }
     }
+    /** Asked when the user presses the window's close button (see gp_window_on_close_request): `f(Self&, Ctx) -> bool`, Self the root
+     *  view's state, with any subset of its parameters; true closes it, false keeps it open until close(). Replaces the last one. */
+    template <class F>
+    void on_close_request(F&& f) const;
     /** A ctx tied to this window, for work that should end with it (timers, animations, coroutines started with it are cancelled
      *  when the window closes) and for focus and scroll calls that act on it. */
     Ctx ctx(gp_entity e = GP_ENTITY_NULL) const
@@ -2441,6 +2445,22 @@ Task Ctx::load_image(const char* path, F&& f) const
     Task t(c_->app, gp_image_load_file_async(c_, path, &detail::image_tramp<D>, d));
     gp_task_on_drop(c_->app, t.raw(), &detail::drop_box<D>, d);
     return t;
+}
+namespace detail {
+template <class D>
+bool close_request_tramp(void* self, gp_ctx* cx, void* data)
+{
+    Ctx ctx(cx);
+    return call(*static_cast<D*>(data), self, ctx, cx);
+}
+} // namespace detail
+template <class F>
+void Window::on_close_request(F&& f) const
+{
+    using D = std::decay_t<F>;
+    if(w_) {
+        gp_window_on_close_request(w_, &detail::close_request_tramp<D>, detail::own<D>(std::forward<F>(f)), &detail::drop_box<D>);
+    }
 }
 template <class F>
 Task Ctx::open_file_dialog(std::initializer_list<gp_file_filter> filters, const char* start, bool many, F&& f) const

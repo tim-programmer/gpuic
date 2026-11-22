@@ -574,6 +574,15 @@ gp_ctx gp_ctx_for(gp_app* app, gp_entity entity); /* a ctx for use outside a cal
  * started with a plain gp_ctx_for ctx lives as long as the app, or its entity. */
 gp_ctx gp_ctx_for_window(gp_app* app, gp_window* window, gp_entity entity);
 void gp_window_close(gp_window* window); /* closes it at the next turn of the loop; the app ends with its last window */
+/* Asked when the user presses the window's close button (the window manager's, on any platform): true closes it as without one; false
+ * keeps it open, and the program asks its question ("Save changes?") and later calls gp_window_close itself, which never asks. `self` is
+ * the root view's state and cx is for the window and its root view. It is asked on every press, the program's question already showing
+ * included. `drop(data)` (may be NULL) runs when the callback is replaced (NULL fn: none, the default) or the window goes, so the callback
+ * must not replace itself. Not asked when the app ends (gp_quit, the platform's quit request such as Ctrl+C or the
+ * session ending, gp_app_free): its windows close without asking, and the program's own drop functions are the last chance to keep its
+ * data. A window embedded in a host (gp_window_options.parent) has no close button of its own: the host closes it, and it is not asked. */
+typedef bool (*gp_close_request_fn)(void* self, gp_ctx* cx, void* data);
+void gp_window_on_close_request(gp_window* window, gp_close_request_fn fn, void* data, gp_drop_fn drop);
 
 /* A handle to anything in flight: timer, animation, background job, coroutine. */
 typedef struct
@@ -830,6 +839,8 @@ const char* gp_app_data_folder(gp_app* app, const char* app_name);
 /* Tests: the next dialog opened is answered with `path` (NULL: cancelled) and `filter` (an index, or -1) instead of being shown, as if the
  * user had chosen them. */
 void gp_simulate_file_dialog(gp_app* app, const char* path, int filter);
+/* Tests: the user pressed the window's close button, handled at once as the platform's close event is (gp_window_on_close_request). */
+void gp_simulate_close_request(gp_window* window);
 
 /* ---- coroutines: async/await for C ------------------------------------------------------ */
 

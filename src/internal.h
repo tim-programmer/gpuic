@@ -1361,11 +1361,14 @@ struct gp_window
         float vx, vy;
         int64_t last_ns;
     } fling;
-    bool fade_job_pending;   /* a paint-only frame is requested for a fading scrollbar */
-    uint64_t autohide_timer; /* job: when the scrollbars that are showing start to fade */
+    bool fade_job_pending;             /* a paint-only frame is requested for a fading scrollbar */
+    uint64_t autohide_timer;           /* job: when the scrollbars that are showing start to fade */
     int64_t autohide_timer_due;
-    bool dirty_layout;       /* lay the tree out again without rebuilding it (an animation moved) */
+    bool dirty_layout;                 /* lay the tree out again without rebuilding it (an animation moved) */
     bool closed;
+    gp_close_request_fn close_request; /* gp_window_on_close_request: asked before the close button closes it */
+    void* close_data;
+    gp_drop_fn close_drop;
 };
 
 typedef struct

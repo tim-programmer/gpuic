@@ -692,6 +692,27 @@ static void test_state(Fix& f, App app)
     CHECK(t && std::string(t) == "child 42" && f.child.get(app)->renders > renders, "Entity::update then notify: \"%s\", %d renders", t ? t : "(null)", f.child.get(app)->renders);
     CHECK(app.get(f.child) == f.child.get(app) && static_cast<bool>(f.child), "typed access");
 
+    { // Window::on_close_request: a lambda with a capture, the root view's state and a Ctx that notifies; false keeps the window open
+        int asked = 0;
+        Entity<Child> cv = app.new_view<Child>();
+        Window w = app.open_window("cpp_test close", 100, 100, cv);
+        w.on_close_request([&asked](Child& c, Ctx cx) {
+            asked++;
+            c.value = 7;
+            cx.notify();
+            return false;
+        });
+        gp_sleep(g_co, 0.2);
+        int before = cv.get(app)->renders;
+        gp_simulate_close_request(w);
+        gp_sleep(g_co, 0.2);
+        CHECK(asked == 1 && cv.get(app)->value == 7 && cv.get(app)->renders > before, "on_close_request: asked %d, value %d, renders %d -> %d", asked, cv.get(app)->value, before, cv.get(app)->renders);
+        w.close();
+        gp_sleep(g_co, 0.2);
+        CHECK(asked == 1, "close() does not ask: %d", asked);
+        app.release(cv.id);
+    }
+
     // state with members that need construction and destruction
     CHECK(g_alive == 0, "nothing alive yet");
     {
