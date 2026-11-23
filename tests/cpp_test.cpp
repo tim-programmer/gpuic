@@ -375,7 +375,7 @@ Element Fix::render(Ctx)
         .child(hb(C1).on_layout([](gp_size sz) { g_layout_size = sz; g_layouts++; }))                                                                         // 9
         .child(hb(C1).with_animation("cpp-anim", animation(0), [](float t) { return style().w(60 + 17 * t); }))              // 10
         .child(hb(C1).with_animation("cpp-anim2", animation(0), [target = 91.f](float t) { return style().h(target * t); })) // 11
-        .child(child.element().w(80).h(14))                                                                                  // 12 (a view as a child)
+        .child(child.element())                                                                                              // 12 (a view as a child)
         .child(plain)                                                                                                        // 13 (given as an Entity)
         .child(div().w(60).h(14).child(text(std::to_string(n1 * 100 + n2))))                                                 // 14: the counters shown
         .child(div().w(60).h(30).flex_none().overflow_y_scroll().on_scroll([](Fix& s, gp_point o) { s.scrolls++; s.lastx = o.y; })                       // 15: scrolls
