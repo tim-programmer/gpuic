@@ -27,6 +27,11 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+# define strncasecmp _strnicmp
+#else
+# include <strings.h>
+#endif
 
 #define MAX_DEPTH    6 /* documents made from documents (a mask in a pattern in a mask ...) */
 #define MAX_PAT_TILE (2048 * 2048)
@@ -4626,14 +4631,67 @@ uint8_t* gp_svgx_render_doc(const char* doc, size_t len, int w, int h, float sca
 
 /* ---------------------------------------------------------------- glyphs of SVG fonts (OpenType 'SVG ') */
 
+static bool name_char(char c)
+{
+    return isalnum((unsigned char)c) || c == '_' || c == '-';
+}
+
+/* The text color in a value, in place (each replacement is shorter than what it replaces): currentColor and context-fill are it, context-stroke is none (text
+ * is not stroked here). True if there was any. */
+static bool text_color_in(char* d, uint32_t rgb)
+{
+    static const char* const keys[] = { "currentColor", "context-fill", "context-stroke" };
+    char hex[8];
+    snprintf(hex, sizeof hex, "#%06x", (unsigned)(rgb & 0xffffff));
+    bool any = false;
+    size_t o = 0;
+    for(size_t i = 0; d[i];) {
+        int k = 0;
+        bool starts = !i || !(name_char(d[i - 1]) || d[i - 1] == '#'); /* (a value, not part of a name: an id, a url(#...)) */
+        while(k < 3 && !(starts && strncasecmp(d + i, keys[k], strlen(keys[k])) == 0 && !name_char(d[i + strlen(keys[k])]))) {
+            k++;
+        }
+        if(k == 3) {
+            d[o++] = d[i++];
+            continue;
+        }
+        const char* to = k == 2 ? "none" : hex;
+        memcpy(d + o, to, strlen(to));
+        o += strlen(to);
+        i += strlen(keys[k]);
+        any = true;
+    }
+    d[o] = 0;
+    return any;
+}
+
+/* ... in every value of the document but the names (id, href) and in what <style> holds */
+static bool text_color_tree(xn* x, uint32_t rgb)
+{
+    bool any = x->text && text_color_in(x->text, rgb);
+    for(int i = 0; i < x->na; i++) {
+        if(strcmp(x->k[i], "id") != 0 && !strstr(x->k[i], "href")) {
+            any |= text_color_in(x->v[i], rgb);
+        }
+    }
+    for(int i = 0; i < x->nk; i++) {
+        any |= text_color_tree(x->kid[i], rgb);
+    }
+    return any;
+}
+
 /* The document of one glyph: the element with id glyph<gid> (the root itself, or something in it); the rest of what is drawn is moved into <defs>,
- * where what the glyph points at can still be found. The root's size is replaced by `root_attrs`. NULL if there is no such glyph. */
-static char* glyph_doc(const char* doc, size_t len, unsigned gid, const char* root_attrs, bool expand)
+ * where what the glyph points at can still be found. The root's size is replaced by `root_attrs`. With `used_fg`, the text color `rgb` is put in (and
+ * *used_fg says whether it was asked for). NULL if there is no such glyph. */
+static char* glyph_doc(const char* doc, size_t len, unsigned gid, const char* root_attrs, bool expand, uint32_t rgb, bool* used_fg)
 {
     xn* root = x_parse(doc, len);
     if(!root || !is(root, "svg")) {
         x_free(root);
         return NULL;
+    }
+    if(used_fg) {
+        *used_fg = text_color_tree(root, rgb);
     }
     char id[32];
     snprintf(id, sizeof id, "glyph%u", gid);
@@ -4685,7 +4743,7 @@ static char* glyph_doc(const char* doc, size_t len, unsigned gid, const char* ro
 /* The box of glyph `gid` in pixels at `sx` x `sy` pixels per font unit (y down, the origin on the baseline): left, top, right, bottom. */
 bool gp_svgx_glyph_box(const char* doc, size_t len, unsigned gid, float sx, float sy, float box[4])
 {
-    char* d = glyph_doc(doc, len, gid, "width='1' height='1' viewBox='0 0 1 1'", true);
+    char* d = glyph_doc(doc, len, gid, "width='1' height='1' viewBox='0 0 1 1'", true, 0, NULL);
     if(!d) {
         return false;
     }
@@ -4702,15 +4760,17 @@ bool gp_svgx_glyph_box(const char* doc, size_t len, unsigned gid, float sx, floa
     return box[2] > box[0] && box[3] > box[1];
 }
 
-/* Glyph `gid` drawn into a w x h picture whose top left is (left, top) in the pixels of gp_svgx_glyph_box: premultiplied RGBA, or NULL. */
-uint8_t* gp_svgx_glyph_render(const char* doc, size_t len, unsigned gid, float sx, float sy, int left, int top, int w, int h)
+/* Glyph `gid` drawn into a w x h picture whose top left is (left, top) in the pixels of gp_svgx_glyph_box, with `rgb` (0xrrggbb) as the text color (*used_fg:
+ * whether the glyph has any): premultiplied RGBA, or NULL. */
+uint8_t* gp_svgx_glyph_render(const char* doc, size_t len, unsigned gid, float sx, float sy, int left, int top, int w, int h, uint32_t rgb, bool* used_fg)
 {
+    *used_fg = false;
     if(w <= 0 || h <= 0 || !(sx > 0) || !(sy > 0)) {
         return NULL;
     }
     char attrs[256];
     snprintf(attrs, sizeof attrs, "width='%d' height='%d' viewBox='%g %g %g %g' preserveAspectRatio='none'", w, h, left / (double)sx, top / (double)sy, w / (double)sx, h / (double)sy);
-    char* d = glyph_doc(doc, len, gid, attrs, false);
+    char* d = glyph_doc(doc, len, gid, attrs, false, rgb, used_fg);
     if(!d) {
         return NULL;
     }

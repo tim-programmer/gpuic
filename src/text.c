@@ -12,8 +12,8 @@
  *   FreeType     rasterizes glyphs. Outline fonts go into an R8 coverage atlas (tinted by the text
  *                color); color bitmap fonts (CBDT emoji, with a single strike, and sbix ones) are
  *                downscaled with an area filter into an RGBA atlas and are never tinted. SVG glyphs
- *                are drawn by svgx.c, COLR glyphs (v1 and v0) by colr.c (in the text color where
- *                they ask for the foreground).
+ *                are drawn by svgx.c, COLR glyphs (v1 and v0) by colr.c (both in the text color where
+ *                they ask for it: currentColor and context-fill, palette entry 0xFFFF).
  *
  *   FriBidi      resolves bidirectional text (UAX #9): embedding levels per paragraph, then rules L1
  *                and L2. Reordering happens at the level of *runs* (same font, same level), and
@@ -2091,6 +2091,11 @@ static char* locale_language(void)
 #ifdef GP_HAVE_OTSVG
 /* ---------------------------------------------------------------- SVG fonts: FreeType asks these to size and draw a glyph of an 'SVG ' table */
 
+/* the text color the glyph being drawn is for (0xrrggbb), and whether its document used it: FreeType's hooks have no way to be told (main thread only, as
+ * the text system is) */
+static uint32_t g_svg_rgb;
+static bool g_svg_used_fg;
+
 static FT_Error svg_hook_init(FT_Pointer* state)
 {
     *state = NULL;
@@ -2149,7 +2154,7 @@ static FT_Error svg_hook_render(FT_GlyphSlot slot, FT_Pointer* state)
     if(!w || !h) {
         return 0;
     }
-    uint8_t* px = gp_svgx_glyph_render((const char*)d->svg_document, d->svg_document_length, slot->glyph_index, sx, sy, slot->bitmap_left, -slot->bitmap_top, w, h);
+    uint8_t* px = gp_svgx_glyph_render((const char*)d->svg_document, d->svg_document_length, slot->glyph_index, sx, sy, slot->bitmap_left, -slot->bitmap_top, w, h, g_svg_rgb, &g_svg_used_fg);
     if(!px) {
         return FT_Err_Invalid_Argument;
     }
@@ -3400,11 +3405,14 @@ bool gp_text_svg_fonts(void)
 #endif
 }
 
-/* A glyph of an SVG font: FreeType loads its document and our hooks draw it (BGRA, premultiplied), and it goes into the color atlas as RGBA. False if the glyph is not in
- * the 'SVG ' table (then it is drawn from its outline). */
-static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_size, gp_glyph_entry* e, bool* cache)
+/* A glyph of an SVG font: FreeType loads its document and our hooks draw it (BGRA, premultiplied), with `tint` (RGBA, red highest) as the text color its
+ * document may use (*used_fg: whether it did), and it goes into the color atlas as RGBA. False if the glyph is not in the 'SVG ' table (then it is drawn from its
+ * outline). */
+static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_size, uint32_t tint, gp_glyph_entry* e, bool* cache, bool* used_fg)
 {
 #ifdef GP_HAVE_OTSVG
+    g_svg_rgb = tint >> 8;
+    g_svg_used_fg = false;
     FT_Set_Char_Size(f->face, 0, (FT_F26Dot6)(px_size * 64.f + 0.5f), 72, 72);
     if(FT_Load_Glyph(f->face, glyph, FT_LOAD_COLOR | FT_LOAD_NO_HINTING) != 0 || f->face->glyph->format != FT_GLYPH_FORMAT_SVG) {
         return false;
@@ -3414,6 +3422,7 @@ static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_s
     }
     FT_GlyphSlot g = f->face->glyph;
     int w = (int)g->bitmap.width, h = (int)g->bitmap.rows, x, y;
+    *used_fg = g_svg_used_fg;
     if(w <= 0 || h <= 0) {
         return true; /* (nothing to draw: an empty entry) */
     }
@@ -3439,8 +3448,10 @@ static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_s
     (void)f;
     (void)glyph;
     (void)px_size;
+    (void)tint;
     (void)e;
     (void)cache;
+    (void)used_fg;
     return false;
 #endif
 }
@@ -3569,7 +3580,7 @@ gp_glyph_entry gp_text_glyph_tinted(gp_text_system* ts, int font_id, uint32_t gl
                 cache = false; /* atlas full: retried after the reset */
             }
         }
-    } else if(f->svg && svg_glyph(ts, f, glyph, px_size, &e, &cache)) {
+    } else if(f->svg && svg_glyph(ts, f, glyph, px_size, tint, &e, &cache, &used_fg)) {
         /* (a glyph of the 'SVG ' table, drawn into the color atlas) */
     } else if(f->colr && colr_glyph(ts, f, glyph, px_size, bin, tint, &e, &cache, &used_fg)) {
         /* (a COLR glyph, drawn by colr.c into the color atlas) */

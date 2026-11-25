@@ -4,7 +4,8 @@
 Units per em 1000, ascender 800. 'A' (glyph 1) and 'B' (glyph 2) have square outlines (what a renderer without SVG would draw) and color
 glyphs in ONE shared SVG document: A is red on its left half and blue on its right (x 0..300 and 300..600, y -800..0, y down from the
 baseline); B is a green square cut by a circle clip of radius 300 at (300, -400), drawn through a <use> of a shape in <defs>.
-'C' (glyph 3) has no SVG glyph. Needs fontTools."""
+'C' (glyph 3) has no SVG glyph. 'D' (glyph 4, a document of its own) is in the text color: context-fill on x 0..200, currentColor on 200..400,
+and red on 400..600 (a gradient with the id context-fill: a name, not the keyword) with a context-stroke 100 wide (none: text is not stroked). Needs fontTools."""
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import newTable
@@ -16,9 +17,9 @@ def square():
     return p.glyph()
 
 fb = FontBuilder(1000, isTTF=True)
-names = ['.notdef', 'A', 'B', 'C']
+names = ['.notdef', 'A', 'B', 'C', 'D']
 fb.setupGlyphOrder(names)
-fb.setupCharacterMap({0x41: 'A', 0x42: 'B', 0x43: 'C'})
+fb.setupCharacterMap({0x41: 'A', 0x42: 'B', 0x43: 'C', 0x44: 'D'})
 fb.setupGlyf({n: square() for n in names})
 fb.setupHorizontalMetrics({n: (600, 0) for n in names})
 fb.setupHorizontalHeader(ascent=800, descent=-200)
@@ -30,7 +31,11 @@ doc = ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1
        '<g id="glyph1"><rect y="-800" width="300" height="800" fill="#ff0000"/><rect x="300" y="-800" width="300" height="800" fill="#0000ff"/></g>'
        '<g id="glyph2" clip-path="url(#c)"><use xlink:href="#sq"/></g></svg>')
 svg = newTable('SVG ')
-svg.docList = [(doc, 1, 2)]
+doc_d = ('<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="context-fill"><stop stop-color="#ff0000"/></linearGradient></defs>'
+         '<g id="glyph4"><rect y="-800" width="200" height="800" fill="context-fill"/>'
+         '<rect x="200" y="-800" width="200" height="800" style="fill:currentColor"/>'
+         '<rect x="400" y="-800" width="200" height="800" fill="url(#context-fill)" stroke="context-stroke" stroke-width="100"/></g></svg>')
+svg.docList = [(doc, 1, 2), (doc_d, 4, 4)]
 fb.font['SVG '] = svg
 buf = io.BytesIO()
 fb.font.save(buf)

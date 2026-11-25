@@ -1,7 +1,8 @@
 /*
  * Color fonts with an 'SVG ' table: FreeType loads a glyph's document and the hooks text.c gives it draw it with svgx.c, into the color atlas.
  * The font (tests/svgfont_fixture.h, made by tools/gen_svg_font.py) has 'A' red on its left half and blue on its right, and 'B' a green square
- * cut to a circle by a clip, drawn through a <use> (both in one document, which also holds the other's glyph), and 'C' with no SVG glyph. At
+ * cut to a circle by a clip, drawn through a <use> (both in one document, which also holds the other's glyph), 'C' with no SVG glyph, and 'D' in
+ * the text color (context-fill, currentColor) beside red with a context-stroke (none). At
  * 100 px a font unit is 0.1 px: the atlas entries are checked against that geometry. No display needed.
  */
 #include "../src/internal.h"
@@ -55,9 +56,9 @@ int main(void)
     }
     int fam = gp_text_family(ts, "GpSvgTest");
     gp_glyph_pos g[8];
-    int n = gp_text_shape(ts, GP_FONT_SEL(fam, 400), 100.f, "ABC", 3, g, 8, NULL);
-    CHECK(n == 3 && g[0].glyph == 1 && g[1].glyph == 2 && g[2].glyph == 3, "ABC shapes to glyphs 1, 2, 3 of the font (%d: %u %u %u)", n, n > 0 ? g[0].glyph : 0, n > 1 ? g[1].glyph : 0, n > 2 ? g[2].glyph : 0);
-    if(n != 3) {
+    int n = gp_text_shape(ts, GP_FONT_SEL(fam, 400), 100.f, "ABCD", 4, g, 8, NULL);
+    CHECK(n == 4 && g[0].glyph == 1 && g[1].glyph == 2 && g[2].glyph == 3 && g[3].glyph == 4, "ABCD shapes to glyphs 1 to 4 of the font (%d)", n);
+    if(n != 4) {
         return 1;
     }
 
@@ -101,6 +102,19 @@ int main(void)
     ge = gp_text_glyph(ts, g[0].font, g[0].glyph, 20.f);
     atlas = gp_text_color_atlas(ts);
     CHECK(ge.color && ge.w >= 12 && ge.w <= 15 && rgba(at(3, -8), 255, 0, 0) && rgba(at(9, -8), 0, 0, 255), "at 20 px A is 12 px wide and still red and blue (%.0f)", (double)ge.w);
+
+    /* D: the text color where its document asks for it, one entry per color; A, which does not, has one for all */
+    ge = gp_text_glyph(ts, g[3].font, g[3].glyph, 100.f);
+    atlas = gp_text_color_atlas(ts);
+    gp_glyph_entry black = ge;
+    CHECK(ge.color && rgba(at(10, -40), 0, 0, 0) && rgba(at(30, -40), 0, 0, 0) && rgba(at(50, -40), 255, 0, 0), "D is black (the default text color) where it asks for the text color, red beside");
+    CHECK(rgba(at(41, -40), 255, 0, 0) && rgba(at(50, -79), 255, 0, 0), "and its context-stroke is none");
+    ge = gp_text_glyph_tinted(ts, g[3].font, g[3].glyph, 100.f, 0, 0, (gp_color){ 0, 1, 0, 1 });
+    atlas = gp_text_color_atlas(ts);
+    CHECK(ge.u != black.u || ge.v != black.v, "in green text it is another entry");
+    CHECK(rgba(at(10, -40), 0, 255, 0) && rgba(at(30, -40), 0, 255, 0) && rgba(at(50, -40), 255, 0, 0), "green where it asks for the text color (context-fill, currentColor), still red beside");
+    gp_glyph_entry a = gp_text_glyph(ts, g[0].font, g[0].glyph, 100.f), ag = gp_text_glyph_tinted(ts, g[0].font, g[0].glyph, 100.f, 0, 0, (gp_color){ 0, 1, 0, 1 });
+    CHECK(a.u == ag.u && a.v == ag.v, "A, which does not ask for it, is the same entry in any text color");
 
     gp_text_system_free(ts);
     printf(failures ? "svgfont_test: %d FAILURE(S)\n" : "svgfont_test: all checks passed\n", failures);

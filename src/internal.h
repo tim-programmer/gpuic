@@ -726,7 +726,7 @@ uint8_t* gp_svgx_render_doc(const char* doc, size_t len, int w, int h, float sca
 /* a glyph of an SVG font (the element glyph<gid> of the font's document), for FreeType's SVG hooks: its box in pixels at sx x sy pixels per font unit, and
  * drawn into a picture with that box's top left at (left, top) */
 bool gp_svgx_glyph_box(const char* doc, size_t len, unsigned gid, float sx, float sy, float box[4]);
-uint8_t* gp_svgx_glyph_render(const char* doc, size_t len, unsigned gid, float sx, float sy, int left, int top, int w, int h);
+uint8_t* gp_svgx_glyph_render(const char* doc, size_t len, unsigned gid, float sx, float sy, int left, int top, int w, int h, uint32_t rgb, bool* used_fg);
 
 /* Decoding (image.c), also used off the main thread: straight RGBA8 -> premultiplied, in place. */
 uint8_t* gp_image_decode(const void* data, size_t size, int* w, int* h); /* malloc'd premultiplied RGBA, or NULL */

@@ -1366,7 +1366,7 @@ Text in any script just works if a font for it is installed: there is nothing to
 * **Emoji.** Emoji-presentation codepoints, and anything followed by U+FE0F, go to a *color* font
   (fontconfig's first match for an emoji is usually a monochrome DejaVu glyph, which is why
   this is explicit). Color glyphs are premultiplied RGBA in a second atlas and are drawn as they
-  are: never tinted by the text color (except a COLR glyph's foreground, below), only faded by opacity. A CBDT font like Noto Color Emoji has
+  are: never tinted by the text color (except where a COLR or SVG glyph asks for it, below), only faded by opacity. A CBDT font like Noto Color Emoji has
   a single 109 px bitmap strike, so it is downscaled with an area filter to the target size; an sbix font (Apple Color Emoji) the same, from
   its strike nearest above that size; a COLR font is drawn at the size asked for (below).
 * **Sequences.** The itemizer keeps ZWJ, variation selectors, combining marks, skin tones and the
@@ -1422,7 +1422,9 @@ Text in any script just works if a font for it is installed: there is nothing to
   Color Emoji holds; FreeType counts such a font as bitmaps only, so a glyph the strikes lack draws nothing) and for **OpenType SVG** fonts: when FreeType is built
   with `FT_CONFIG_OPTION_SVG` (2.12 and later; `gp_text_svg_fonts()` says), gpuic gives it renderer hooks that draw a glyph's element
   (`id="glyphN"`, cut out of the font's document, which may hold many) with the SVG code above at the size asked for, into the color atlas;
-  a glyph the table lacks is its outline (`tests/svgfont_test.c`, with a font made by `tools/gen_svg_font.py`). A color font is used for the text it covers
+  a glyph the table lacks is its outline (`tests/svgfont_test.c`, with a font made by `tools/gen_svg_font.py`). A glyph's `currentColor` and
+  `context-fill` are the text color (its red, green and blue: nanosvg has no alpha in a color, so a translucent text color does not fade them), and
+  `context-stroke` is none, since text here is not stroked; a glyph that uses them is cached once per color, as a COLR glyph that uses its foreground is. A color font is used for the text it covers
   when the app names its family; otherwise color fonts serve emoji only. **COLR** fonts, v1 (the vector Noto Color Emoji, say) and v0 (layers of glyphs in one color each), are drawn by
   `src/colr.c`: FreeType reads a glyph's paint graph (or its v0 layers) and colr.c paints it in software into the color atlas, at the size asked for and on the
   subpixel quarter: layers, solid colors, linear, two-point radial and sweep gradients with pad, repeat and reflect, every transform, glyph
