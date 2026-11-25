@@ -8,6 +8,7 @@
  * Needs a display, at scale 1.
  */
 #include "../src/internal.h"
+#include "cache_check.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -94,36 +95,18 @@ static uint8_t* frame(void)
 
 static unsigned long base_shifts, base_misses; /* the counters before the last scroll: the frames drawn on the way count too */
 
-static void drop_painted_copies(void)
+/* the frame as the cache gives it, and then as a full paint gives it: how many bytes differ (-1: no frame); the counters are the cached frame's */
+static unsigned long g_shifts, g_misses;
+static void count(void)
 {
-    gp_vviews* t = &win()->views;
-    for(size_t i = 0; i < t->cap; i++) { /* (a hash table: the slots in use are anywhere) */
-        t->v[i].chunk_valid = false;
-    }
+    g_shifts = app->stat_paint_shifts - base_shifts;
+    g_misses = app->stat_paint_misses - base_misses;
 }
-
-/* the frame as the cache gives it, and then as a full paint gives it: how many bytes differ (-1: no frame) */
 static long cache_vs_fresh(unsigned long* shifts, unsigned long* misses)
 {
-    uint8_t* a = frame();
-    if(!a) {
-        return -1;
-    }
-    *shifts = app->stat_paint_shifts - base_shifts;
-    *misses = app->stat_paint_misses - base_misses;
-    size_t n = (size_t)app->capture_w * (size_t)app->capture_h * 3;
-    uint8_t* copy = malloc(n);
-    memcpy(copy, a, n);
-    drop_painted_copies();
-    uint8_t* b = frame();
-    long diff = -1;
-    if(b) {
-        diff = 0;
-        for(size_t i = 0; i < n; i++) {
-            diff += copy[i] != b[i];
-        }
-    }
-    free(copy);
+    long diff = cached_vs_full(win(), frame, 0, count);
+    *shifts = g_shifts;
+    *misses = g_misses;
     return diff;
 }
 
@@ -158,7 +141,7 @@ static void run(void)
             wait_draws(2);
             scroll_to(0, 0);
             frame();
-            drop_painted_copies();
+            drop_painted_copies(win());
             frame();
         }
         /* painted copies exist now: scroll by whole pixels */
@@ -172,11 +155,11 @@ static void run(void)
             } else if(k == 3) {
                 CHECK(shifts == 0 && misses >= 3, "%s: painted again, not moved (%lu shifted, %lu painted)", what, shifts, misses);
             }
-            frame();               /* leaves the copies made again by the full paint */
+            frame();                    /* leaves the copies made again by the full paint */
         }
-        if(k == 2) {               /* further than the margin around what is painted: lines that were skipped come into view, so it is painted, not moved */
+        if(k == 2) {                    /* further than the margin around what is painted: lines that were skipped come into view, so it is painted, not moved */
             scroll_to(0, 0);
-            drop_painted_copies(); /* (painted here, with what is below the scroller skipped) */
+            drop_painted_copies(win()); /* (painted here, with what is below the scroller skipped) */
             frame();
             scroll_to(0, 60);
             diff = cache_vs_fresh(&shifts, &misses);
@@ -229,7 +212,7 @@ static void nested(void)
     gp_app_notify(app);
     wait_draws(2);
     scroll_to(0, 0);
-    drop_painted_copies();
+    drop_painted_copies(win());
     frame();       /* both painted here, the inner one's lower lines skipped */
     gp_ctx c = gp_ctx_for(app, rows[0]);
     gp_notify(&c); /* the outer one renders and paints again; the inner one is reused */
@@ -252,7 +235,7 @@ static void hover_after_move(void)
     gp_simulate_mouse(app, GP_SIM_MOVE, 100, 120, 0, 0);
     wait_draws(2);
     scroll_to(0, 40);
-    drop_painted_copies();
+    drop_painted_copies(win());
     frame();
     scroll_to(0, 20);                                    /* row 3 at 82..116, still away from the mouse: moved */
     frame();

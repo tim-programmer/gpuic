@@ -2129,8 +2129,7 @@ Roughly in the order I'd tackle them:
 6. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
    frame, so only worth it if a real app shows it): a cached view whose own scroller moves (its visible part), one moved while it holds an
    offscreen layer (an opacity group, a filter) or a transform, and one turned by a transform of its own while the mouse is in the window.
-   A scene that changes is sent to the GPU whole (only an unchanged one is not sent). The tests that compare cached frames with full ones
-   each carry their own helpers for it, which is how two of them came to drop only part of the cached copies: one shared header would do.
+   A scene that changes is sent to the GPU whole (only an unchanged one is not sent).
 7. Coroutines under AddressSanitizer: their stack switches are not announced to it (`__sanitizer_start_switch_fiber` /
    `__sanitizer_finish_switch_fiber`), which can make it report falsely about a coroutine's stack. Nothing has been reported (the sanitizer
    builds pass); worth doing if something is. Their stack is 1 MB there (256 KB elsewhere), since it pads every frame.

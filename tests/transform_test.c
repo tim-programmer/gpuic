@@ -7,6 +7,7 @@
  * jumped). Needs a display, at scale 1.
  */
 #include "../src/internal.h"
+#include "cache_check.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -310,47 +311,8 @@ static void run(void)
         g_angle = angles[i];
         gp_app_notify(app);
         gp_sleep(co_, 0.05);
-        uint8_t* a = frame();
-        if(!a) {
-            continue;
-        }
-        size_t n = (size_t)app->capture_w * (size_t)app->capture_h * 3;
-        uint8_t* copy = malloc(n);
-        memcpy(copy, a, n);
-        gp_vviews* t = &win()->views;
-        for(size_t k = 0; k < t->cap; k++) {
-            t->v[k].chunk_valid = false;
-        }
-        uint8_t* b = frame();
-        long diff = b ? 0 : -1;
-        for(size_t k = 0; b && k < n; k++) {
-            diff += copy[k] != b[k];
-        }
-        if(diff && getenv("TRANSFORM_DUMP")) {
-            int x0 = 9999, y0 = 9999, x1 = -1, y1 = -1;
-            for(int yy = 0; yy < app->capture_h; yy++) {
-                for(int xx = 0; xx < app->capture_w; xx++) {
-                    size_t q = ((size_t)yy * (size_t)app->capture_w + (size_t)xx) * 3;
-                    if(copy[q] != b[q] || copy[q + 1] != b[q + 1] || copy[q + 2] != b[q + 2]) {
-                        if(xx < x0) {
-                            x0 = xx;
-                        }
-                        if(xx > x1) {
-                            x1 = xx;
-                        }
-                        if(yy < y0) {
-                            y0 = yy;
-                        }
-                        if(yy > y1) {
-                            y1 = yy;
-                        }
-                    }
-                }
-            }
-            fprintf(stderr, "angle %g: differing pixels in x %d..%d y %d..%d\n", (double)angles[i], x0, x1, y0, y1);
-        }
+        long diff = cached_vs_full(win(), frame, 0, NULL);
         CHECK(diff == 0, "a cached view under a parent turned %.1f degrees: %ld bytes differ from a full paint", (double)angles[i], diff);
-        free(copy);
     }
 
     /* 10 again, turned by an animation: the cached view is not rebuilt, only the angle above it changes */
@@ -359,30 +321,13 @@ static void run(void)
     gp_sleep(co_, 0.05);
     for(int k = 0; k < 4; k++) {
         if(k) {
-            jump_by(1700);                /* of 10000 s: 61 degrees a step */
+            jump_by(1700);                                  /* of 10000 s: 61 degrees a step */
         }
         gp_sleep(co_, 0.08);
-        gp_debug_anim_clock(gp_now_ns()); /* the two frames compared show one moment of the turn, however long drawing them takes */
-        uint8_t* a = frame();
-        if(!a) {
-            gp_debug_anim_clock(0);
-            continue;
-        }
-        size_t n = (size_t)app->capture_w * (size_t)app->capture_h * 3;
-        uint8_t* copy = malloc(n);
-        memcpy(copy, a, n);
-        gp_vviews* t = &win()->views;
-        for(size_t q = 0; q < t->cap; q++) {
-            t->v[q].chunk_valid = false;
-        }
-        uint8_t* b = frame();
+        gp_debug_anim_clock(gp_now_ns());                   /* the two frames compared show one moment of the turn, however long drawing them takes */
+        long diff = cached_vs_full(win(), frame, 90, NULL); /* (a copy replayed under the turn composes its matrices in another order than a full paint: a few edge bytes round apart; a stale copy differs by a lot) */
         gp_debug_anim_clock(0);
-        long diff = b ? 0 : -1; /* (a copy replayed under the turn composes its matrices in another order than a full paint: a few edge bytes round apart; a stale copy differs by a lot) */
-        for(size_t q = 0; b && q < n; q++) {
-            diff += abs((int)copy[q] - (int)b[q]) > 90;
-        }
         CHECK(diff == 0, "a cached view under an animated turn (step %d): %ld bytes differ strongly from a full paint", k, diff);
-        free(copy);
     }
     g_anim2_on = false;
     gp_app_notify(app);
