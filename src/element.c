@@ -181,6 +181,7 @@ enum {
     M_PERSP,
     M_PERSP_ORIGIN,
     M_BACKFACE,
+    M_PRESERVE_3D,
     M_KEY,
     M_ON_HOVER,
 };
@@ -1336,6 +1337,10 @@ gp_node* gp_backface_hidden(void)
 {
     return mod_f(M_BACKFACE, 1);
 }
+gp_node* gp_preserve_3d(void)
+{
+    return mod_f(M_PRESERVE_3D, 1);
+}
 static uint64_t key_hash(const char* k)
 {
     uint64_t h = 1469598103934665603ull;
@@ -2081,6 +2086,10 @@ static void apply_mod(gp_el* el, const gp_mod* m)
         case M_BACKFACE:
             s->backface_hidden = true;
             break;
+        case M_PRESERVE_3D:
+            s->preserve_3d = true;
+            s->has_xf = true; /* (what is in it goes through the 3D context's maps) */
+            break;
         case M_KEY:
             el->key = m->id;
             break;
@@ -2652,26 +2661,24 @@ typedef struct
     gp_point q;
 } hit_geo;
 
-static bool hit_geometry(gp_el* n, float ox, float oy, rect clip, gp_point p, gp_affine* fwd, bool* moved, hit_geo* g)
+static bool hit_geometry(gp_el* n, float ox, float oy, rect clip, gp_point p, gp_xform* t, hit_geo* g)
 {
     float x = ox + n->pos.x, y = oy + n->pos.y;
     g->x = x;
     g->y = y;
     g->b = (rect){ x, y, x + n->size.w, y + n->size.h };
-    if(n->style.has_xf) {
-        *fwd = gp_aff_mul(*moved ? *fwd : gp_aff_identity(), gp_el_affine(n, x, y));
-        *moved = true;
-        if(gp_el_behind(n, *fwd, x, y) || (n->style.backface_hidden && gp_el_backfacing(n, *fwd, x, y))) {
-            return false; /* behind the viewer, or turned away: not there for the pointer either */
-        }
+    bool turned = n->style.has_xf || t->members;
+    gp_xform_enter(t, n, x, y);
+    if(turned && (gp_el_behind(n, t->m, x, y) || (n->style.backface_hidden && gp_el_backfacing(n, t->m, x, y)))) {
+        return false; /* behind the viewer, or turned away: not there for the pointer either */
     }
-    g->q = *moved ? gp_aff_apply(gp_aff_inverse(*fwd), p) : p;
+    g->q = t->moved ? gp_aff_apply(gp_aff_inverse(t->m), p) : p;
     g->child_clip = clip;
     g->cx = x - n->scroll.x; /* children live in scrolled space */
     g->cy = y - n->scroll.y;
     if(n->style.overflow_hidden || n->style.overflow_x_scroll || n->style.overflow_y_scroll) {
         rect box = g->b;
-        if(!*moved || aff_box(*fwd, g->b, &box)) {
+        if(!t->moved || aff_box(t->m, g->b, &box)) {
             g->child_clip.x0 = fmaxf(clip.x0, box.x0);
             g->child_clip.y0 = fmaxf(clip.y0, box.y0);
             g->child_clip.x1 = fminf(clip.x1, box.x1);
@@ -2687,40 +2694,133 @@ static bool hit_own(const gp_el* n, const hit_geo* g, rect clip, gp_point p)
     return rect_has(clip, p) && rect_has(g->b, g->q) && (n->kind != GP_EL_CURVE || gp_curve_hit(n, g->q.x - g->x, g->q.y - g->y));
 }
 
-static bool hit_rec(gp_el* n, float ox, float oy, rect clip, gp_point p, gp_hit_kind kind,
-    uint64_t path, gp_hit* out, gp_affine fwd, bool moved)
+static bool hit_rec(gp_el* n, float ox, float oy, rect clip, gp_point p, gp_hit_kind kind, uint64_t path, gp_hit* out, gp_xform t);
+
+static bool hit_self(gp_el* n, const hit_geo* g, rect clip, gp_point p, gp_hit_kind kind, uint64_t path, gp_hit* out)
 {
-    hit_geo g;
-    if(n->path) {
-        path = n->path; /* (what layout knows it by: its place, or its key) */
-    }
-    if(!hit_geometry(n, ox, oy, clip, p, &fwd, &moved, &g)) {
-        return false;
-    }
-    if(n->sticky && hit_rec(n->sticky, g.x, g.y, g.child_clip, p, kind, (path ^ 0x57ac4ull) * 1099511628211ull, out, fwd, moved)) {
-        return true; /* a pinned header is above the rows */
-    }
-    for(uint32_t i = n->nchildren; i-- > 0;) {
-        uint64_t cp = (path ^ (i + 1)) * 1099511628211ull;
-        if(hit_rec(n->children[i], g.cx, g.cy, g.child_clip, p, kind, cp, out, fwd, moved)) {
-            return true;
-        }
-    }
-    if(has_handler(n, kind) && !(g_hit_nskip && skipped(path)) && hit_own(n, &g, clip, p)) {
+    if(has_handler(n, kind) && !(g_hit_nskip && skipped(path)) && hit_own(n, g, clip, p)) {
         out->el = n;
         out->path = path;
-        out->ox = g.x;
-        out->oy = g.y;
-        out->qx = g.q.x;
-        out->qy = g.q.y;
+        out->ox = g->x;
+        out->oy = g->y;
+        out->qx = g->q.x;
+        out->qy = g->q.y;
         return true;
     }
     return false;
 }
 
+/* A 3D context (gp_preserve_3d): its planes, each an element's own box (an element whose children are in it) or all of a flat one, nearest the viewer where the
+ * pointer is first. */
+typedef struct
+{
+    gp_el* n;
+    bool own;
+    hit_geo g;    /* own: where it is */
+    rect clip;
+    uint64_t path;
+    gp_xform t;   /* the parent's (own: its own) */
+    float ox, oy; /* (not own) where its parent lays it out from */
+    double depth;
+    size_t order;
+} hit3;
+typedef struct
+{
+    hit3* e;
+    size_t n, cap;
+} hit3_list;
+
+static void hit3_add(hit3_list* l, hit3 e)
+{
+    if(l->n == l->cap) {
+        l->cap = l->cap * 2 + 16;
+        l->e = realloc(l->e, l->cap * sizeof *l->e);
+        if(!l->e) {
+            abort();
+        }
+    }
+    e.order = l->n;
+    l->e[l->n++] = e;
+}
+
+static void hit3_collect(gp_el* n, const hit_geo* g, rect clip, gp_point p, uint64_t path, const gp_xform* t, hit3_list* l)
+{
+    hit3 own = { n, true, *g, clip, path, *t, 0, 0, 0, 0 };
+    if(gp_xform_depth(t, p, &own.depth)) {
+        hit3_add(l, own);
+    }
+    for(uint32_t i = 0; i < n->nchildren; i++) {
+        gp_el* c = n->children[i];
+        uint64_t cp = c->path ? c->path : (path ^ (i + 1)) * 1099511628211ull;
+        gp_xform ct = *t;
+        hit_geo cg;
+        if(!hit_geometry(c, g->cx, g->cy, g->child_clip, p, &ct, &cg)) {
+            continue;
+        }
+        if(ct.members) {
+            hit3_collect(c, &cg, g->child_clip, p, cp, &ct, l);
+            continue;
+        }
+        hit3 e = { c, false, cg, g->child_clip, cp, *t, g->cx, g->cy, 0, 0 };
+        if(gp_xform_depth(&ct, p, &e.depth)) {
+            hit3_add(l, e);
+        }
+    }
+}
+
+static int hit3_cmp(const void* a, const void* b)
+{
+    const hit3 *x = a, *y = b;
+    if(x->depth != y->depth) {
+        return x->depth > y->depth ? -1 : 1;               /* nearest first */
+    }
+    return x->order > y->order ? -1 : x->order < y->order; /* (one plane: the later painted is on top) */
+}
+
+static bool hit_context(gp_el* n, const hit_geo* g, rect clip, gp_point p, gp_hit_kind kind, uint64_t path, gp_hit* out, const gp_xform* t)
+{
+    hit3_list l = { 0 };
+    hit3_collect(n, g, clip, p, path, t, &l);
+    if(l.n) {
+        qsort(l.e, l.n, sizeof *l.e, hit3_cmp);
+    }
+    bool hit = false;
+    for(size_t i = 0; i < l.n && !hit; i++) {
+        const hit3* e = &l.e[i];
+        hit = e->own ? hit_self(e->n, &e->g, e->clip, p, kind, e->path, out) : hit_rec(e->n, e->ox, e->oy, e->clip, p, kind, e->path, out, e->t);
+    }
+    free(l.e);
+    return hit;
+}
+
+static bool hit_rec(gp_el* n, float ox, float oy, rect clip, gp_point p, gp_hit_kind kind, uint64_t path, gp_hit* out, gp_xform t)
+{
+    hit_geo g;
+    bool in_parents = t.members;
+    if(n->path) {
+        path = n->path; /* (what layout knows it by: its place, or its key) */
+    }
+    if(!hit_geometry(n, ox, oy, clip, p, &t, &g)) {
+        return false;
+    }
+    if(t.members && !in_parents) {
+        return hit_context(n, &g, clip, p, kind, path, out, &t);
+    }
+    if(n->sticky && hit_rec(n->sticky, g.x, g.y, g.child_clip, p, kind, (path ^ 0x57ac4ull) * 1099511628211ull, out, t)) {
+        return true; /* a pinned header is above the rows */
+    }
+    for(uint32_t i = n->nchildren; i-- > 0;) {
+        uint64_t cp = (path ^ (i + 1)) * 1099511628211ull;
+        if(hit_rec(n->children[i], g.cx, g.cy, g.child_clip, p, kind, cp, out, t)) {
+            return true;
+        }
+    }
+    return hit_self(n, &g, clip, p, kind, path, out);
+}
+
 /* gp_on_hover: whether the pointer is in `n` or in anything in it; the elements with a handler that it is in go to `out`, innermost first. A subtree
  * with no handler is looked into only when an element above has one (`all`: what it is in counts for that one). */
-static bool hover_rec(gp_el* n, float ox, float oy, rect clip, gp_point p, uint64_t path, gp_affine fwd, bool moved, bool all, gp_hover_set* out)
+static bool hover_rec(gp_el* n, float ox, float oy, rect clip, gp_point p, uint64_t path, gp_xform t, bool all, gp_hover_set* out)
 {
     if(!all && !(n->sub_flags & GP_SUB_ON_HOVER) && !n->sticky && n->kind != GP_EL_LIST) {
         return false; /* (a list's rows are not in its flags) */
@@ -2729,16 +2829,16 @@ static bool hover_rec(gp_el* n, float ox, float oy, rect clip, gp_point p, uint6
     if(n->path) {
         path = n->path;
     }
-    if(!hit_geometry(n, ox, oy, clip, p, &fwd, &moved, &g)) {
+    if(!hit_geometry(n, ox, oy, clip, p, &t, &g)) {
         return false;
     }
     bool mine = n->on_hover.fn != NULL, in = false;
     all |= mine;
     if(n->sticky) {
-        in |= hover_rec(n->sticky, g.x, g.y, g.child_clip, p, (path ^ 0x57ac4ull) * 1099511628211ull, fwd, moved, all, out);
+        in |= hover_rec(n->sticky, g.x, g.y, g.child_clip, p, (path ^ 0x57ac4ull) * 1099511628211ull, t, all, out);
     }
     for(uint32_t i = n->nchildren; i-- > 0;) {
-        in |= hover_rec(n->children[i], g.cx, g.cy, g.child_clip, p, (path ^ (i + 1)) * 1099511628211ull, fwd, moved, all, out);
+        in |= hover_rec(n->children[i], g.cx, g.cy, g.child_clip, p, (path ^ (i + 1)) * 1099511628211ull, t, all, out);
     }
     if(!in && all) {
         in = hit_own(n, &g, clip, p);
@@ -2763,7 +2863,7 @@ void gp_hover_collect(gp_el* root, gp_point p, gp_hover_set* out)
         return;
     }
     rect everything = { -1e9f, -1e9f, 1e9f, 1e9f };
-    hover_rec(root, 0, 0, everything, p, 14695981039346656037ull, gp_aff_identity(), false, false, out);
+    hover_rec(root, 0, 0, everything, p, 14695981039346656037ull, (gp_xform){ .m = gp_aff_identity() }, false, out);
 }
 
 bool gp_hit_test_skipping(gp_el* root, gp_point p, gp_hit_kind kind, gp_hit* out, const uint64_t* skip, int nskip)
@@ -2782,5 +2882,5 @@ bool gp_hit_test(gp_el* root, gp_point p, gp_hit_kind kind, gp_hit* out)
         return false;
     }
     rect everything = { -1e9f, -1e9f, 1e9f, 1e9f };
-    return hit_rec(root, 0, 0, everything, p, kind, 14695981039346656037ull, out, gp_aff_identity(), false);
+    return hit_rec(root, 0, 0, everything, p, kind, 14695981039346656037ull, out, (gp_xform){ .m = gp_aff_identity() });
 }

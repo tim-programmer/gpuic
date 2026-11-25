@@ -13,7 +13,7 @@ layout(location=9) in vec4 a_s2;
 layout(location=10) in vec4 a_bsty;
 layout(location=11) in vec4 a_xf0;  // the transform: (a - 1, b, c, d - 1)
 layout(location=12) in vec4 a_xf1;  // (tx, ty, g, h)
-layout(location=13) in vec4 a_xf2;  // (w1, -, -, -): w = g x + h y + 1 + w1 (all 0: no perspective)
+layout(location=13) in vec4 a_xf2;  // (w1, cuts, -, -): w = g x + h y + 1 + w1 (all 0: no perspective); the lines it is cut along (quad.frag)
 #ifdef VULKAN
 layout(push_constant) uniform Push { vec2 u_viewport; float u_scale; float u_gamma; };
 #define gl_VertexID gl_VertexIndex

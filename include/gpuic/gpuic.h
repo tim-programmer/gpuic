@@ -1629,8 +1629,8 @@ gp_node* gp_transform_origin(float fx, float fy);
  * viewer, a positive gp_rotate_x its bottom), moved toward the viewer (gp_translate_z), and seen in perspective, either its own (gp_transform_perspective(d): as CSS's
  * perspective() at the end of the transform list) or its parent's: gp_perspective(d) on a parent (CSS's perspective property) puts every child's transform in perspective
  * from the point gp_perspective_origin(fx, fy) of the parent's box (default its middle) at the distance d. The order, about the transform origin: skew, scale, rotate_x,
- * rotate_y, rotate (about z), translate (x, y and z), then the perspective. Nested 3D transforms are flattened at each element, as in CSS's default (no preserve-3d: no
- * depth sorting between siblings); what is in the element is drawn on its plane, text and images included. Without a perspective a turn about x or y only foreshortens.
+ * rotate_y, rotate (about z), translate (x, y and z), then the perspective. Nested 3D transforms are flattened at each element, as in CSS's default; what is in the
+ * element is drawn on its plane, text and images included. Without a perspective a turn about x or y only foreshortens.
  * The pointer follows: it lands where the turned element is seen. A part that would be at or behind the viewer is not drawn. An overflow clip inside an element in
  * perspective does not clip (as at an angle). gp_backface_hidden(): seen from behind (turned past 90 degrees), the element and what is in it are not drawn or hit
  * (a card's two faces, one turned 180 degrees). */
@@ -1641,6 +1641,12 @@ gp_node* gp_transform_perspective(float px);
 gp_node* gp_perspective(float px);
 gp_node* gp_perspective_origin(float fx, float fy);
 gp_node* gp_backface_hidden(void);
+/* CSS's transform-style: preserve-3d. The element's children are not flattened into it: they, and the children of those of them that preserve 3D too, are planes in
+ * one 3D space with the element (its "3D context"), each with its transforms (and the perspectives of the elements above it in the context, so a perspective reaches
+ * grandchildren) multiplied together, drawn nearest last wherever they are, and cut where they go through each other; the pointer lands on the nearest one where it
+ * is. A child that does not preserve 3D is a plane with what is in it flattened onto it. As in CSS, what has to flatten an element does: an overflow clip or
+ * scroller, a group opacity below 1, filters, a blend mode, a mask (it is then a flat plane of the context it is in). */
+gp_node* gp_preserve_3d(void);
 /* What the element is known by among its siblings, instead of its place among them (React's key): its hover, pressed and focus layout states, a scroller's offset and
  * the like follow it when siblings before it come and go. An element that tracks focus (gp_track_focus) is known by its focus already. Unique among siblings. */
 gp_node* gp_key(const char* key);

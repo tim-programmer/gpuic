@@ -32,6 +32,8 @@ typedef struct
     int depth;
     size_t lbegin[GP_MAX_LAYERS];
     float lbox[GP_MAX_LAYERS][4];
+    gp_xform x3;        /* the 3D context in force (its m and moved are xf and has_xf above) */
+    struct c3_list* c3; /* the planes of the context being painted */
 } paint_ctx;
 
 void gp_scene_push(gp_scene* s, const gp_instance* i)
@@ -49,6 +51,7 @@ void gp_scene_push(gp_scene* s, const gp_instance* i)
 void gp_scene_clear(gp_scene* s)
 {
     s->len = 0;
+    s->ncuts = 0;
 }
 
 static rect rect_isect(rect a, rect b)
@@ -348,6 +351,446 @@ gp_affine gp_el_affine(const gp_el* n, float x, float y)
     gp_m3_mul(F, Tin, R);
     gp_m3_mul(Tout, R, R2);
     return gp_aff_from(R2);
+}
+
+/* ---------------------------------------------------------------- 3D contexts (gp_preserve_3d) */
+
+/* M flattened onto the plane: its rows and columns of x, y and w (what a plane z = 0 becomes on the screen) */
+static gp_affine gp_m4_flatten(const double M[4][4])
+{
+    double F[3][3] = {
+        { M[0][0], M[0][1], M[0][3] },
+        { M[1][0], M[1][1], M[1][3] },
+        { M[3][0], M[3][1], M[3][3] }
+    };
+    return gp_aff_from(F);
+}
+
+/* the element's transform as a 4 x 4 matrix of layout coordinates, with its parent's perspective (gp_el_affine before it is flattened) */
+static void gp_el_m4(const gp_el* n, float x, float y, double M[4][4])
+{
+    const gp_style* s = &n->style;
+    const gp_el* p = n->parent;
+    double cx = x + n->size.w * s->xf_ox, cy = y + n->size.h * s->xf_oy;
+    double R[4][4];
+    gp_style_m4(s, R);
+    double Tin[4][4] = {
+        { 1, 0, 0, -cx },
+        { 0, 1, 0, -cy },
+        { 0, 0, 1,   0 },
+        { 0, 0, 0,   1 }
+    },
+           Tout[4][4] = { { 1, 0, 0, cx }, { 0, 1, 0, cy }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };
+    gp_m4_mul(R, Tin, M);
+    gp_m4_mul(Tout, M, M);
+    if(p && p->style.persp > 0.f) { /* about the parent's perspective origin */
+        double px = x - n->pos.x + p->scroll.x + p->size.w * p->style.persp_ox, py = y - n->pos.y + p->scroll.y + p->size.h * p->style.persp_oy;
+        double P[4][4] = {
+            { 1, 0,                     0, 0 },
+            { 0, 1,                     0, 0 },
+            { 0, 0,                     1, 0 },
+            { 0, 0, -1.0 / p->style.persp, 1 }
+        },
+               Pin[4][4] = { { 1, 0, 0, -px }, { 0, 1, 0, -py }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } }, Pout[4][4] = { { 1, 0, 0, px }, { 0, 1, 0, py }, { 0, 0, 1, 0 }, { 0, 0, 0, 1 } };
+        gp_m4_mul(Pin, M, M);
+        gp_m4_mul(P, M, M);
+        gp_m4_mul(Pout, M, M);
+    }
+}
+
+static bool flattens(const gp_style* s)
+{
+    return s && (s->opacity < 1.f || s->nfilters || s->blend_mode);
+}
+
+bool gp_el_preserves_3d(const gp_el* n)
+{
+    const gp_style* s = &n->style;
+    if(!s->preserve_3d) {
+        return false;
+    }
+    return !(s->overflow_hidden || s->overflow_x_scroll || s->overflow_y_scroll || n->mask || s->nbackdrop || flattens(s) || flattens(s->hover_style) || flattens(s->active_style) || flattens(s->focus_style));
+}
+
+void gp_xform_enter(gp_xform* t, const gp_el* n, float x, float y)
+{
+    bool in_parents = t->members, mine = gp_el_preserves_3d(n);
+    if(!in_parents && !mine) {
+        if(n->style.has_xf) {
+            t->m = gp_aff_mul(t->moved ? t->m : gp_aff_identity(), gp_el_affine(n, x, y));
+            t->moved = true;
+        }
+        t->in3d = false;
+        return;
+    }
+    double E[4][4];
+    gp_el_m4(n, x, y, E);
+    if(in_parents) {
+        gp_m4_mul(t->m3, E, t->m3);
+    } else { /* the root of a context: its space is its parent's plane, put on the window as that is */
+        memcpy(t->m3, E, sizeof E);
+        t->outer = t->moved ? t->m : gp_aff_identity();
+    }
+    t->m = gp_aff_mul(t->outer, gp_m4_flatten(t->m3));
+    t->moved = true;
+    t->in3d = true;
+    t->members = mine;
+}
+
+bool gp_xform_depth(const gp_xform* t, gp_point p, double* depth)
+{
+    if(!t->in3d) {
+        return false;
+    }
+    gp_point q = gp_aff_apply(gp_aff_inverse(t->outer), p);
+    gp_point l = q.x < 1e8f ? gp_aff_apply(gp_aff_inverse(gp_m4_flatten(t->m3)), q) : q;
+    if(!(l.x < 1e8f)) {
+        return false;
+    }
+    double h[4];
+    for(int i = 0; i < 4; i++) {
+        h[i] = t->m3[i][0] * l.x + t->m3[i][1] * l.y + t->m3[i][3];
+    }
+    if(!(h[3] > 1e-9)) {
+        return false;
+    }
+    *depth = h[2] / h[3];
+    return true;
+}
+
+/* While a context is painted, each element in it is a plane: an element whose children are in it too has its own content (what it painted before them), any other
+ * all of what it and everything in it painted (start..end in the scene), on the plane its map (and its matrix) says. When the root has painted, the planes are put
+ * in order: a BSP tree of their polygons in the space after the perspective, where the viewer looks along -z from far away, splits a plane where another goes
+ * through it, and each piece is its plane's instances again, cut on screen along the lines the splits made (GP_CUTS). */
+typedef struct
+{
+    size_t start, end;
+    gp_affine map;
+    double m3[4][4];
+    float box[4]; /* the element's box on the layout (x0 y0 x1 y1) */
+} c3_plane;
+typedef struct c3_list
+{
+    c3_plane* planes;
+    size_t n, cap;
+    gp_affine outer; /* the context's plane on the window */
+} c3_list;
+
+typedef struct
+{
+    int plane, nv, ncut;
+    double (*v)[3];
+    float (*cut)[4];
+} c3_piece;
+typedef struct
+{
+    double n[3], d; /* n . p + d = 0 */
+    bool flat;      /* seen edge on (or no polygon): nothing of it shows, and it cuts nothing it is drawn on */
+} c3_eq;
+typedef struct
+{
+    gp_arena* a;
+    const c3_eq* eq;
+    double oinv[3][3]; /* the window to the context's plane */
+    c3_piece* out;
+    size_t nout, cap;
+} c3_bsp;
+
+#define C3_EPS 1e-3
+
+static double c3_dist(const c3_eq* e, const double p[3])
+{
+    return e->n[0] * p[0] + e->n[1] * p[1] + e->n[2] * p[2] + e->d;
+}
+
+/* the piece with one more cut: on the plane of `q`, the side of `s` where its distance is >= 0 (front) or < 0, as a line on the window */
+static c3_piece c3_with_cut(c3_bsp* b, const c3_piece* src, int nv, double (*v)[3], const c3_eq* s, bool front)
+{
+    const c3_eq* q = &b->eq[src->plane];
+    c3_piece r = { src->plane, nv, src->ncut, v, src->cut };
+    if(q->flat) {
+        return r;
+    }
+    /* s's distance at the point of q's plane over (x, y): z = -(nq.x x + nq.y y + dq) / nq.z */
+    double l[3] = { s->n[0] - s->n[2] * q->n[0] / q->n[2], s->n[1] - s->n[2] * q->n[1] / q->n[2], s->d - s->n[2] * q->d / q->n[2] };
+    double L[3];
+    for(int j = 0; j < 3; j++) { /* through the inverse of the map to the window (a point seen comes back at w > 0: the side is kept) */
+        L[j] = l[0] * b->oinv[0][j] + l[1] * b->oinv[1][j] + l[2] * b->oinv[2][j];
+    }
+    double k = hypot(L[0], L[1]);
+    if(!(k > 1e-12)) {
+        return r;
+    }
+    k = front ? 1.0 / k : -1.0 / k;
+    r.cut = gp_arena_alloc(b->a, (size_t)(src->ncut + 1) * sizeof *r.cut, 16);
+    if(src->ncut) {
+        memcpy(r.cut, src->cut, (size_t)src->ncut * sizeof *r.cut);
+    }
+    r.cut[r.ncut++][0] = (float)(L[0] * k);
+    r.cut[r.ncut - 1][1] = (float)(L[1] * k);
+    r.cut[r.ncut - 1][2] = (float)(L[2] * k);
+    r.cut[r.ncut - 1][3] = front ? 0.f : 1.f; /* (the back side strictly: a pixel on the line is one piece's) */
+    return r;
+}
+
+static void c3_out(c3_bsp* b, c3_piece p)
+{
+    if(b->nout == b->cap) {
+        b->cap = b->cap * 2 + 16;
+        b->out = realloc(b->out, b->cap * sizeof *b->out);
+        if(!b->out) {
+            abort();
+        }
+    }
+    b->out[b->nout++] = p;
+}
+
+static void c3_order(c3_bsp* b, c3_piece* ps, size_t n)
+{
+    if(!n) {
+        return;
+    }
+    const c3_eq* s = &b->eq[ps[0].plane];
+    c3_piece* front = gp_arena_alloc(b->a, n * sizeof *front, 16);
+    c3_piece* back = gp_arena_alloc(b->a, n * sizeof *back, 16);
+    c3_piece* on = gp_arena_alloc(b->a, n * sizeof *on, 16);
+    size_t nf = 0, nb = 0, non = 0;
+    on[non++] = ps[0];
+    for(size_t i = 1; i < n; i++) {
+        const c3_piece* p = &ps[i];
+        double* d = gp_arena_alloc(b->a, (size_t)p->nv * sizeof *d, 16);
+        bool any_f = false, any_b = false;
+        for(int k = 0; k < p->nv; k++) {
+            d[k] = c3_dist(s, p->v[k]);
+            any_f |= d[k] > C3_EPS;
+            any_b |= d[k] < -C3_EPS;
+        }
+        if(!any_f && !any_b) {
+            on[non++] = *p;
+        } else if(!any_b) {
+            front[nf++] = *p;
+        } else if(!any_f) {
+            back[nb++] = *p;
+        } else { /* through it: a piece on each side */
+            double (*fv)[3] = gp_arena_alloc(b->a, (size_t)(p->nv + 2) * sizeof *fv, 16);
+            double (*bv)[3] = gp_arena_alloc(b->a, (size_t)(p->nv + 2) * sizeof *bv, 16);
+            int fn = 0, bn = 0;
+            for(int k = 0; k < p->nv; k++) {
+                int j = (k + 1) % p->nv;
+                if(d[k] >= -C3_EPS) {
+                    memcpy(fv[fn++], p->v[k], sizeof fv[0]);
+                }
+                if(d[k] <= C3_EPS) {
+                    memcpy(bv[bn++], p->v[k], sizeof bv[0]);
+                }
+                if((d[k] > C3_EPS && d[j] < -C3_EPS) || (d[k] < -C3_EPS && d[j] > C3_EPS)) {
+                    double t = d[k] / (d[k] - d[j]);
+                    for(int c = 0; c < 3; c++) {
+                        fv[fn][c] = bv[bn][c] = p->v[k][c] + t * (p->v[j][c] - p->v[k][c]);
+                    }
+                    fn++;
+                    bn++;
+                }
+            }
+            if(fn >= 3) {
+                front[nf++] = c3_with_cut(b, p, fn, fv, s, true);
+            }
+            if(bn >= 3) {
+                back[nb++] = c3_with_cut(b, p, bn, bv, s, false);
+            }
+        }
+    }
+    bool viewer_front = s->n[2] >= 0; /* (the viewer is far along +z) */
+    c3_order(b, viewer_front ? back : front, viewer_front ? nb : nf);
+    for(size_t i = 0; i < non; i++) {
+        c3_out(b, on[i]);
+    }
+    c3_order(b, viewer_front ? front : back, viewer_front ? nf : nb);
+}
+
+static gp_affine inst_affine(const gp_instance* in)
+{
+    return (gp_affine){ in->xf0[0] + 1.f, in->xf0[1], in->xf0[2], in->xf0[3] + 1.f, in->xf1[0], in->xf1[1], in->xf1[2], in->xf1[3], in->xf2[0] };
+}
+
+static bool draws_on_target(int kind)
+{
+    return kind != GP_PRIM_LAYER_BEGIN && kind != GP_PRIM_FX_MATRIX && kind != GP_PRIM_FX_BLUR && kind != GP_PRIM_FX_SHADOW && kind != GP_PRIM_MASK_END && kind != GP_PRIM_BACKDROP;
+}
+
+/* the cuts of an instance, those it had (it is in a context of its own inside this plane) and the piece's, into the scene: what its xf2[1] becomes */
+static float c3_cuts(gp_scene* sc, const gp_instance* in, const c3_piece* p)
+{
+    int had = (int)in->xf2[1] % GP_CUTS_PER, from = (int)in->xf2[1] / GP_CUTS_PER, n = had + p->ncut;
+    if(n > GP_CUTS_PER - 1) {
+        n = GP_CUTS_PER - 1; /* (more than that many planes through one piece: the rest are not cut along) */
+    }
+    if(!p->ncut || sc->ncuts + (size_t)n > GP_CUTS_MAX) {
+        return in->xf2[1];
+    }
+    if(sc->ncuts + (size_t)n > sc->cap_cuts) { /* (whole rows of the texture, zeroed: the renderers upload whole rows) */
+        size_t was = sc->cap_cuts;
+        sc->cap_cuts = (sc->ncuts + (size_t)n + GP_CUTS_W) / GP_CUTS_W * GP_CUTS_W;
+        sc->cuts = realloc(sc->cuts, sc->cap_cuts * sizeof *sc->cuts);
+        if(!sc->cuts) {
+            abort();
+        }
+        memset(sc->cuts + was, 0, (sc->cap_cuts - was) * sizeof *sc->cuts);
+    }
+    size_t start = sc->ncuts;
+    for(int i = 0; i < n; i++) {
+        memcpy(sc->cuts[sc->ncuts++], i < had ? sc->cuts[from + i] : p->cut[i - had], sizeof sc->cuts[0]);
+    }
+    return (float)(start * GP_CUTS_PER + (size_t)n);
+}
+
+static void c3_resolve(paint_ctx* pc, c3_list* l, size_t s0)
+{
+    gp_scene* sc = pc->scene;
+    size_t total = sc->len - s0;
+    if(l->n < 2 || !total) {
+        return;
+    }
+    gp_instance* was = malloc(total * sizeof *was);
+    if(!was) {
+        abort();
+    }
+    memcpy(was, sc->items + s0, total * sizeof *was);
+    sc->len = s0;
+    c3_eq* eq = gp_arena_alloc(pc->scratch, l->n * sizeof *eq, 16);
+    c3_piece* ps = gp_arena_alloc(pc->scratch, l->n * sizeof *ps, 16);
+    size_t np = 0;
+    c3_bsp b = { pc->scratch, eq, { { 0 } }, NULL, 0, 0 };
+    double O[3][3];
+    gp_aff_mat(gp_aff_inverse(l->outer), O);
+    memcpy(b.oinv, O, sizeof O);
+    for(size_t i = 0; i < l->n; i++) {
+        c3_plane* pl = &l->planes[i];
+        /* what the plane covers, on the layout: its box and all that was painted on it */
+        float e[4] = { pl->box[0], pl->box[1], pl->box[2], pl->box[3] };
+        gp_affine inv = gp_aff_inverse(pl->map);
+        int depth = 0;
+        for(size_t k = pl->start; k < pl->end; k++) {
+            const gp_instance* in = &was[k - s0];
+            int kind = (int)in->kind;
+            depth += kind == GP_PRIM_LAYER_BEGIN ? 1 : kind == GP_PRIM_LAYER_END || kind == GP_PRIM_MASK_END ? -1
+                                                                                                             : 0;
+            if(depth || !draws_on_target(kind)) {
+                continue;
+            }
+            gp_affine im = inst_affine(in);
+            for(int c = 0; c < 4; c++) {
+                gp_point sp = gp_aff_apply(im, (gp_point){ in->bounds[0] + (c & 1 ? in->bounds[2] : 0.f), in->bounds[1] + (c & 2 ? in->bounds[3] : 0.f) });
+                gp_point lp = sp.x < 1e8f ? gp_aff_apply(inv, sp) : sp;
+                if(lp.x < 1e8f) {
+                    e[0] = fminf(e[0], lp.x), e[1] = fminf(e[1], lp.y), e[2] = fmaxf(e[2], lp.x), e[3] = fmaxf(e[3], lp.y);
+                }
+            }
+        }
+        /* its corners through its matrix, cut to what is in front of the viewer (w > 0), after the perspective */
+        double h[4][4], (*v)[3] = gp_arena_alloc(pc->scratch, 8 * sizeof *v, 16);
+        for(int c = 0; c < 4; c++) {
+            double cx = (c == 1 || c == 2) ? e[2] : e[0], cy = c >= 2 ? e[3] : e[1];
+            for(int r = 0; r < 4; r++) {
+                h[c][r] = pl->m3[r][0] * cx + pl->m3[r][1] * cy + pl->m3[r][3];
+            }
+        }
+        int nv = 0;
+        for(int c = 0; c < 4; c++) {
+            const double *a = h[c], *bb = h[(c + 1) % 4];
+            if(a[3] > 1e-5) {
+                v[nv][0] = a[0] / a[3], v[nv][1] = a[1] / a[3], v[nv][2] = a[2] / a[3];
+                nv++;
+            }
+            if((a[3] > 1e-5) != (bb[3] > 1e-5)) {
+                double t = (1e-5 - a[3]) / (bb[3] - a[3]), q[4];
+                for(int r = 0; r < 4; r++) {
+                    q[r] = a[r] + t * (bb[r] - a[r]);
+                }
+                v[nv][0] = q[0] / q[3], v[nv][1] = q[1] / q[3], v[nv][2] = q[2] / q[3];
+                nv++;
+            }
+        }
+        double nrm[3] = { 0, 0, 0 }; /* Newell's normal */
+        for(int k = 0; k < nv; k++) {
+            const double *a = v[k], *bb = v[(k + 1) % nv];
+            nrm[0] += (a[1] - bb[1]) * (a[2] + bb[2]);
+            nrm[1] += (a[2] - bb[2]) * (a[0] + bb[0]);
+            nrm[2] += (a[0] - bb[0]) * (a[1] + bb[1]);
+        }
+        double len = sqrt(nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]);
+        if(nv < 3 || !(len > 1e-9)) {
+            eq[i] = (c3_eq){
+                { 0, 0, 1 },
+                0,
+                true
+            };
+            c3_out(&b, (c3_piece){ (int)i, 0, 0, NULL, NULL }); /* (no polygon: drawn first, as it is) */
+            continue;
+        }
+        eq[i] = (c3_eq){
+            { nrm[0] / len, nrm[1] / len, nrm[2] / len },
+            0,
+            fabs(nrm[2] / len) < 1e-9
+        };
+        eq[i].d = -(eq[i].n[0] * v[0][0] + eq[i].n[1] * v[0][1] + eq[i].n[2] * v[0][2]);
+        ps[np++] = (c3_piece){ (int)i, nv, 0, v, NULL };
+    }
+    c3_order(&b, ps, np);
+    for(size_t i = 0; i < b.nout; i++) {
+        const c3_piece* p = &b.out[i];
+        const c3_plane* pl = &l->planes[p->plane];
+        const gp_instance none = { 0 };
+        float shared = c3_cuts(sc, &none, p); /* (the piece's lines, once: an instance with lines of its own gets both) */
+        int depth = 0;
+        for(size_t k = pl->start; k < pl->end; k++) {
+            gp_instance in = was[k - s0];
+            int kind = (int)in.kind;
+            depth += kind == GP_PRIM_LAYER_BEGIN ? 1 : kind == GP_PRIM_LAYER_END || kind == GP_PRIM_MASK_END ? -1
+                                                                                                             : 0;
+            if(!depth && draws_on_target(kind)) {
+                in.xf2[1] = in.xf2[1] != 0.f ? c3_cuts(sc, &in, p) : shared;
+            }
+            gp_scene_push(sc, &in);
+        }
+    }
+    free(b.out);
+    free(was);
+}
+
+/* An element in a 3D context (pc->x3, after gp_xform_enter): a plane of the context, and the root of it if its parent is not in it */
+static void paint_node_scoped(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, float opacity);
+static void c3_paint(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, float opacity, bool root)
+{
+    c3_list *outer_list = pc->c3, own = { 0 };
+    if(root) {
+        own.outer = pc->x3.outer;
+        pc->c3 = &own;
+    }
+    c3_list* l = pc->c3;
+    if(l->n == l->cap) {
+        l->cap = l->cap * 2 + 8;
+        l->planes = realloc(l->planes, l->cap * sizeof *l->planes);
+        if(!l->planes) {
+            abort();
+        }
+    }
+    size_t idx = l->n++, s0 = pc->scene->len;
+    float x = ox + n->pos.x, y = oy + n->pos.y;
+    c3_plane* pl = &l->planes[idx];
+    *pl = (c3_plane){
+        s0, s0, pc->xf, { { 0 } },
+           { x, y, x + n->size.w, y + n->size.h }
+    };
+    memcpy(pl->m3, pc->x3.m3, sizeof pl->m3);
+    paint_node_scoped(pc, n, ox, oy, clip, opacity);
+    /* its own content ends where the first plane inside it starts (what is in a member is planes of their own); a flat plane holds all it painted */
+    l->planes[idx].end = pc->x3.members && l->n > idx + 1 ? l->planes[idx + 1].start : pc->scene->len;
+    if(root) {
+        c3_resolve(pc, &own, s0);
+        free(own.planes);
+        pc->c3 = outer_list;
+    }
 }
 
 /* a rectangle through a transform that keeps the axes (a scale, a move, a quarter turn): the box it becomes; false for any other */
@@ -1447,7 +1890,7 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
         }
         return;
     }
-    if(!pc->views || !n->cached_view.generation || n->prep_valid == false) {
+    if(!pc->views || !n->cached_view.generation || n->prep_valid == false || pc->x3.members) { /* (in a 3D context its planes are collected as they are painted) */
         paint_node_inner(pc, n, ox, oy, clip, opacity);
         return;
     }
@@ -1576,6 +2019,10 @@ static void paint_node(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, f
     vv->chunk_layers = false;
     for(size_t i = 0; i < count; i++) {
         vv->chunk_layers |= pc->scene->items[start + i].kind >= (float)GP_PRIM_LAYER_BEGIN;
+        if(pc->scene->items[start + i].xf2[1] != 0.f) { /* cut (a 3D context): the lines are this frame's */
+            vv->chunk_valid = false;
+            return;
+        }
     }
     if(count) {
         memcpy(vv->chunk, pc->scene->items + start, count * sizeof *vv->chunk); /* (a view that paints nothing may have no copy yet, nor the scene any items: NULL, even for 0 bytes, is undefined) */
@@ -1998,28 +2445,37 @@ static void paint_node_scoped(paint_ctx* pc, gp_el* n, float ox, float oy, rect 
 
 static void paint_node_inner(paint_ctx* pc, gp_el* n, float ox, float oy, rect clip, float opacity)
 {
-    if(!n->style.has_xf) {
+    if(!n->style.has_xf && !pc->x3.members) {
         paint_node_scoped(pc, n, ox, oy, clip, opacity);
         return;
     }
     paint_ctx saved = *pc;
-    gp_affine mine = gp_el_affine(n, ox + n->pos.x, oy + n->pos.y);
-    gp_affine total = gp_aff_mul(pc->has_xf ? pc->xf : gp_aff_identity(), mine);
-    if(gp_el_behind(n, total, ox + n->pos.x, oy + n->pos.y)) {
+    float x = ox + n->pos.x, y = oy + n->pos.y;
+    gp_xform t = pc->x3;
+    t.m = pc->has_xf ? pc->xf : gp_aff_identity();
+    t.moved = pc->has_xf;
+    gp_xform_enter(&t, n, x, y);
+    if(gp_el_behind(n, t.m, x, y)) {
         return; /* at or behind the viewer: nothing of it is seen */
     }
-    if(n->style.backface_hidden && gp_el_backfacing(n, total, ox + n->pos.x, oy + n->pos.y)) {
+    if(n->style.backface_hidden && gp_el_backfacing(n, t.m, x, y)) {
         return; /* turned away: not drawn (gp_backface_hidden) */
     }
-    pc->xf = total;
+    pc->x3 = t;
+    pc->xf = t.m;
     pc->has_xf = true;
     pc->inv = gp_aff_inverse(pc->xf);
     pc->mouse_local = gp_aff_apply(pc->inv, pc->mouse);
-    paint_node_scoped(pc, n, ox, oy, clip, opacity);
+    if(t.in3d) {
+        c3_paint(pc, n, ox, oy, clip, opacity, !saved.x3.members);
+    } else {
+        paint_node_scoped(pc, n, ox, oy, clip, opacity);
+    }
     pc->xf = saved.xf;
     pc->inv = saved.inv;
     pc->has_xf = saved.has_xf;
     pc->mouse_local = saved.mouse_local;
+    pc->x3 = saved.x3;
 }
 
 void gp_paint_tree(gp_scene* scene, gp_arena* scratch, gp_text_system* ts, gp_el* root,

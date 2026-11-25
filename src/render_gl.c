@@ -93,8 +93,8 @@ enum { T_FX0 = GP_MAX_LAYERS,
 typedef struct
 {
     gp_renderer base;
-    GLuint prog, vao, vbo, atlas, color_atlas, lcd_atlas, ramps;
-    GLint u_viewport, u_scale, u_gamma, u_atlas, u_color_atlas, u_lcd_atlas, u_ramps, u_image, u_layer, u_aux, u_backdrop;
+    GLuint prog, vao, vbo, atlas, color_atlas, lcd_atlas, ramps, cuts;
+    GLint u_viewport, u_scale, u_gamma, u_atlas, u_color_atlas, u_lcd_atlas, u_ramps, u_image, u_layer, u_aux, u_backdrop, u_cuts;
     size_t vbo_cap;
     gp_instance* sent;       /* what the buffer holds now: a frame that paints the same instances again sends nothing */
     size_t sent_len, sent_cap;
@@ -173,6 +173,7 @@ gp_renderer* gp_gl_renderer_new(void* (*get_proc)(const char*))
     r->u_layer = gl.glGetUniformLocation(r->prog, "u_layer");
     r->u_aux = gl.glGetUniformLocation(r->prog, "u_aux");
     r->u_backdrop = gl.glGetUniformLocation(r->prog, "u_backdrop");
+    r->u_cuts = gl.glGetUniformLocation(r->prog, "u_cuts");
 
     gl.glGenVertexArrays(1, &r->vao);
     gl.glBindVertexArray(r->vao);
@@ -210,6 +211,13 @@ gp_renderer* gp_gl_renderer_new(void* (*get_proc)(const char*))
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    gl.glGenTextures(1, &r->cuts);
+    gl.glActiveTexture(GL_TEXTURE8);
+    gl.glBindTexture(GL_TEXTURE_2D, r->cuts);
+    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, GP_CUTS_W, GP_CUTS_ROWS, 0, GL_RGBA, GL_FLOAT, NULL);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
     gl.glGenTextures(1, &r->lcd_atlas);
     gl.glActiveTexture(GL_TEXTURE2);
@@ -254,6 +262,7 @@ static void gl_free(gp_renderer* base, gp_gfx* gfx)
     gl.glDeleteTextures(1, &r->color_atlas);
     gl.glDeleteTextures(1, &r->lcd_atlas);
     gl.glDeleteTextures(1, &r->ramps);
+    gl.glDeleteTextures(1, &r->cuts);
     free(r);
 }
 
@@ -435,6 +444,12 @@ static void gl_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
             gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, row0, GP_GRAD_W, row1 - row0, GL_RGBA, GL_UNSIGNED_BYTE, gp_gfx_gradient_data(gfx) + (size_t)row0 * GP_GRAD_W * 4);
         }
     }
+    gl.glActiveTexture(GL_TEXTURE8);
+    gl.glBindTexture(GL_TEXTURE_2D, r->cuts);
+    if(scene->ncuts) { /* the rows the frame's cuts are in (the rest of the last row is whatever was there) */
+        gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GP_CUTS_W, (GLsizei)((scene->ncuts + GP_CUTS_W - 1) / GP_CUTS_W), GL_RGBA, GL_FLOAT, scene->cuts);
+    }
     gl.glActiveTexture(GL_TEXTURE0);
     if(scene->len == 0) {
         return;
@@ -454,6 +469,7 @@ static void gl_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
     gl.glUniform1i(r->u_layer, 5);
     gl.glUniform1i(r->u_aux, 6);
     gl.glUniform1i(r->u_backdrop, 7);
+    gl.glUniform1i(r->u_cuts, 8);
 
     gl.glBindVertexArray(r->vao);
     gl.glBindBuffer(GL_ARRAY_BUFFER, r->vbo);

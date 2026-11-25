@@ -142,6 +142,7 @@ typedef struct gp_style
     float xf_rx, xf_ry, xf_tz, xf_persp;                             /* 3D: turns about x and y (degrees), a move toward the viewer (px), a perspective of the element's own transform (px; 0 none) */
     float persp, persp_ox, persp_oy;                                 /* gp_perspective: the distance to the viewer of the children's 3D transforms (0 none), and where it looks from (fractions of the box) */
     bool backface_hidden;
+    bool preserve_3d;                                                /* gp_preserve_3d: the children share its 3D space (see gp_el_preserves_3d) */
     const struct gp_style *hover_style, *active_style, *focus_style; /* gp_hover_style...: what the state paints over this style (arena of the element) */
     /* What modifiers set the layout properties (GP_LSET_*) and which sides of the padding, margin and inset; read only on the style of a state
      * (gp_hover_style...), where it says which properties the state lays out (the others keep the element's own) */
@@ -796,13 +797,23 @@ typedef struct
     /* the transform in force when it was painted, as an affine map of the layout coordinates above to the screen: x' = a x + c y + tx, y' = b x + d y + ty, stored as
      * (a - 1, b, c, d - 1), (tx, ty, g, h) and xf2 below, so that all zeros is the identity */
     float xf0[4], xf1[4];
-    float xf2[4]; /* (w1, -, -, -): the rest of a perspective (see gp_affine) */
+    float xf2[4]; /* (w1, cuts, -, -): the rest of a perspective (see gp_affine); the lines it is cut along (GP_CUTS) */
 } gp_instance;
+
+/* Cuts: a piece of a plane that a 3D context split where another plane goes through it (paint.c) is its instances, each drawn only on one side of each of
+ * the lines the splits make on screen. The lines are the scene's `cuts` (a x + b y + c, in logical px, kept where it is >= 0, or > 0 when the 4th number is
+ * 1), and an instance's xf2[1] says which: start * GP_CUTS_PER + count (0: none). The renderers put them in a GP_CUTS_W x GP_CUTS_ROWS float texture. */
+#define GP_CUTS_PER  16
+#define GP_CUTS_W    256
+#define GP_CUTS_ROWS 16
+#define GP_CUTS_MAX  (GP_CUTS_W * GP_CUTS_ROWS)
 
 typedef struct
 {
     gp_instance* items;
     size_t len, cap;
+    float (*cuts)[4];
+    size_t ncuts, cap_cuts;
 } gp_scene;
 
 /* A projective map of the plane (a 3 x 3 matrix): x' = (a x + c y + tx) / w, y' = (b x + d y + ty) / w, w = g x + h y + 1 + w1. With g = h = w1 = 0 it is the affine map of a
@@ -832,9 +843,25 @@ bool gp_curve_self_overlaps(const gp_el* n, const gp_point* p, const float* arc,
 int gp_marker_tris(const gp_marker_at* mk, float stroke_w, gp_point tri[6], int8_t ed[6]);               /* a square, diamond or bar as two triangles (gp_curve_triangulate's edges); 0 for a circle */
 gp_affine gp_style_affine(const struct gp_style* s, float x, float y, float w, float h);                 /* what a transformed element does to what is in it (paint.c) */
 gp_affine gp_el_affine(const struct gp_el* n, float x, float y);
+/* What the transforms above an element do, as painting, the pointer and scrolling follow them down the tree: `m` maps layout coordinates to the window (when
+ * `moved`); in a 3D context (gp_preserve_3d), `m3` is the element's 4 x 4 matrix in the context's space and `outer` maps that space's plane (the root's parent's)
+ * to the window. gp_xform_enter makes the parent's state the element's (n at (x, y) on the layout); `members` then says whether its children are in its context. */
+typedef struct
+{
+    gp_affine m;
+    bool moved;
+    bool in3d;    /* the element is in a 3D context: m3 and outer are its */
+    bool members; /* its children are in that context (it preserves 3D) */
+    double m3[4][4];
+    gp_affine outer;
+} gp_xform;
+void gp_xform_enter(gp_xform* t, const struct gp_el* n, float x, float y);
+bool gp_el_preserves_3d(const struct gp_el* n); /* gp_preserve_3d and nothing that flattens it (an overflow clip, a group opacity, filters, a blend mode, a mask) */
+/* where the point p of the window meets the element's plane in its context (t after gp_xform_enter): how near the viewer (larger is nearer); false if it does not */
+bool gp_xform_depth(const gp_xform* t, gp_point p, double* depth);
 /* the same, with its parent's perspective (gp_perspective) and the element at (x, y) on the layout */
-bool gp_el_backfacing(const struct gp_el* n, gp_affine m, float x, float y);                             /* gp_backface_hidden: seen from behind through m (it is then not drawn or hit) */
-bool gp_el_behind(const struct gp_el* n, gp_affine m, float x, float y);                                 /* all of it at or behind the viewer through m */
+bool gp_el_backfacing(const struct gp_el* n, gp_affine m, float x, float y); /* gp_backface_hidden: seen from behind through m (it is then not drawn or hit) */
+bool gp_el_behind(const struct gp_el* n, gp_affine m, float x, float y);     /* all of it at or behind the viewer through m */
 static inline gp_affine gp_aff_identity(void)
 {
     return (gp_affine){ 1, 0, 0, 1, 0, 0, 0, 0, 0 };

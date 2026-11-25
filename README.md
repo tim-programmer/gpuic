@@ -1150,6 +1150,8 @@ gp_div(gp_perspective(800),                                            /* the pa
        gp_div(card, gp_rotate_y(flip * 180), gp_backface_hidden()),     /* a card: front ... */
        gp_div(back, gp_rotate_y(flip * 180 - 180), gp_backface_hidden()))   /* ... and back */
 gp_div(gp_transform_perspective(400), gp_rotate_x(25), gp_translate_z(-20))   /* its own perspective */
+gp_div(gp_perspective(600), gp_div(gp_preserve_3d(), gp_rotate_y(t),           /* a 3D context: the faces of a cube */
+       gp_div(face, gp_translate_z(50)), gp_div(face, gp_rotate_y(90), gp_translate_z(50)), ...))
 ```
 
 * **What:** `gp_rotate_x(deg)`, `gp_rotate_y(deg)`, `gp_translate_z(px)`, `gp_transform_perspective(px)` (CSS's `perspective()` function, the last of the element's own
@@ -1165,8 +1167,22 @@ gp_div(gp_transform_perspective(400), gp_rotate_x(25), gp_translate_z(-20))   /*
   the GPU cuts away what is behind it, and an element entirely behind is not drawn or hit. The pointer goes back through the inverse (a click lands on what is seen), the box an
   element covers on screen (a layer's region, a backdrop's) is its corners through the map, and an overflow clip in perspective is not cut (as at an angle). A turn past 90
   degrees shows the back; with `gp_backface_hidden` an element whose corners come out the other way round is not drawn or hit, nor anything in it.
-* **Not done:** a 3D context shared between siblings (`transform-style: preserve-3d`: depth sorting and intersection between planes; each element is flattened into its
-  parent, as by default in CSS), and a perspective that reaches grandchildren (only children, as CSS's does without preserve-3d).
+* **3D contexts:** `gp_preserve_3d()` is CSS's `transform-style: preserve-3d`. The element's children (and theirs, while they preserve 3D too) are planes in one space with
+  it: each one's matrix is the product of the 4 x 4 matrices above it in the context, perspectives included (so a parent's perspective reaches grandchildren through it), and is
+  flattened only at the end, onto the plane of the context's parent. A child that does not preserve 3D is a plane with everything in it flattened onto it. What flattens in CSS
+  flattens here: an overflow clip or scroller, a group opacity, filters, a blend mode, a mask, a backdrop filter (and a state style that sets one of those).
+  How: while a context is painted each plane's instances are noted (an element's own content, or all of a flat child), and when its root is done they are put in order by a
+  BSP tree of the planes' polygons (what each covers, through its matrix, cut to what is in front of the viewer) in the space after the perspective, where the viewer looks
+  along -z from far away: nearest last, and a plane that another goes through split in two. A piece is its plane's instances again, each cut on screen along the lines its
+  splits made: the lines go to a small float texture (`u_cuts`) and an instance names its own (start and count in the spare `xf2.y`); the fragment shader drops pixels on the
+  wrong side, one piece taking the pixels on the line and the other not, so the two meet without a seam or a gap (and without antialiasing along the cut). Planes that lie in
+  one plane keep their painted order. The pointer goes to the nearest plane at the point (the depth of each where the ray meets it), then within it as usual. Cut instances are
+  this frame's: a cached view that holds some is painted again each frame.
+* **Not done:** depth inside a flat plane (it is flat, as in CSS), and the wheel and the scrollbar thumbs follow the matrices of a context but not its depth order (the first
+  scroller in the tree at the point takes the wheel, as with overlapping siblings).
+* `tests/preserve3d_test.c`: a nearer plane over one painted later (and not when flat, or flattened by a clip), two planes through each other each nearer on its side of the line,
+  whichever is first, a grandparent's perspective through a child that preserves 3D (CSS's matrices) and not through one that does not, and clicks on the nearest plane; the BSP,
+  the cuts and the hit test's depth order each turned off fail it.
 * `tests/xform3d_test.c` works CSS's matrices out again in the test and checks, for each case, 3 px inside and outside every projected edge: a turn without perspective
   (foreshortened), the element's own perspective, a parent's from its corner, a move toward the viewer (1.5x), a group (a layer) in perspective, a gradient at a quarter and three
   quarters of the way (perspective-correct interpolation), a fill's inside with no seam; a card's hidden face (not drawn, not hit), text, a box behind the viewer, and clicks in
@@ -2110,16 +2126,15 @@ Roughly in the order I'd tackle them:
 4. Multi-window polish: child and modal windows, placing a window relative to another, focus moving between an app's windows.
 5. `epoll` for descriptor watches on Linux, once an app watches thousands of descriptors: the watcher thread hands `poll(2)` every armed
    one each time it looks, which costs nothing that matters short of that (a watch is never spun on: it is re-armed only after its callback).
-6. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
-7. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
+6. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
    frame, so only worth it if a real app shows it): a cached view whose own scroller moves (its visible part), one moved while it holds an
    offscreen layer (an opacity group, a filter) or a transform, and one turned by a transform of its own while the mouse is in the window.
    A scene that changes is sent to the GPU whole (only an unchanged one is not sent). The tests that compare cached frames with full ones
    each carry their own helpers for it, which is how two of them came to drop only part of the cached copies: one shared header would do.
-8. Coroutines under AddressSanitizer: their stack switches are not announced to it (`__sanitizer_start_switch_fiber` /
+7. Coroutines under AddressSanitizer: their stack switches are not announced to it (`__sanitizer_start_switch_fiber` /
    `__sanitizer_finish_switch_fiber`), which can make it report falsely about a coroutine's stack. Nothing has been reported (the sanitizer
    builds pass); worth doing if something is. Their stack is 1 MB there (256 KB elsewhere), since it pads every frame.
-9. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
-10. Small ones from an app's feedback: `gp_image_decode_memory` (the bytes already in memory), `SDL_LIBTHAI` off in a downloaded SDL (it
+8. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
+9. Small ones from an app's feedback: `gp_image_decode_memory` (the bytes already in memory), `SDL_LIBTHAI` off in a downloaded SDL (it
     loads the system's libthai at run time, as `SDL_FRIBIDI` did), and a file of exactly 512 MiB, which the image reader refuses while the
     decoder takes that size.

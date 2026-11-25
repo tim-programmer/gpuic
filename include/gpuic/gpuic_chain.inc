@@ -384,6 +384,8 @@
     Element&& perspective_origin(float fx, float fy) && { return std::move(add(gp_perspective_origin(fx, fy))); }
     Element& backface_hidden() & { return add(gp_backface_hidden()); }
     Element&& backface_hidden() && { return std::move(add(gp_backface_hidden())); }
+    Element& preserve_3d() & { return add(gp_preserve_3d()); }
+    Element&& preserve_3d() && { return std::move(add(gp_preserve_3d())); }
     Element& key(Str key) & { return add(gp_key(key.c_str())); }
     Element&& key(Str key) && { return std::move(add(gp_key(key.c_str()))); }
     Element& key_id(uint64_t key) & { return add(gp_key_id(key)); }

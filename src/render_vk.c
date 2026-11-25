@@ -133,6 +133,7 @@ enum { B_ATLAS,
     B_LAYER,
     B_AUX,
     B_BACKDROP,
+    B_CUTS,
     B_COUNT,
 };
 
@@ -191,7 +192,7 @@ typedef struct
     VkPipelineLayout layout;
     VkPipeline blended, opaque;
     VkSampler nearest, linear, mipmapped, mip_nearest;
-    vk_image atlas, color_atlas, lcd_atlas, ramps, dummy;
+    vk_image atlas, color_atlas, lcd_atlas, ramps, cuts, dummy;
     vk_image targets[T_COUNT];
     int target_w, target_h;
     vk_image* textures;  /* images' textures: gp_gfx_image.tex is a slot here + 1 */
@@ -651,6 +652,7 @@ gp_renderer* gp_vk_renderer_new(gp_app* app, gp_window* first)
     ok = ok && image_make(r, &r->color_atlas, GP_COLOR_ATLAS_SIZE, GP_COLOR_ATLAS_SIZE, VK_FORMAT_R8G8B8A8_UNORM, 1, tex);
     ok = ok && image_make(r, &r->lcd_atlas, GP_LCD_ATLAS_SIZE, GP_LCD_ATLAS_SIZE, VK_FORMAT_R8G8B8A8_UNORM, 1, tex);
     ok = ok && image_make(r, &r->ramps, GP_GRAD_W, GP_GRAD_ROWS, VK_FORMAT_R8G8B8A8_UNORM, 1, tex);
+    ok = ok && image_make(r, &r->cuts, GP_CUTS_W, GP_CUTS_ROWS, VK_FORMAT_R32G32B32A32_SFLOAT, 1, tex);
     ok = ok && image_make(r, &r->dummy, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, 1, tex);
     if(!ok) {
         fprintf(stderr, "gpuic: Vulkan: could not make the pipelines or textures\n");
@@ -845,6 +847,7 @@ static void vk_free(gp_renderer* base, gp_gfx* gfx)
         image_free(r, &r->color_atlas);
         image_free(r, &r->lcd_atlas);
         image_free(r, &r->ramps);
+        image_free(r, &r->cuts);
         image_free(r, &r->dummy);
         buffer_free(r, &r->instances);
         buffer_free(r, &r->staging);
@@ -929,7 +932,7 @@ static void tex_bind(vk_renderer* r, int b, vk_image* im, VkSampler s)
 
 static void unbind(vk_renderer* r)
 {
-    for(int b = B_IMAGE; b < B_COUNT; b++) {
+    for(int b = B_IMAGE; b < B_CUTS; b++) { /* (the cuts stay: they are the frame's) */
         tex_bind(r, b, NULL, NULL);
     }
 }
@@ -1073,6 +1076,7 @@ static void uploads(vk_renderer* r, gp_text_system* ts, const gp_scene* scene)
     image_ready(r, &r->color_atlas);
     image_ready(r, &r->lcd_atlas);
     image_ready(r, &r->ramps);
+    image_ready(r, &r->cuts);
     image_ready(r, &r->dummy);
     int dx, dy, dw, dh;
     if(gp_text_atlas_take_dirty(ts, &dx, &dy, &dw, &dh)) {
@@ -1088,6 +1092,9 @@ static void uploads(vk_renderer* r, gp_text_system* ts, const gp_scene* scene)
     int row0, row1;
     if(gfx && gp_gfx_gradient_take_dirty(gfx, &row0, &row1)) {
         upload(r, &r->ramps, 0, row0, GP_GRAD_W, row1 - row0, gp_gfx_gradient_data(gfx) + (size_t)row0 * GP_GRAD_W * 4, (size_t)GP_GRAD_W * 4, 4);
+    }
+    if(scene->ncuts) { /* (whole rows: see gp_scene) */
+        upload(r, &r->cuts, 0, 0, GP_CUTS_W, (int)((scene->ncuts + GP_CUTS_W - 1) / GP_CUTS_W), (const uint8_t*)scene->cuts, (size_t)GP_CUTS_W * 16, 16);
     }
     for(size_t i = 0; gfx && i < scene->len; i++) {
         const gp_instance* in = &scene->items[i];
@@ -1189,6 +1196,7 @@ static void vk_draw(gp_renderer* base, gp_window* w, gp_text_system* ts, const g
     tex_bind(r, B_COLOR, &r->color_atlas, r->nearest);
     tex_bind(r, B_LCD, &r->lcd_atlas, r->nearest);
     tex_bind(r, B_RAMPS, &r->ramps, r->linear);
+    tex_bind(r, B_CUTS, &r->cuts, r->nearest);
     unbind(r);
     set_target(r, &vw->main);
 

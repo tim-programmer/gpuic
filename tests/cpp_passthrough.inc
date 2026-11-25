@@ -383,6 +383,8 @@
 { "perspective_origin (named)", [] { Element e = div(); e.perspective_origin(0.375f, 0.625f); return e; }, [] { return gp_div(gp_perspective_origin(0.375f, 0.625f)); } },
 { "backface_hidden", [] { return div().backface_hidden(); }, [] { return gp_div(gp_backface_hidden()); } },
 { "backface_hidden (named)", [] { Element e = div(); e.backface_hidden(); return e; }, [] { return gp_div(gp_backface_hidden()); } },
+{ "preserve_3d", [] { return div().preserve_3d(); }, [] { return gp_div(gp_preserve_3d()); } },
+{ "preserve_3d (named)", [] { Element e = div(); e.preserve_3d(); return e; }, [] { return gp_div(gp_preserve_3d()); } },
 { "key", [] { return div().key("ab,cd0"); }, [] { return gp_div(gp_key("ab,cd0")); } },
 { "key (named)", [] { Element e = div(); e.key("ab,cd0"); return e; }, [] { return gp_div(gp_key("ab,cd0")); } },
 { "key_id", [] { return div().key_id(1000003ull); }, [] { return gp_div(gp_key_id(1000003ull)); } },

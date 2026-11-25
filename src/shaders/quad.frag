@@ -25,6 +25,7 @@ BINDING(4) uniform sampler2D u_image;
 BINDING(5) uniform sampler2D u_layer;  // a layer (or a filter pass's input)
 BINDING(6) uniform sampler2D u_aux;  // a drop shadow's blurred copy; at a layer's end, its mask
 BINDING(7) uniform sampler2D u_backdrop;  // at the end of a layer with a blend mode: what was under it
+BINDING(8) uniform sampler2D u_cuts;  // the lines pieces of planes in a 3D context are cut along (GP_CUTS in internal.h)
 layout(location = 0, index = 0) out vec4 frag;
 layout(location = 0, index = 1) out vec4 frag_cov;  // what each channel of the destination keeps: 1 - this
 float sd_rounded(vec2 p, vec2 half_size, vec4 r4) {
@@ -163,6 +164,17 @@ void main() {
   vec2 sp = fc / u_scale;  // ... in logical px: the clip is there
   if (sp.x < v_clip.x || sp.y < v_clip.y ||
       sp.x > v_clip.x + v_clip.z || sp.y > v_clip.y + v_clip.w) discard;
+  if (v_xf2.y > 0.0) {  // a piece of a plane: only on its side of each line (a x + b y + c >= 0, or > 0)
+    int cuts = int(v_xf2.y + 0.5), from = cuts / 16;
+    for (int i = 0; i < cuts - from * 16; i++) {
+      int k = from + i;
+      vec4 l = texelFetch(u_cuts, ivec2(k % 256, k / 256), 0);
+      float v = dot(l.xyz, vec3(sp, 1.0));
+      if (l.w > 0.5 ? v <= 0.0 : v < 0.0) {
+        discard;
+      }
+    }
+  }
   float kind = v_params.y;
   vec2 half_size = v_bounds.zw * 0.5;
   vec4 lcd_cov = vec4(0.0);

@@ -413,6 +413,7 @@ static void window_destroy(gp_app* app, gp_window* w)
     gp_views_free(w);
     gp_anim_free(&w->anims);
     free(w->scene.items);
+    free(w->scene.cuts);
     for(size_t i = 0; i < w->scrolls.len; i++) {
         if(w->scrolls.items[i].arena) {
             gp_arena_free(w->scrolls.items[i].arena);
