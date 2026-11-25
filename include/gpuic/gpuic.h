@@ -298,8 +298,8 @@ void gp_app_free(gp_app* app);
  * Text that names no family uses the registered family called "sans-serif" if there is one, else the
  * family of the font registered first. A character the chosen font lacks is looked up in the rest of
  * the family list, among the other registered fonts, then, unless disabled, in the system. A
- * registered color font is used for emoji (bitmap CBDT fonts like Noto Color Emoji are the supported
- * kind). Main thread only. */
+ * registered color font is used for emoji (CBDT or sbix bitmaps, COLR v0/v1, or OpenType SVG). Main
+ * thread only. */
 typedef struct
 {
     const char* family; /* e.g. "Inter", or "serif" / "monospace" / "sans-serif" to define a generic
@@ -340,6 +340,13 @@ void gp_fonts_set_antialiasing(gp_app* app, int mode);
  * the correction is approximate, and mid-gray text is left alone). 1, the default, changes nothing; GPUIC_TEXT_GAMMA sets it at startup.
  * Applies to grayscale and LCD text (to each stripe), not to emoji. */
 void gp_fonts_set_text_gamma(gp_app* app, float gamma);
+/* Which CPAL palette COLR color fonts draw with: an index (0, the default, is a font's first palette; one the font lacks is 0), or
+ * GP_PALETTE_LIGHT / GP_PALETTE_DARK for the first palette a font marks as made for a light / dark background (else its first). A
+ * COLR glyph's foreground color (palette entry 0xFFFF) is the text color whatever the palette. */
+enum { GP_PALETTE_LIGHT = -1,
+    GP_PALETTE_DARK = -2,
+};
+void gp_fonts_set_palette(gp_app* app, int palette);
 
 typedef void (*gp_ready_fn)(gp_app* app, void* userdata);
 /* Creates the app, calls `ready` once, then runs the event loop until quit. */

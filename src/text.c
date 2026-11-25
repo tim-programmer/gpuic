@@ -10,9 +10,10 @@
  *                a flag, a skin-toned hand) collapse into one glyph. Advances are in font units,
  *                so layout does not depend on the display scale.
  *   FreeType     rasterizes glyphs. Outline fonts go into an R8 coverage atlas (tinted by the text
- *                color); fixed-size color bitmap fonts (CBDT emoji, with a single strike) are
+ *                color); color bitmap fonts (CBDT emoji, with a single strike, and sbix ones) are
  *                downscaled with an area filter into an RGBA atlas and are never tinted. SVG glyphs
- *                are drawn by svgx.c, COLR glyphs (v1 and v0) by colr.c; sbix is not handled.
+ *                are drawn by svgx.c, COLR glyphs (v1 and v0) by colr.c (in the text color where
+ *                they ask for the foreground).
  *
  *   FriBidi      resolves bidirectional text (UAX #9): embedding levels per paragraph, then rules L1
  *                and L2. Reordering happens at the level of *runs* (same font, same level), and
@@ -99,7 +100,9 @@ typedef struct
 
 typedef struct
 {
-    uint64_t key; /* 0 = empty */
+    uint64_t key;  /* 0 = empty */
+    uint32_t tint; /* the text color a COLR glyph that uses the foreground was drawn in (key | GLYPH_TINTED), else 0 */
+    bool uses_fg;  /* this glyph uses the foreground: its entries are the GLYPH_TINTED ones */
     gp_glyph_entry e;
 } glyph_slot;
 
@@ -204,6 +207,7 @@ struct gp_text_system
     bool no_subpixel;          /* glyphs sit on whole pixels (gp_text_set_subpixel) */
     gp_gfx* gfx;               /* gradients and images, owned by the app (see gfx.c) */
     int aa_mode;               /* GP_AA_* */
+    int palette;               /* the CPAL palette of COLR glyphs (gp_text_set_palette) */
     float text_gamma;          /* how text coverage is toned for blending (1: not at all; 2.2: as in linear light) */
     int system_lcd;            /* the system's subpixel order: -1 not asked yet, else 0 none / 1 RGB / 2 BGR */
 #ifndef GPUIC_HAVE_FONTCONFIG
@@ -541,7 +545,7 @@ static int font_open(gp_text_system* ts, const char* path, int index, void* data
     f->upem = upem ? (float)upem : 1000.f;
     f->ascent = (float)face->ascender;
     f->descent = (float)-face->descender;
-    f->bitmap_only = !FT_IS_SCALABLE(face) && face->num_fixed_sizes > 0;
+    f->bitmap_only = !FT_IS_SCALABLE(face) && face->num_fixed_sizes > 0; /* (FreeType counts an sbix font with outlines as this too) */
     if(f->ascent <= 0 && f->descent <= 0) {
         f->ascent = f->upem * 0.8f;
         f->descent = f->upem * 0.2f;
@@ -3019,11 +3023,13 @@ static uint64_t glyph_key(int font, uint32_t glyph, uint32_t size_q, int bin, in
     return ((uint64_t)(font + 1) << 52) | ((uint64_t)(lcd & 7) << 49) | ((uint64_t)(bin & 3) << 47) | ((uint64_t)(size_q & 0x7fff) << 32) | glyph;
 }
 
-static glyph_slot* glyph_find(gp_text_system* ts, uint64_t key)
+#define GLYPH_TINTED ((uint64_t)1 << 31) /* (in the glyph id's bits: an OpenType glyph id is 16 bits) */
+
+static glyph_slot* glyph_find(gp_text_system* ts, uint64_t key, uint32_t tint)
 {
     size_t mask = ts->glyph_cap - 1;
-    size_t i = (size_t)((key * 0x9E3779B97F4A7C15ull) >> 20) & mask;
-    while(ts->glyphs[i].key && ts->glyphs[i].key != key) {
+    size_t i = (size_t)(((key + tint) * 0x9E3779B97F4A7C15ull) >> 20) & mask;
+    while(ts->glyphs[i].key && (ts->glyphs[i].key != key || ts->glyphs[i].tint != tint)) {
         i = (i + 1) & mask;
     }
     return &ts->glyphs[i];
@@ -3037,7 +3043,7 @@ static void glyph_table_grow(gp_text_system* ts)
     ts->glyphs = calloc(ts->glyph_cap, sizeof *ts->glyphs);
     for(size_t i = 0; i < old_cap; i++) {
         if(old[i].key) {
-            *glyph_find(ts, old[i].key) = old[i];
+            *glyph_find(ts, old[i].key, old[i].tint) = old[i];
         }
     }
     free(old);
@@ -3158,6 +3164,13 @@ void gp_text_set_gamma(gp_text_system* ts, float gamma)
 float gp_text_gamma(const gp_text_system* ts)
 {
     return ts->text_gamma;
+}
+void gp_text_set_palette(gp_text_system* ts, int palette)
+{
+    if(palette != ts->palette) {
+        ts->palette = palette;
+        gp_text_atlas_reset(ts); /* (COLR glyphs are cached in the old one's colors) */
+    }
 }
 /* ---------------------------------------------------------------- outlines (for text inside an SVG) */
 
@@ -3432,12 +3445,14 @@ static bool svg_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_s
 #endif
 }
 
-/* A COLR glyph, drawn by colr.c at the quarter pixel `bin`, into the color atlas. False if it has no color (then it is its outline). */
-static bool colr_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_size, int bin, gp_glyph_entry* e, bool* cache)
+/* A COLR glyph, drawn by colr.c at the quarter pixel `bin` with `tint` (RGBA, 8 bits each, red highest) as its foreground color, into the
+ * color atlas; *used_fg says whether it used it. False if it has no color (then it is its outline). */
+static bool colr_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_size, int bin, uint32_t tint, gp_glyph_entry* e, bool* cache, bool* used_fg)
 {
     uint8_t* px;
     int box[4], x, y;
-    if(!gp_colr_glyph(f->face, glyph, px_size, (float)bin / GP_SUBPIXEL_BINS, &px, box)) {
+    const float fg[4] = { (float)(tint >> 24) / 255.f, (float)(tint >> 16 & 255) / 255.f, (float)(tint >> 8 & 255) / 255.f, (float)(tint & 255) / 255.f };
+    if(!gp_colr_glyph(f->face, glyph, px_size, (float)bin / GP_SUBPIXEL_BINS, ts->palette, fg, used_fg, &px, box)) {
         return false;
     }
     if(px && atlas_alloc(&ts->color, box[2], box[3], &x, &y)) {
@@ -3453,7 +3468,34 @@ static bool colr_glyph(gp_text_system* ts, gp_font* f, uint32_t glyph, float px_
     return true;
 }
 
+static void glyph_insert(gp_text_system* ts, uint64_t key, uint32_t tint, bool uses_fg, gp_glyph_entry e)
+{
+    if((ts->glyph_count + 1) * 2 > ts->glyph_cap) {
+        glyph_table_grow(ts);
+    }
+    glyph_slot* gs = glyph_find(ts, key, tint);
+    if(!gs->key) {
+        ts->glyph_count++;
+    }
+    *gs = (glyph_slot){ key, tint, uses_fg, e };
+}
+
+static uint32_t pack_rgba(gp_color c)
+{
+    uint32_t v = 0;
+    const float ch[4] = { c.r, c.g, c.b, c.a };
+    for(int i = 0; i < 4; i++) {
+        v = v << 8 | (uint32_t)lroundf(fminf(fmaxf(ch[i], 0.f), 1.f) * 255.f);
+    }
+    return v;
+}
+
 gp_glyph_entry gp_text_glyph_lcd(gp_text_system* ts, int font_id, uint32_t glyph, float px_size, int bin, int lcd)
+{
+    return gp_text_glyph_tinted(ts, font_id, glyph, px_size, bin, lcd, (gp_color){ 0, 0, 0, 1 });
+}
+
+gp_glyph_entry gp_text_glyph_tinted(gp_text_system* ts, int font_id, uint32_t glyph, float px_size, int bin, int lcd, gp_color fg)
 {
     gp_glyph_entry none = { 0 };
     if(font_id < 0 || font_id >= ts->nfonts) {
@@ -3469,13 +3511,20 @@ gp_glyph_entry gp_text_glyph_lcd(gp_text_system* ts, int font_id, uint32_t glyph
 
     uint32_t size_q = (uint32_t)(px_size * 4.f + 0.5f);
     uint64_t key = glyph_key(font_id, glyph, size_q, bin, lcd);
-    glyph_slot* gs = glyph_find(ts, key);
-    if(gs->key) {
+    uint32_t tint = pack_rgba(fg);
+    glyph_slot* gs = glyph_find(ts, key, 0);
+    if(gs->key && !gs->uses_fg) {
         return gs->e;
+    }
+    if(gs->key) { /* drawn in the text color: one entry per color */
+        glyph_slot* t = glyph_find(ts, key | GLYPH_TINTED, tint);
+        if(t->key) {
+            return t->e;
+        }
     }
 
     gp_glyph_entry e = { 0 };
-    bool cache = true;
+    bool cache = true, used_fg = false;
     if(f->bitmap_only) {
         /* the strike nearest above the target size, else the largest: always downscaled */
         int best = -1, largest = 0;
@@ -3522,7 +3571,7 @@ gp_glyph_entry gp_text_glyph_lcd(gp_text_system* ts, int font_id, uint32_t glyph
         }
     } else if(f->svg && svg_glyph(ts, f, glyph, px_size, &e, &cache)) {
         /* (a glyph of the 'SVG ' table, drawn into the color atlas) */
-    } else if(f->colr && colr_glyph(ts, f, glyph, px_size, bin, &e, &cache)) {
+    } else if(f->colr && colr_glyph(ts, f, glyph, px_size, bin, tint, &e, &cache, &used_fg)) {
         /* (a COLR glyph, drawn by colr.c into the color atlas) */
     } else {
         FT_Set_Char_Size(f->face, 0, (FT_F26Dot6)(px_size * 64.f + 0.5f), 72, 72);
@@ -3598,14 +3647,12 @@ gp_glyph_entry gp_text_glyph_lcd(gp_text_system* ts, int font_id, uint32_t glyph
     if(!cache) {
         return none;
     }
-
-    if((ts->glyph_count + 1) * 2 > ts->glyph_cap) {
-        glyph_table_grow(ts);
-        gs = glyph_find(ts, key);
+    if(used_fg) {
+        glyph_insert(ts, key, 0, true, none);
+        glyph_insert(ts, key | GLYPH_TINTED, tint, false, e);
+    } else {
+        glyph_insert(ts, key, 0, false, e);
     }
-    gs->key = key;
-    gs->e = e;
-    ts->glyph_count++;
     return e;
 }
 

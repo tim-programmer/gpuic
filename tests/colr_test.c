@@ -2,11 +2,13 @@
  * COLR color fonts: colr.c draws FreeType's paint graph into the color atlas. The font
  * (tests/colr_fixture.h, made by tools/gen_colr_font.py) has one glyph per feature, each on the em
  * square: layers with alpha, linear (with p2 rotating it), radial and sweep gradients, a rotation,
- * dest-out and multiply composites, a skew, a glyph with no color, and a COLRv0 glyph. At 100 px a font unit is 0.1
- * px, so the em is (0, -100)..(100, 0) in pixels from the origin, y down. No display needed.
+ * dest-out and multiply composites, a skew, a glyph with no color, a COLRv0 glyph, and one half in the foreground color; and a
+ * second palette, marked for dark backgrounds. At 100 px a font unit is 0.1 px, so the em is (0, -100)..(100, 0) in pixels from
+ * the origin, y down. Then an sbix font (tests/sbix_fixture.h, made by tools/gen_sbix_font.py). No display needed.
  */
 #include "../src/internal.h"
 #include "colr_fixture.h"
+#include "sbix_fixture.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -62,9 +64,9 @@ int main(void)
         return 1;
     }
     int n = gp_text_shape(
-        ts, GP_FONT_SEL(gp_text_family(ts, "GpColrTest"), 400), 100.f, "ABCDEFGHZV", 10, g, 16, NULL);
-    CHECK(n == 10 && g[0].glyph == 1 && g[9].glyph == 10, "ABCDEFGHZV shapes to glyphs 1..10 (%d)", n);
-    if(n != 10) {
+        ts, GP_FONT_SEL(gp_text_family(ts, "GpColrTest"), 400), 100.f, "ABCDEFGHZVW", 11, g, 16, NULL);
+    CHECK(n == 11 && g[0].glyph == 1 && g[10].glyph == 11, "ABCDEFGHZVW shapes to glyphs 1..11 (%d)", n);
+    if(n != 11) {
         return 1;
     }
 
@@ -138,6 +140,54 @@ int main(void)
               && rgba(at(15, -10), 0, 0, 128, 128),
         "at 20 px A is 20 px wide and the same colors (%.0f)",
         (double)ge.w);
+
+    glyph(10, 100.f); /* W: the foreground color */
+    CHECK(rgba(at(25, -50), 0, 0, 0, 255) && rgba(at(75, -50), 255, 0, 0, 255), "W's foreground half is black by default");
+    ge = gp_text_glyph_tinted(ts, g[10].font, g[10].glyph, 100.f, 0, 0, (gp_color){ 0, 1, 0, 1 });
+    gp_glyph_entry green = ge;
+    CHECK(rgba(at(25, -50), 0, 255, 0, 255) && rgba(at(75, -50), 255, 0, 0, 255), "in green text it is green there, and still red beside it");
+    ge = gp_text_glyph_tinted(ts, g[10].font, g[10].glyph, 100.f, 0, 0, (gp_color){ 0, 0, 1, .5f });
+    CHECK(rgba(at(25, -50), 0, 0, 128, 128) && ge.u != green.u, "in half-transparent blue text, that (premultiplied), drawn again");
+    ge = gp_text_glyph_tinted(ts, g[10].font, g[10].glyph, 100.f, 0, 0, (gp_color){ 0, 1, 0, 1 });
+    CHECK(ge.u == green.u && ge.v == green.v, "green again is the cached one");
+    ge = gp_text_glyph_tinted(ts, g[0].font, g[0].glyph, 100.f, 0, 0, (gp_color){ 0, 1, 0, 1 });
+    CHECK(rgba(at(25, -50), 255, 0, 0, 255), "A, with no foreground, is not tinted");
+
+    static const struct
+    {
+        int palette;
+        bool green;
+        const char* what;
+    } pals[] = {
+        {  GP_PALETTE_DARK,  true, "GP_PALETTE_DARK picks the palette marked for dark backgrounds" },
+        { GP_PALETTE_LIGHT, false,                       "GP_PALETTE_LIGHT the one for light ones" },
+        {                1,  true,                                   "an index picks that palette" },
+        {                7, false,                               "one the font lacks is its first" },
+        {                0, false,                                                "0 is the first" },
+    };
+    for(size_t i = 0; i < sizeof pals / sizeof pals[0]; i++) {
+        gp_text_set_palette(ts, pals[i].palette);
+        glyph(0, 100.f);
+        CHECK(rgba(at(25, -50), pals[i].green ? 0 : 255, pals[i].green ? 255 : 0, 0, 255), "%s", pals[i].what);
+    }
+
+    CHECK(gp_text_add_font_memory_as(ts, fx_sbixfont, sizeof fx_sbixfont, "GpSbixTest", 400, 0), "the sbix font loads");
+    gp_glyph_pos sg[2];
+    n = gp_text_shape(ts, GP_FONT_SEL(gp_text_family(ts, "GpSbixTest"), 400), 32.f, "A", 1, sg, 2, NULL);
+    CHECK(n == 1, "its A shapes");
+    if(n == 1) {
+        ge = gp_text_glyph(ts, sg[0].font, sg[0].glyph, 32.f);
+        atlas = gp_text_color_atlas(ts);
+        CHECK(ge.color && ge.w == 32 && ge.h == 32 && fabsf(ge.left) <= 1 && fabsf(ge.top - 32.f) <= 1,
+            "an sbix glyph at 32 px is its 64 px bitmap halved, on the baseline (%d: %.0f, %.0f, %.0f x %.0f)",
+            ge.color,
+            (double)ge.left,
+            (double)ge.top,
+            (double)ge.w,
+            (double)ge.h);
+        CHECK(rgba(at(8, -16), 255, 0, 0, 255) && rgba(at(24, -16), 0, 0, 255, 255), "red on the left, blue on the right");
+        CHECK(gp_text_glyph_at(ts, sg[0].font, sg[0].glyph, 32.f, 2).u == ge.u, "with one shape at every quarter pixel");
+    }
 
     gp_text_system_free(ts);
     printf(failures ? "colr_test: %d FAILURE(S)\n" : "colr_test: all checks passed\n", failures);

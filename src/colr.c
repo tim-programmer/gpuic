@@ -10,8 +10,9 @@
  * combines them with its mode (Porter-Duff, or a W3C blend mode) and draws the result through the
  * mask. Geometry is in font units, y up, mapped to pixels by one affine matrix; a gradient is
  * evaluated at each pixel center mapped back to font units. Colors interpolate premultiplied. The
- * foreground color (palette index 0xFFFF) is black: color glyphs are cached untinted. The first
- * CPAL palette is used.
+ * foreground color (palette index 0xFFFF) is the one passed in, and the caller is told whether it
+ * was used (then the glyph is cached per text color). The CPAL palette is the one asked for: an
+ * index, or the first marked for a light or dark background (GP_PALETTE_LIGHT / _DARK), else 0.
  */
 #include "internal.h"
 
@@ -19,12 +20,13 @@
 #include FT_FREETYPE_H
 #include FT_COLOR_H
 #include FT_OUTLINE_H
+#include FT_TRUETYPE_TABLES_H
+#include FT_TRUETYPE_TAGS_H
 
 #if FREETYPE_MAJOR == 2 && FREETYPE_MINOR < 13 /* (the COLRv1 API is 2.13's) */
-bool gp_colr_glyph(
-    FT_Face face, uint32_t glyph, float px_size, float shift, uint8_t** rgba, int box[4])
+bool gp_colr_glyph(FT_Face face, uint32_t glyph, float px_size, float shift, int palette, const float fg[4], bool* used_fg, uint8_t** rgba, int box[4])
 {
-    (void)face, (void)glyph, (void)px_size, (void)shift, (void)rgba, (void)box;
+    (void)face, (void)glyph, (void)px_size, (void)shift, (void)palette, (void)fg, (void)used_fg, (void)rgba, (void)box;
     return false;
 }
 #else
@@ -42,6 +44,8 @@ typedef struct
     FT_Face face;
     FT_Color* pal;
     int npal;
+    const float* fg; /* the foreground color, straight RGBA */
+    bool used_fg;
     int w, h;
     int depth;
     int budget;   /* paints left to draw */
@@ -85,7 +89,8 @@ static void color(Ctx* x, FT_UInt16 index, FT_F2Dot14 alpha, float out[4])
 {
     float r = 0, g = 0, b = 0, a = 0;
     if(index == 0xFFFF) {
-        a = 1;
+        r = x->fg[0], g = x->fg[1], b = x->fg[2], a = x->fg[3];
+        x->used_fg = true;
     } else if(index < x->npal) {
         FT_Color c = x->pal[index];
         r = c.red / 255.f, g = c.green / 255.f, b = c.blue / 255.f, a = c.alpha / 255.f;
@@ -603,14 +608,52 @@ static void layers_v0(Ctx* x, FT_UInt glyph, M m, float* dst)
     }
 }
 
-/* Glyph `glyph` of a COLR font at px_size, its origin `shift` px right: premultiplied RGBA in
- * *rgba (w*h, NULL if empty) and its box (left, top above the baseline, w, h). False if the glyph
- * has no color (v1 paint or v0 layers). Sets the face's char size. */
-bool gp_colr_glyph(
-    FT_Face face, uint32_t glyph, float px_size, float shift, uint8_t** rgba, int box[4])
+static uint32_t be(const uint8_t* p, int n)
+{
+    uint32_t v = 0;
+    for(int i = 0; i < n; i++) {
+        v = v << 8 | p[i];
+    }
+    return v;
+}
+
+/* the palette `want` names (see the top), of npal. The background flags are read from the CPAL table itself: FreeType (2.14.3) reads its
+ * 32-bit palette types as 16-bit ones. */
+static int pick_palette(FT_Face face, int npal, int want)
+{
+    if(want >= 0) {
+        return want < npal ? want : 0;
+    }
+    uint32_t flag = want == GP_PALETTE_DARK ? 2 : 1;
+    FT_ULong len = 0;
+    if(FT_Load_Sfnt_Table(face, TTAG_CPAL, 0, NULL, &len) || len < 12) {
+        return 0;
+    }
+    uint8_t* t = malloc(len);
+    int pick = 0;
+    size_t field = 12 + 2 * (size_t)npal; /* (paletteTypesArrayOffset, in version 1) */
+    if(!FT_Load_Sfnt_Table(face, TTAG_CPAL, 0, t, &len) && be(t, 2) >= 1 && field + 4 <= len) {
+        size_t off = be(t + field, 4);
+        for(int i = 0; off && i < npal && off + 4 * (size_t)i + 4 <= len; i++) {
+            if(be(t + off + 4 * (size_t)i, 4) & flag) {
+                pick = i;
+                break;
+            }
+        }
+    }
+    free(t);
+    return pick;
+}
+
+/* Glyph `glyph` of a COLR font at px_size, its origin `shift` px right, with CPAL palette `palette`
+ * and foreground color `fg` (straight RGBA; *used_fg says whether it was used): premultiplied RGBA
+ * in *rgba (w*h, NULL if empty) and its box (left, top above the baseline, w, h). False if the
+ * glyph has no color (v1 paint or v0 layers). Sets the face's char size. */
+bool gp_colr_glyph(FT_Face face, uint32_t glyph, float px_size, float shift, int palette, const float fg[4], bool* used_fg, uint8_t** rgba, int box[4])
 {
     FT_OpaquePaint root = { NULL, 0 };
     *rgba = NULL;
+    *used_fg = false;
     box[0] = box[1] = box[2] = box[3] = 0;
     bool v1 = FT_Get_Color_Glyph_Paint(face, glyph, FT_COLOR_NO_ROOT_TRANSFORM, &root);
     FT_LayerIterator probe = { 0 };
@@ -621,10 +664,10 @@ bool gp_colr_glyph(
     FT_Set_Char_Size(face, 0, (FT_F26Dot6)(px_size * 64.f + .5f), 72, 72);
     double s = px_size / (double)face->units_per_EM;
     Ctx x = {
-        .face = face, .budget = MAX_PAINTS, .scale = s, .bb = { 1e30, 1e30, -1e30, -1e30 }
+        .face = face, .fg = fg, .budget = MAX_PAINTS, .scale = s, .bb = { 1e30, 1e30, -1e30, -1e30 }
     };
     FT_Palette_Data pd;
-    if(!FT_Palette_Data_Get(face, &pd) && pd.num_palettes && !FT_Palette_Select(face, 0, &x.pal)) {
+    if(!FT_Palette_Data_Get(face, &pd) && pd.num_palettes && !FT_Palette_Select(face, (FT_UShort)pick_palette(face, pd.num_palettes, palette), &x.pal)) {
         x.npal = pd.num_palette_entries;
     }
     M m = { s, 0, 0, -s, shift, 0 }; /* font units, y up -> pixels, y down from the origin */
@@ -665,6 +708,7 @@ bool gp_colr_glyph(
         }
     }
     free(layer);
+    *used_fg = x.used_fg;
     *rgba = out;
     box[0] = left, box[1] = -top, box[2] = x.w, box[3] = x.h;
     return true;

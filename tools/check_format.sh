@@ -28,7 +28,7 @@ fi
 FILES=$(git ls-files --cached --others --exclude-standard '*.c' '*.h' '*.cpp' '*.hpp' \
     | grep -v '^third_party/' \
     | grep -v '^src/wayland/' \
-    | grep -v -x -e 'src/grapheme_data.h' -e 'tests/image_fixtures.h' -e 'tests/svgfont_fixture.h' -e 'tests/colr_fixture.h')
+    | grep -v -x -e 'src/grapheme_data.h' -e 'tests/image_fixtures.h' -e 'tests/svgfont_fixture.h' -e 'tests/colr_fixture.h' -e 'tests/sbix_fixture.h')
 
 if [ "${1:-}" = "--fix" ]; then
     for pass in 1 2 3 4 5; do

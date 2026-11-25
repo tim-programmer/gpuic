@@ -918,7 +918,7 @@ static void paint_path_text(paint_ctx* pc, gp_el* n, const gp_point* p, const fl
         dy /= l;
         float dyb = n->style.path_text_dy + g[i].y;
         gp_point o = { x + c.x - dx * g[i].advance * 0.5f - dy * dyb, y + c.y - dy * g[i].advance * 0.5f + dx * dyb }; /* the glyph's origin on the baseline */
-        gp_glyph_entry e = gp_text_glyph_lcd(pc->ts, g[i].font, g[i].glyph, px_size, 0, 0);
+        gp_glyph_entry e = gp_text_glyph_tinted(pc->ts, g[i].font, g[i].glyph, px_size, 0, 0, n->ts.color);
         if(e.w == 0) {
             continue;
         }
@@ -1160,7 +1160,7 @@ static void paint_text(paint_ctx* pc, gp_el* n, float x, float y, rect clip, flo
                 oy = ty;
             }
             gp_text_snap_x(pc->ts, glyphs[gi].font, px_size, ox * scale, &pixel, &bin);
-            gp_glyph_entry e = gp_text_glyph_lcd(pc->ts, glyphs[gi].font, glyphs[gi].glyph, px_size, bin, lcd);
+            gp_glyph_entry e = gp_text_glyph_tinted(pc->ts, glyphs[gi].font, glyphs[gi].glyph, px_size, bin, lcd, n->ts.color);
             if(e.w == 0) {
                 continue;
             }

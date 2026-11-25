@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generates tests/colr_fixture.h: a small TrueType font with a COLR table (v1 glyphs, and one v0), for tests/colr_test.c.
 
-Units per em 1000; every color glyph is drawn on the square 0..1000 (y up). Palette: 0 red, 1 blue, 2 yellow, 3 gray (#808080).
+Units per em 1000; every color glyph is drawn on the square 0..1000 (y up). Palette 0 (marked for light backgrounds): 0 red, 1 blue,
+2 yellow, 3 gray (#808080); palette 1 (marked for dark backgrounds) is the same with 0 green.
   A  layers: the left half red, the right half blue at half alpha
   B  a linear gradient red -> blue, p0 (0,0) p1 (1000,1000) p2 (0,1000): projected, it runs along x
   C  a radial gradient red -> blue from (500,500) r 0 to r 500, padded; has a clip box (the square)
@@ -12,10 +13,11 @@ Units per em 1000; every color glyph is drawn on the square 0..1000 (y up). Pale
   H  a red bar (x 0..200) skewed 45 degrees along x around (0,0): its top leans left to x -1000..-800
   Z  no color glyph: its outline
   V  a COLRv0 glyph: layers, the left half red and the right half blue
+  W  layers: the left half in the foreground (text) color, the right half red
 Needs fontTools."""
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.colorLib.builder import buildCOLR, buildCPAL
+from fontTools.colorLib.builder import buildCOLR, buildCPAL, ColorPaletteType
 from fontTools.ttLib.tables import otTables as ot
 import io, math, sys
 
@@ -33,7 +35,7 @@ def circle(cx, cy, r):
     p.closePath()
     return p.glyph()
 
-colors = 'ABCDEFGHZV'
+colors = 'ABCDEFGHZVW'
 names = ['.notdef'] + list(colors) + ['sq', 'left', 'right', 'disc', 'bar']
 glyphs = {n: rect(0, 0, 1000, 1000) for n in names}
 glyphs.update(left=rect(0, 0, 500, 1000), right=rect(500, 0, 1000, 1000), disc=circle(500, 500, 300), bar=rect(0, 0, 200, 1000))
@@ -63,10 +65,13 @@ paints = {
     'F': {'Format': F.PaintComposite, 'CompositeMode': 'dest_out', 'SourcePaint': glyph('disc', solid(1)), 'BackdropPaint': glyph('sq', solid(0))},
     'G': {'Format': F.PaintComposite, 'CompositeMode': 'multiply', 'SourcePaint': glyph('sq', solid(3)), 'BackdropPaint': glyph('sq', solid(2))},
     'V': [('left', 0), ('right', 1)],  # (a list of layers: COLRv0)
+    'W': {'Format': F.PaintColrLayers, 'Layers': [glyph('left', solid(0xFFFF)), glyph('right', solid(0))]},
     'H': {'Format': F.PaintSkew, 'xSkewAngle': 45, 'ySkewAngle': 0, 'Paint': glyph('bar', solid(0))},
 }
 fb.font['COLR'] = buildCOLR(paints, clipBoxes={'C': (0, 0, 1000, 1000)})
-fb.font['CPAL'] = buildCPAL([[(1, 0, 0, 1), (0, 0, 1, 1), (1, 1, 0, 1), (128 / 255, 128 / 255, 128 / 255, 1)]])
+rest = [(0, 0, 1, 1), (1, 1, 0, 1), (128 / 255, 128 / 255, 128 / 255, 1)]
+fb.font['CPAL'] = buildCPAL([[(1, 0, 0, 1)] + rest, [(0, 1, 0, 1)] + rest],
+                            paletteTypes=[ColorPaletteType.USABLE_WITH_LIGHT_BACKGROUND, ColorPaletteType.USABLE_WITH_DARK_BACKGROUND])
 buf = io.BytesIO()
 fb.font.save(buf)
 data = buf.getvalue()

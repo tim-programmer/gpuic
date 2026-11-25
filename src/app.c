@@ -305,6 +305,15 @@ void gp_fonts_set_antialiasing(gp_app* app, int mode)
     gp_app_notify(app);
 }
 
+void gp_fonts_set_palette(gp_app* app, int palette)
+{
+    if(!app) {
+        return;
+    }
+    gp_text_set_palette(app->text, palette);
+    gp_app_request_paint(app);
+}
+
 void gp_fonts_use_system(gp_app* app, bool enable)
 {
     if(!app) {

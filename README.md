@@ -41,7 +41,7 @@ pkg-config) and downloaded only when it isn't found:
 | Dependency | Version fetched | How | Notes |
 |---|---|---|---|
 | SDL3 | 3.4.20 | CMake, static | windowing and input; OpenGL (or the Vulkan loader) is loaded at runtime through it, so there is no GL or Vulkan link dependency; built without its own FriBidi |
-| FreeType | 2.14.3 | CMake, static | color emoji (CBDT) need libpng: under `FETCH` it is downloaded with zlib (CMake 3.24 or later; earlier ones build FreeType without it), under `AUTO` FreeType uses the system's if present |
+| FreeType | 2.14.3 | CMake, static | color emoji (CBDT, sbix) need libpng: under `FETCH` it is downloaded with zlib (CMake 3.24 or later; earlier ones build FreeType without it), under `AUTO` FreeType uses the system's if present |
 | zlib, libpng | 1.4, 1.6.59 | CMake, static | only with a FreeType downloaded under `FETCH`, for it |
 | HarfBuzz | 14.6.0 | CMake, static | its CMake build enables C++, so fetching it needs a C++ compiler |
 | FriBidi | 1.0.17 | built by `cmake/GpuicFriBidi.cmake` | upstream has no CMake build; the release tarball ships the generated tables |
@@ -1322,7 +1322,7 @@ static void ready(gp_app *app, void *userdata) {
   marks are never touched.
 * A character the chosen font lacks comes from the rest of the family list, then the other registered
   fonts (the nearest weight wins, a tie goes to the earlier one), then from the system, unless it was
-  disabled. A registered color font (bitmap CBDT like Noto Color Emoji, vector COLR, or OpenType SVG) draws emoji.
+  disabled. A registered color font (bitmap CBDT like Noto Color Emoji or sbix like Apple's, vector COLR, or OpenType SVG) draws emoji.
 * `gp_fonts_use_system(app, false)` makes the app hermetic: what the registered fonts lack shows
   as the primary's missing-glyph box, and no font directory is ever scanned. With nothing
   registered either, there are no fonts and text draws nothing (it logs
@@ -1350,9 +1350,9 @@ Text in any script just works if a font for it is installed: there is nothing to
 * **Emoji.** Emoji-presentation codepoints, and anything followed by U+FE0F, go to a *color* font
   (fontconfig's first match for an emoji is usually a monochrome DejaVu glyph, which is why
   this is explicit). Color glyphs are premultiplied RGBA in a second atlas and are drawn as they
-  are: never tinted by the text color, only faded by opacity. A CBDT font like Noto Color Emoji has
-  a single 109 px bitmap strike, so it is downscaled with an area filter to the target size; a COLR font is drawn
-  at the size asked for (below).
+  are: never tinted by the text color (except a COLR glyph's foreground, below), only faded by opacity. A CBDT font like Noto Color Emoji has
+  a single 109 px bitmap strike, so it is downscaled with an area filter to the target size; an sbix font (Apple Color Emoji) the same, from
+  its strike nearest above that size; a COLR font is drawn at the size asked for (below).
 * **Sequences.** The itemizer keeps ZWJ, variation selectors, combining marks, skin tones and the
   partner of a ZWJ with the previous run's font, and HarfBuzz applies the font's own ligatures: a
   family (3 emoji + 2 ZWJ, 18 bytes), a flag, a skin-toned hand or a keycap each shape to **one**
@@ -1402,7 +1402,8 @@ Text in any script just works if a font for it is installed: there is nothing to
   glyphs that did not fit, both atlases are cleared, and the window repaints (verified
   pixel-identical to a run with no resets).
 * **Limits.** No vertical text. Color is
-  implemented and tested for fixed-size **CBDT** bitmap fonts (Noto Color Emoji) and for **OpenType SVG** fonts: when FreeType is built
+  implemented and tested for fixed-size **CBDT** bitmap fonts (Noto Color Emoji), **sbix** ones (PNG bitmaps only, which is what Apple
+  Color Emoji holds; FreeType counts such a font as bitmaps only, so a glyph the strikes lack draws nothing) and for **OpenType SVG** fonts: when FreeType is built
   with `FT_CONFIG_OPTION_SVG` (2.12 and later; `gp_text_svg_fonts()` says), gpuic gives it renderer hooks that draw a glyph's element
   (`id="glyphN"`, cut out of the font's document, which may hold many) with the SVG code above at the size asked for, into the color atlas;
   a glyph the table lacks is its outline (`tests/svgfont_test.c`, with a font made by `tools/gen_svg_font.py`). A color font is used for the text it covers
@@ -1410,11 +1411,12 @@ Text in any script just works if a font for it is installed: there is nothing to
   `src/colr.c`: FreeType reads a glyph's paint graph (or its v0 layers) and colr.c paints it in software into the color atlas, at the size asked for and on the
   subpixel quarter: layers, solid colors, linear, two-point radial and sweep gradients with pad, repeat and reflect, every transform, glyph
   outlines as clips, clip boxes (also of a glyph drawn through PaintColrGlyph), and all 28 composite modes (Porter-Duff and the W3C blend
-  modes). Colors interpolate premultiplied. The first palette is used, and the foreground color (palette entry 0xFFFF) is black, since color
-  glyphs are cached untinted. `tests/colr_test.c` checks each feature's pixels with a font made by `tools/gen_colr_font.py`; checked by hand
+  modes). Colors interpolate premultiplied. `gp_fonts_set_palette(app, p)` picks the CPAL palette: an index, or `GP_PALETTE_DARK` /
+  `GP_PALETTE_LIGHT` for the first one the font marks for that background (else, and by default, the first); a change empties the atlases.
+  The foreground color (palette entry 0xFFFF) is the text color: a glyph that uses it is cached once per color. `tests/colr_test.c` checks each feature's pixels with a font made by `tools/gen_colr_font.py`; checked by hand
   against cairo's renderer on Google's COLRv1 conformance font, the composites, clip boxes, transforms and linear and radial gradients agree
   to within antialiasing. A glyph is drawn only up to the color atlas's size, and with at most 10,000 paints (a font whose glyphs reuse
-  each other can multiply them). sbix fonts are not handled and draw as plain outlines or not at all. When wrapping,
+  each other can multiply them). When wrapping,
   each word is measured separately while a line is painted as one shaped run, so kerning across a
   space can differ by a fraction of a pixel between the two. Text is never shaped across elements.
 
@@ -2106,20 +2108,18 @@ Roughly in the order I'd tackle them:
    machine (it was run under Wine only), and offscreen targets per window (they are shared, as GL's are: two windows of different sizes drawn in
    turn make them again every frame).
 4. Multi-window polish: child and modal windows, placing a window relative to another, focus moving between an app's windows.
-5. Color fonts, the rest: sbix (Apple's bitmap emoji) fonts, choosing a CPAL palette (a dark-mode one), and tinting a COLR glyph's
-   foreground color with the text color (it is black: color glyphs are cached untinted).
-6. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
+5. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
    of thousands of descriptors), and `examples/fd.c` on Windows (it is POSIX: stdin and BSD sockets as they are there).
-7. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
-8. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
+6. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
+7. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
    frame, so only worth it if a real app shows it): a cached view whose own scroller moves (its visible part), one moved while it holds an
    offscreen layer (an opacity group, a filter) or a transform, and one turned by a transform of its own while the mouse is in the window.
    A scene that changes is sent to the GPU whole (only an unchanged one is not sent). The tests that compare cached frames with full ones
    each carry their own helpers for it, which is how two of them came to drop only part of the cached copies: one shared header would do.
-9. Coroutines under AddressSanitizer: their stack switches are not announced to it (`__sanitizer_start_switch_fiber` /
+8. Coroutines under AddressSanitizer: their stack switches are not announced to it (`__sanitizer_start_switch_fiber` /
    `__sanitizer_finish_switch_fiber`), which can make it report falsely about a coroutine's stack. Nothing has been reported (the sanitizer
    builds pass); worth doing if something is. Their stack is 1 MB there (256 KB elsewhere), since it pads every frame.
-10. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
-11. Small ones from an app's feedback: `gp_image_decode_memory` (the bytes already in memory), `SDL_LIBTHAI` off in a downloaded SDL (it
+9. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
+10. Small ones from an app's feedback: `gp_image_decode_memory` (the bytes already in memory), `SDL_LIBTHAI` off in a downloaded SDL (it
     loads the system's libthai at run time, as `SDL_FRIBIDI` did), and a file of exactly 512 MiB, which the image reader refuses while the
     decoder takes that size.

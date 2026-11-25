@@ -566,6 +566,11 @@ void gp_text_snap_x(gp_text_system* ts, int font, float px_size, float x, int* p
  * glyphs and bitmap strikes stay as they are. gp_text_lcd_order says what to ask for at a window's scale:
  * GP_AA_AUTO takes the system's setting (fontconfig's rgba; none without fontconfig) and only below 1.5x scale. */
 gp_glyph_entry gp_text_glyph_lcd(gp_text_system* ts, int font, uint32_t glyph, float px_size, int bin, int lcd);
+/* The same, with `fg` (the text color) as a COLR glyph's foreground color (palette entry 0xFFFF); gp_text_glyph_lcd uses black. A glyph
+ * that uses it is cached once per color. */
+gp_glyph_entry gp_text_glyph_tinted(gp_text_system* ts, int font, uint32_t glyph, float px_size, int bin, int lcd, gp_color fg);
+/* Which CPAL palette COLR glyphs use (see gp_fonts_set_palette); a change empties the atlases. */
+void gp_text_set_palette(gp_text_system* ts, int palette);
 void gp_text_set_antialiasing(gp_text_system* ts, int mode); /* GP_AA_*; GPUIC_LCD=off|rgb|bgr|auto at startup */
 int gp_text_lcd_order(gp_text_system* ts, float scale);
 void gp_text_set_subpixel(gp_text_system* ts, bool on);
@@ -642,7 +647,7 @@ char* gp_text_outline_path(gp_text_system* ts, int64_t weight, float size, const
 bool gp_text_svg_fonts(void); /* FreeType can draw OpenType SVG glyphs (through svgx.c) */
 /* colr.c: a COLR (v1 or v0) glyph as premultiplied RGBA (see there) */
 struct FT_FaceRec_;
-bool gp_colr_glyph(struct FT_FaceRec_* face, uint32_t glyph, float px_size, float shift, uint8_t** rgba, int box[4]);
+bool gp_colr_glyph(struct FT_FaceRec_* face, uint32_t glyph, float px_size, float shift, int palette, const float fg[4], bool* used_fg, uint8_t** rgba, int box[4]);
 typedef struct
 {
     char* d;
