@@ -228,8 +228,10 @@ static void test_level_triggered(gp_co* co, gp_app* app)
     gp_ctx cx = gp_ctx_for(app, GP_ENTITY_NULL);
     w.task = gp_watch_fd(&cx, p[0], GP_FD_READ, on_fd, &w);
     CHECK(write(p[1], "abc", 3) == 3, "write");
-    gp_sleep(co, 0.1);
-    CHECK(w.fired >= 5, "unread data called back only %d times in 100 ms", w.fired);
+    for(int i = 0; i < 200 && w.fired < 5; i++) { /* (up to 2 s: a sanitizer on a busy machine is slow, and how many calls fit in a fixed time is not the point) */
+        gp_sleep(co, 0.01);
+    }
+    CHECK(w.fired >= 5, "unread data called back only %d times in 2 s", w.fired);
     w.drain = 1;
     gp_sleep(co, 0.05);
     int fired = w.fired;
