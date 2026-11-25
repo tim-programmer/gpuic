@@ -52,7 +52,7 @@ static void click(gp_window* w)
     gp_window_on_mouse_button(w, 50, 50, GP_MOUSE_LEFT, true, 1, 0);
     gp_window_on_mouse_button(w, 50, 50, GP_MOUSE_LEFT, false, 1, 0);
 }
-static bool open(gp_window* w)
+static bool is_open(gp_window* w)
 {
     for(int i = 0; i < app->nwindows; i++) {
         if(app->windows[i] == w) {
@@ -101,12 +101,12 @@ static void run(void)
     CHECK(gp_window_on_key(a, "a", 0, false), "a key there is taken (and dropped)");
     gp_simulate_close_request(a);
     turns(2);
-    CHECK(open(a) && !a->closed, "its close button does not close it");
+    CHECK(is_open(a) && !a->closed, "its close button does not close it");
     click(m);
     CHECK(g_clicks == 2, "the modal window itself takes clicks (%d)", g_clicks);
     gp_window_close(m);
     turns(2);
-    CHECK(!open(m), "the modal window closed");
+    CHECK(!is_open(m), "the modal window closed");
     click(a);
     CHECK(g_clicks == 3, "then the owner takes clicks again (%d)", g_clicks);
 
@@ -117,7 +117,7 @@ static void run(void)
     turns(2);
     gp_window_close(a);
     turns(3);
-    CHECK(!open(a) && !open(d) && !open(e) && open(other) && app->nwindows == 1, "closing the owner closed its windows and theirs, and not the other (%d open)", app->nwindows);
+    CHECK(!is_open(a) && !is_open(d) && !is_open(e) && is_open(other) && app->nwindows == 1, "closing the owner closed its windows and theirs, and not the other (%d open)", app->nwindows);
 
     /* a window whose tasks, ending as it closes, close an owner: what that owns goes too (and outlives it in no turn) */
     gp_window* x = gp_open_window(app, &(gp_window_options){ .title = "x", .width = 100, .height = 100 }, view);
@@ -129,7 +129,7 @@ static void run(void)
     turns(2);
     gp_window_close(x);
     turns(3);
-    CHECK(!open(x) && !open(a2) && !open(b2) && open(other), "closed by a task as its window went, the owner took its window with it (%d open)", app->nwindows);
+    CHECK(!is_open(x) && !is_open(a2) && !is_open(b2) && is_open(other), "closed by a task as its window went, the owner took its window with it (%d open)", app->nwindows);
     gp_window_close(other);
 }
 
