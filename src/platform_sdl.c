@@ -242,7 +242,8 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
     HWND child = NULL;
 #endif
     if(!opts->parent) {
-        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, api | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        bool place = opts->owner || opts->positioned; /* (placed while hidden, then shown: it does not appear somewhere else first) */
+        win = SDL_CreateWindow(opts->title ? opts->title : "gpuic", width, height, api | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | (place ? SDL_WINDOW_HIDDEN : 0));
     } else {
 #if defined(_WIN32)
         child = win32_child((HWND)opts->parent, width, height);
@@ -313,6 +314,24 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
     w->platform = sw;
     w->id = SDL_GetWindowID(win);
     gp_platform_update_size(w);
+    if(!opts->parent && (opts->owner || opts->positioned)) {
+        int x = opts->x, y = opts->y;
+        if(opts->owner) {
+            SDL_Window* o = sdl_win(opts->owner);
+            int ox = 0, oy = 0, ow = 0, oh = 0;
+            SDL_GetWindowPosition(o, &ox, &oy);
+            SDL_GetWindowSize(o, &ow, &oh);
+            x = opts->positioned ? ox + x : ox + (ow - width) / 2;
+            y = opts->positioned ? oy + y : oy + (oh - height) / 2;
+            SDL_SetWindowParent(win, o);
+            if(opts->modal) {
+                SDL_SetWindowModal(win, true);
+            }
+        }
+        SDL_SetWindowPosition(win, x, y);
+        SDL_ShowWindow(win);
+        SDL_SyncWindow(win);
+    }
     return true;
 }
 
@@ -376,6 +395,21 @@ void gp_platform_set_size(gp_window* w, int width, int height)
 void gp_platform_set_title(gp_window* w, const char* title)
 {
     SDL_SetWindowTitle(sdl_win(w), title);
+}
+
+void gp_platform_focus(gp_window* w)
+{
+    SDL_RaiseWindow(sdl_win(w));
+}
+
+bool gp_platform_position(gp_window* w, int* x, int* y)
+{
+    const char* driver = SDL_GetCurrentVideoDriver();
+    if(driver && strcmp(driver, "wayland") == 0) {
+        *x = *y = 0;
+        return false; /* (Wayland tells no window where it is) */
+    }
+    return SDL_GetWindowPosition(sdl_win(w), x, y);
 }
 
 const char* gp_platform_title(gp_window* w)

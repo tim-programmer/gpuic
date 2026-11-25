@@ -1211,6 +1211,9 @@ bool gp_platform_open_window(gp_app* app, gp_window* w, const gp_window_options*
     v->title = strdup(opts->title ? opts->title : "gpuic");
     xdg_toplevel_set_title(v->top, v->title);
     xdg_toplevel_set_app_id(v->top, "gpuic");
+    if(opts->owner && opts->owner->platform) {
+        xdg_toplevel_set_parent(v->top, win_of(opts->owner)->top); /* (kept above it; where it is, the compositor says) */
+    }
     if(g.deco) {
         v->deco = zxdg_decoration_manager_v1_get_toplevel_decoration(g.deco, v->top);
         zxdg_toplevel_decoration_v1_set_mode(v->deco, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
@@ -1319,6 +1322,19 @@ void gp_platform_set_size(gp_window* w, int width, int height)
     xdg_surface_set_window_geometry(v->xdg, 0, 0, v->lw, v->lh); /* (what the window is now: the compositor may ask for another size later) */
     apply_size(v);
     gp_window_on_resize(w);
+}
+
+/* Wayland gives the keyboard to a window only with a token from an input event (xdg-activation), and lets no window say where it is. */
+void gp_platform_focus(gp_window* w)
+{
+    (void)w;
+}
+
+bool gp_platform_position(gp_window* w, int* x, int* y)
+{
+    (void)w;
+    *x = *y = 0;
+    return false;
 }
 
 void gp_platform_set_title(gp_window* w, const char* title)

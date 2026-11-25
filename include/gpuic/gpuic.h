@@ -246,6 +246,16 @@ typedef struct
     const char* title;
     int width, height;   /* logical pixels; 0 => 960x640 */
     gp_color background; /* a == 0 => dark grey */
+    /* A window of the app's that this one belongs to (a dialog, a tool palette): it is kept above its owner, opens centered on it, closes with it
+     * (without asking), and gives the focus back to it when it closes. NULL: a window of its own. It must be open (not closed in an earlier turn). */
+    gp_window* owner;
+    /* With an owner: until this window closes, its owner takes no input (clicks, keys, the wheel, its close button): a press or a key there
+     * brings this one to the front instead. */
+    bool modal;
+    /* At (x, y) logical px from its owner's top left, or from the screen's without one, instead of centered on the owner (or where the system
+     * puts it). Wayland does not let a window choose where it is: there the system places it. */
+    bool positioned;
+    int x, y;
     /* A native window to open this one inside of, as a child filling (width x height) at its top-left: a plugin's view in its host. An X11
      * Window (cast to a pointer) or an HWND. X11 needs SDL's x11 video driver (SDL_VIDEO_DRIVER=x11 before gp_app_new: a host's window on a
      * Wayland desktop is an XWayland one anyway); Wayland and macOS have no such thing here, and the window does not open. */
@@ -261,6 +271,9 @@ void* gp_window_native(gp_window* w);
 void gp_window_set_size(gp_window* w, int width, int height);
 /* Changes the window's title (UTF-8; NULL: "gpuic"), as gp_window_options.title set it when it opened. */
 void gp_window_set_title(gp_window* w, const char* title);
+/* Brings the window to the front and gives it the keyboard (where the system lets an app do that; Wayland does not: there it does nothing).
+ * A window under a modal one of its own brings that one instead. */
+void gp_window_focus(gp_window* w);
 
 /* An app whose loop the caller runs, for when something else owns the event loop: a plugin in a host (CLAP, VST3), a game engine. Instead of
  * gp_application_run(ready, data):

@@ -357,6 +357,9 @@ void gp_scroll_fling_stop(gp_window* w)
 
 void gp_scroll_touch(gp_window* w, int phase, float x, float y, int64_t t_ns)
 {
+    if(phase == GP_TOUCH_DOWN && gp_window_blocked(w, true)) {
+        return; /* (a modal window of its own is open; a finger already down goes on to its end) */
+    }
     gp_point p = { x, y };
     if(phase == GP_TOUCH_DOWN) {
         gp_scroll_fling_stop(w);

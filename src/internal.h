@@ -1398,6 +1398,8 @@ struct gp_window
     int64_t autohide_timer_due;
     bool dirty_layout;                 /* lay the tree out again without rebuilding it (an animation moved) */
     bool closed;
+    gp_window* owner;                  /* gp_window_options.owner (NULL once it is gone) */
+    bool modal;                        /* ... and it takes no input while this is open */
     gp_close_request_fn close_request; /* gp_window_on_close_request: asked before the close button closes it */
     void* close_data;
     gp_drop_fn close_drop;
@@ -1513,6 +1515,7 @@ void gp_window_on_mouse_leave(gp_window* w);
 void gp_window_on_resize(gp_window* w);
 void gp_window_on_expose(gp_window* w);
 void gp_window_on_close(gp_window* w);
+bool gp_window_blocked(gp_window* w, bool press); /* a modal window of its own is open: it takes no input (a press brings that one to the front) */
 bool gp_window_on_key(gp_window* w, const char* key, uint32_t mods, bool repeat);
 bool gp_window_on_key_up(gp_window* w, const char* key, uint32_t mods);
 bool gp_input_key_up(gp_window* w, const gp_key_event* ev);
@@ -1574,6 +1577,8 @@ void gp_platform_pump(gp_app* app, int timeout_ms);
 void* gp_platform_native(gp_window* w);                         /* an X11 Window (as an integer) or an HWND; NULL where there is none to give */
 void gp_platform_set_size(gp_window* w, int width, int height); /* logical pixels */
 void gp_platform_set_title(gp_window* w, const char* title);
+void gp_platform_focus(gp_window* w);                           /* to the front, with the keyboard (where the system lets an app) */
+bool gp_platform_position(gp_window* w, int* x, int* y);        /* where its top left is (logical px); false where windows are not told (Wayland) */
 const char* gp_platform_title(gp_window* w);                    /* (tests: the title the window has now) */
 /* File dialogs (dialog.c). The platform shows `d` above `w` (may be NULL) and calls gp_dialog_answer exactly once, from any thread, even
  * before gp_platform_file_dialog returns; d's request fields stay valid until then. */

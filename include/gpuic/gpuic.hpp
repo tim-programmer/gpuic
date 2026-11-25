@@ -1963,6 +1963,13 @@ public:
             gp_window_set_title(w_, title);
         }
     }
+    /** To the front, with the keyboard (where the system lets an app: not on Wayland); a modal window of its own comes instead. */
+    void focus() const
+    {
+        if(w_) {
+            gp_window_focus(w_);
+        }
+    }
     /** Closes it at the next turn of the loop; the app ends with its last window. */
     void close() const
     {

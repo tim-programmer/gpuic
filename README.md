@@ -182,6 +182,24 @@ with AddressSanitizer and UndefinedBehaviorSanitizer, with undefined behavior fa
 instead of scrolling past in its output), and the suite runs clean under it with GCC and with clang (`CC=clang CXX=clang++`, whose UBSan checks
 more, such as a null pointer given to `memcpy` for zero bytes); a `-fsanitize=thread` build does too. ASan only warns that it can't fully model `ucontext`.
 
+## Several windows
+
+An app opens as many windows as it likes (`gp_open_window`, each with a root view); one can belong to another:
+
+```c
+gp_window *prefs = gp_open_window(app, &(gp_window_options){ .title = "Preferences", .width = 420, .height = 300, .owner = main_window, .modal = true }, prefs_view);
+gp_window_focus(other_window);   /* to the front, with the keyboard */
+```
+
+* **Owned** (`.owner`): kept above its owner (SDL's window parent; `xdg_toplevel.set_parent` on Wayland), opened centered on it, closed with it (and what
+  it owns in turn, without asking their close requests), and when it closes the focus goes back to its owner.
+* **Modal** (`.modal`, with an owner): until it closes, the owner takes no input: a press, a key, the wheel, text or its close button there are dropped,
+  and a press or a key brings the modal window to the front instead (a release goes through, so what a press began before it opened ends).
+* **Placed** (`.positioned`, `.x`, `.y`): at that many logical px from the owner's top left, or from the screen's without an owner.
+* **Wayland** lets no window say where it is or take the keyboard by itself (that needs xdg-activation): there owned windows are placed by the compositor
+  and `gp_window_focus` does nothing; the rest is the same. `tests/owner_test.c` checks placement where the system tells where windows are (X11, Windows),
+  modal input and closing with the owner.
+
 ## Running inside a host: plugins, embedded windows
 
 `gp_application_run` owns the event loop. Something that has a loop of its own (a plugin in a DAW: CLAP, VST3; a game engine) makes the
@@ -2125,17 +2143,16 @@ Roughly in the order I'd tackle them:
 3. Vulkan, the rest: choosing it from the API (only `GPUIC_RENDERER` does now), CI running the `_vk` tests (Mesa's lavapipe), a real Windows
    machine (it was run under Wine only), and offscreen targets per window (they are shared, as GL's are: two windows of different sizes drawn in
    turn make them again every frame).
-4. Multi-window polish: child and modal windows, placing a window relative to another, focus moving between an app's windows.
-5. `epoll` for descriptor watches on Linux, once an app watches thousands of descriptors: the watcher thread hands `poll(2)` every armed
+4. `epoll` for descriptor watches on Linux, once an app watches thousands of descriptors: the watcher thread hands `poll(2)` every armed
    one each time it looks, which costs nothing that matters short of that (a watch is never spun on: it is re-armed only after its callback).
-6. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
+5. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
    frame, so only worth it if a real app shows it): a cached view whose own scroller moves (its visible part), one moved while it holds an
    offscreen layer (an opacity group, a filter) or a transform, and one turned by a transform of its own while the mouse is in the window.
    A scene that changes is sent to the GPU whole (only an unchanged one is not sent).
-7. Coroutines under AddressSanitizer: their stack switches are not announced to it (`__sanitizer_start_switch_fiber` /
+6. Coroutines under AddressSanitizer: their stack switches are not announced to it (`__sanitizer_start_switch_fiber` /
    `__sanitizer_finish_switch_fiber`), which can make it report falsely about a coroutine's stack. Nothing has been reported (the sanitizer
    builds pass); worth doing if something is. Their stack is 1 MB there (256 KB elsewhere), since it pads every frame.
-8. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
-9. Small ones from an app's feedback: `gp_image_decode_memory` (the bytes already in memory), `SDL_LIBTHAI` off in a downloaded SDL (it
+7. macOS: embedding in a host's window (an `NSView` parent), and macOS as a whole, which is untested.
+8. Small ones from an app's feedback: `gp_image_decode_memory` (the bytes already in memory), `SDL_LIBTHAI` off in a downloaded SDL (it
     loads the system's libthai at run time, as `SDL_FRIBIDI` did), and a file of exactly 512 MiB, which the image reader refuses while the
     decoder takes that size.

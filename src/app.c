@@ -331,7 +331,13 @@ gp_window* gp_open_window(gp_app* app, const gp_window_options* opts, gp_entity 
         return NULL;
     }
     gp_window_options o = opts ? *opts : (gp_window_options){ 0 };
+    if(o.owner && (o.owner->app != app || o.owner->closed || o.parent)) {
+        o.owner = NULL; /* (another app's, one that is going, or a window inside a host's: not an owner) */
+    }
+    o.modal = o.modal && o.owner;
     gp_window* w = calloc(1, sizeof *w);
+    w->owner = o.owner;
+    w->modal = o.modal;
     w->app = app;
     w->root_view = root_view;
     w->background = o.background.a > 0 ? o.background : gp_rgb(0x202020);
@@ -363,7 +369,43 @@ gp_window* gp_open_window(gp_app* app, const gp_window_options* opts, gp_entity 
     w->anims.window = w;
     w->dirty_render = true;
     app->windows[app->nwindows++] = w;
+    if(w->modal) {
+        gp_window_on_mouse_leave(w->owner); /* (what it showed under the pointer: the pointer is not its any more) */
+    }
     return w;
+}
+
+/* the modal window open on top of w, if any */
+static gp_window* modal_over(gp_window* w)
+{
+    for(int i = 0; i < w->app->nwindows; i++) {
+        gp_window* o = w->app->windows[i];
+        if(o->modal && o->owner == w && !o->closed) {
+            return o;
+        }
+    }
+    return NULL;
+}
+
+bool gp_window_blocked(gp_window* w, bool press)
+{
+    gp_window* m = modal_over(w);
+    if(m && press) {
+        gp_window_focus(m);
+    }
+    return m != NULL;
+}
+
+void gp_window_focus(gp_window* w)
+{
+    if(!w || w->closed) {
+        return;
+    }
+    gp_window* m;
+    while((m = modal_over(w))) {
+        w = m;
+    }
+    gp_platform_focus(w);
 }
 
 gp_window* gp_app_window_by_id(gp_app* app, uint32_t id)
@@ -438,6 +480,9 @@ void gp_quit(gp_app* app)
 
 void gp_window_on_close(gp_window* w)
 {
+    if(gp_window_blocked(w, true)) {
+        return;                          /* (a modal window of its own is open: that one first) */
+    }
     if(w->close_request && !w->closed) { /* (already closing: nothing to ask) */
         gp_ctx cx = gp_ctx_for_window(w->app, w, w->root_view);
         if(!w->close_request(gp_entity_get(w->app, w->root_view), &cx, w->close_data)) {
@@ -577,6 +622,9 @@ static void update_cursor(gp_window* w)
 
 void gp_window_on_mouse_move(gp_window* w, float x, float y, uint32_t mods)
 {
+    if(gp_window_blocked(w, false)) {
+        return;
+    }
     w->mouse = (gp_point){ x, y };
     w->mouse_in = true;
     w->dirty_paint = true;
@@ -620,6 +668,9 @@ static bool wheel_handlers(gp_window* w, gp_point p, float dx, float dy, uint32_
 
 void gp_window_on_scroll(gp_window* w, float x, float y, float dx, float dy, uint32_t mods)
 {
+    if(gp_window_blocked(w, false)) {
+        return;
+    }
     w->mouse = (gp_point){ x, y };
     w->mouse_in = true;
     if(w->tree && wheel_handlers(w, w->mouse, dx, dy, mods)) {
@@ -631,6 +682,9 @@ void gp_window_on_scroll(gp_window* w, float x, float y, float dx, float dy, uin
 void gp_window_on_mouse_button(gp_window* w, float x, float y, int button, bool down, int clicks,
     uint32_t mods)
 {
+    if(down && gp_window_blocked(w, true)) {
+        return; /* (a release goes through: what a press before the modal window opened started ends) */
+    }
     if(button < GP_MOUSE_LEFT || button > GP_MOUSE_RIGHT) {
         return;
     }
@@ -700,6 +754,10 @@ bool gp_window_on_key_up(gp_window* w, const char* key, uint32_t mods)
 
 bool gp_window_on_key(gp_window* w, const char* key, uint32_t mods, bool repeat)
 {
+    if(gp_window_blocked(w, true)) {
+        w->swallow_text = true; /* (nor the text it types) */
+        return true;
+    }
     gp_key_event ev = { key, mods, repeat };
     bool handled = gp_input_key_down(w, &ev);
     /* A handled key must not also type its character. This is per key, not sticky: several
@@ -710,11 +768,17 @@ bool gp_window_on_key(gp_window* w, const char* key, uint32_t mods, bool repeat)
 
 void gp_window_on_ime(gp_window* w, const char* preedit, int cursor)
 {
+    if(gp_window_blocked(w, false)) {
+        return;
+    }
     gp_input_ime(w, preedit, cursor);
 }
 
 void gp_window_on_text(gp_window* w, const char* utf8)
 {
+    if(gp_window_blocked(w, false)) {
+        return;
+    }
     if(w->swallow_text) {
         return;
     }
@@ -1057,6 +1121,32 @@ static int app_timeout_ms(gp_app* app)
 }
 
 /* One turn of the loop after its events were taken: timers, effects, windows closed and drawn, and the test scripts. */
+/* a closed window that owns no window any more (after closing what closed ones own), or NULL */
+static gp_window* next_to_destroy(gp_app* app)
+{
+    for(bool more = true; more;) {
+        more = false;
+        for(int i = 0; i < app->nwindows; i++) {
+            gp_window* w = app->windows[i];
+            if(!w->closed && w->owner && w->owner->closed) {
+                w->closed = true;
+                more = true;
+            }
+        }
+    }
+    for(int i = 0; i < app->nwindows; i++) {
+        gp_window* w = app->windows[i];
+        bool owns = false;
+        for(int k = 0; k < app->nwindows && !owns; k++) {
+            owns = app->windows[k]->owner == w;
+        }
+        if(w->closed && !owns) {
+            return w;
+        }
+    }
+    return NULL;
+}
+
 static void app_turn(gp_app* app)
 {
     bool scripted = app->shot_path || app->nclicks;
@@ -1067,22 +1157,29 @@ static void app_turn(gp_app* app)
     gp_exec_run(app);
     gp_effects_flush(app); /* what drawing or the script hooks below queued last turn */
 
-    for(int i = 0; i < app->nwindows;) {
-        gp_window* w = app->windows[i];
-        if(w->closed) {
-            gp_exec_window_closed(app, w);
-            if(app->nwindows == 1) {
-                renderer_release(app, w);
-            }
-            window_destroy(app, w);
-            memmove(&app->windows[i], &app->windows[i + 1], (size_t)(app->nwindows - i - 1) * sizeof w);
-            app->nwindows--;
-            continue;
+    /* Closed windows go, one at a time: what a closing window owns closes with it and goes first (so no window outlives its owner), and the
+     * focus goes back to the owner of one that closes by itself. Looked at again after each (ending a window's tasks can close another). */
+    for(gp_window* w; (w = next_to_destroy(app));) {
+        if(w->owner && !w->owner->closed) {
+            gp_window_focus(w->owner);
         }
+        gp_exec_window_closed(app, w);
+        if(app->nwindows == 1) {
+            renderer_release(app, w);
+        }
+        int i = 0;
+        while(app->windows[i] != w) {
+            i++;
+        }
+        window_destroy(app, w);
+        memmove(&app->windows[i], &app->windows[i + 1], (size_t)(app->nwindows - i - 1) * sizeof w);
+        app->nwindows--;
+    }
+    for(int i = 0; i < app->nwindows; i++) {
+        gp_window* w = app->windows[i];
         if(w->dirty_render || w->dirty_paint || w->dirty_layout || !w->tree) {
             window_draw(app, w);
         }
-        i++;
     }
 
     if(scripted && app->nwindows) {
