@@ -8,17 +8,68 @@
  *              keeps running. No threads, no callbacks, no blocking.
  *   timeout  gp_await_fd with a limit: "Wait for stdin" gives up after two seconds.
  *
- * The window sleeps in the event loop the whole time; a descriptor becoming ready wakes it.
+ * The window sleeps in the event loop the whole time; a descriptor becoming ready wakes it. On Windows the same, with
+ * stdin piped in from cmd or PowerShell (a console is not watchable there) and the sockets through Winsock.
  */
+#ifdef _WIN32
+# ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+# endif
+# include <io.h>
+# include <winsock2.h>
+#else
+# include <arpa/inet.h>
+# include <netinet/in.h>
+# include <sys/socket.h>
+# include <unistd.h>
+#endif
 #include <gpuic/gpuic.h>
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
+
+/* ---- what POSIX and Windows name differently: a socket is an int to gpuic either way */
+#ifdef _WIN32
+# define STDIN_FILENO 0
+# define isatty       _isatty
+# define SOCK_CLOEXEC 0 /* (Windows handles are not inherited unless asked) */
+static void sock_close(int fd)
+{
+    closesocket((SOCKET)fd);
+}
+#else
+static void sock_close(int fd)
+{
+    close(fd);
+}
+#endif
+
+/* a non-blocking TCP socket, or -1 */
+static int tcp_socket(void)
+{
+    int fd = (int)socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if(fd >= 0 && !gp_fd_set_nonblocking(fd)) {
+        sock_close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/* reads what a non-blocking descriptor has: > 0 bytes, 0 at its end, -1 when it would block, -2 on an error */
+static int read_some(int fd, char* buf, int len)
+{
+#ifdef _WIN32
+    int n = _read(fd, buf, (unsigned)len);
+    return n >= 0 ? n : -1; /* (an empty non-blocking pipe fails its read; a closed one reads 0) */
+#else
+    ssize_t n = read(fd, buf, (size_t)len);
+    if(n >= 0) {
+        return (int)n;
+    }
+    return errno == EAGAIN || errno == EWOULDBLOCK ? -1 : -2;
+#endif
+}
 
 #define BASE    gp_rgb(0x1e1e2e)
 #define MANTLE  gp_rgb(0x181825)
@@ -48,7 +99,9 @@ typedef struct
     gp_task stdin_watch;
 } Demo;
 
+#ifdef __GNUC__
 static void log_line(Demo* d, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+#endif
 static void log_line(Demo* d, const char* fmt, ...)
 {
     if(d->n == MAX_LINES) {
@@ -68,9 +121,9 @@ static void stdin_ready(void* self, gp_ctx* cx, int fd, int events, void* data)
     Demo* d = self;
     char buf[256];
     for(;;) { /* level-triggered: read until it would block */
-        ssize_t n = read(fd, buf, sizeof buf);
+        int n = read_some(fd, buf, (int)sizeof buf);
         if(n > 0) {
-            for(ssize_t i = 0; i < n; i++) {
+            for(int i = 0; i < n; i++) {
                 if(buf[i] == '\n') {
                     d->partial[d->npartial] = 0;
                     log_line(d, "stdin: %s", d->partial);
@@ -81,7 +134,7 @@ static void stdin_ready(void* self, gp_ctx* cx, int fd, int events, void* data)
             }
             continue;
         }
-        if(n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) { /* end of input */
+        if(n == 0 || n == -2) { /* end of input */
             if(d->npartial) {
                 d->partial[d->npartial] = 0;
                 log_line(d, "stdin: %s", d->partial);
@@ -109,7 +162,7 @@ static void serve_one(gp_co* co, int fd)
             break;
         }
     }
-    close(fd);
+    sock_close(fd);
 }
 
 static void server(gp_co* co, void* self, gp_ctx* cx, void* data)
@@ -126,7 +179,7 @@ static void server(gp_co* co, void* self, gp_ctx* cx, void* data)
             break;
         }
     }
-    close(listen_fd);
+    sock_close(listen_fd);
 }
 
 static void client(gp_co* co, void* self, gp_ctx* cx, void* data)
@@ -134,15 +187,17 @@ static void client(gp_co* co, void* self, gp_ctx* cx, void* data)
     Demo* d = self;
     uint16_t port = d->port;
     int n = ++d->sent;
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    int fd = tcp_socket();
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
     char msg[64], reply[64] = "";
     snprintf(msg, sizeof msg, "hello #%d", n);
     ssize_t got = -1;
-    if(gp_co_connect(co, fd, (struct sockaddr*)&a, sizeof a) == 0 && gp_co_write(co, fd, msg, strlen(msg)) > 0) {
+    if(fd >= 0 && gp_co_connect(co, fd, (struct sockaddr*)&a, sizeof a) == 0 && gp_co_write(co, fd, msg, strlen(msg)) > 0) {
         got = gp_co_read(co, fd, reply, sizeof reply - 1);
     }
-    close(fd);
+    if(fd >= 0) {
+        sock_close(fd);
+    }
     if(gp_co_cancelled(co)) {
         return; /* the window is going: `d` may be gone */
     }
@@ -217,10 +272,10 @@ static void ready(gp_app* app, void* userdata)
     Demo* d = gp_entity_get(app, demo);
     gp_ctx cx = gp_ctx_for(app, demo);
 
-    d->listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    d->listen_fd = tcp_socket();
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
     socklen_t len = sizeof a;
-    if(bind(d->listen_fd, (struct sockaddr*)&a, sizeof a) == 0 && listen(d->listen_fd, 8) == 0 && getsockname(d->listen_fd, (struct sockaddr*)&a, &len) == 0) {
+    if(d->listen_fd >= 0 && bind(d->listen_fd, (struct sockaddr*)&a, sizeof a) == 0 && listen(d->listen_fd, 8) == 0 && getsockname(d->listen_fd, (struct sockaddr*)&a, &len) == 0) {
         d->port = ntohs(a.sin_port);
         gp_spawn(&cx, server, NULL);
     }
@@ -236,5 +291,11 @@ static void ready(gp_app* app, void* userdata)
 
 int main(void)
 {
+#ifdef _WIN32
+    WSADATA wsa;
+    if(WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        return 1;
+    }
+#endif
     return gp_application_run(ready, NULL);
 }

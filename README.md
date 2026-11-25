@@ -81,7 +81,7 @@ gpuic builds as a static library; there are no Windows DLL export macros yet.
 Linux is where gpuic is developed and tested. **Windows** builds (MSVC from Visual Studio 2022 17.9 on, or
 MinGW-w64/clang): coroutines run on fibers, the thread pool on Win32 threads, and fonts come from scanning
 `%WINDIR%\Fonts` and the per-user font directory. Watching descriptors covers sockets and pipes there (see "Watching file
-descriptors"), and `text_test` (written against POSIX and Linux font locations) and `examples/fd.c` are not built. So far the Windows
+descriptors"), and `text_test` (written against POSIX and Linux font locations) is not built. So far the Windows
 build has been cross-compiled with MinGW-w64 and run under Wine; `.github/workflows/windows-check.yml` builds and
 tests it with MSVC. macOS is untested: its font directories and the SDL-based GL loading follow SDL's own
 cross-platform APIs.
@@ -961,7 +961,7 @@ static void fetch(gp_co *co, void *self, gp_ctx *cx, void *data) {
 is 0 if it timed out); `gp_co_read`, `gp_co_write` (all of it), `gp_co_accept` and `gp_co_connect` retry
 on `EAGAIN` by awaiting. A cancelled coroutine gets `false` / `-1` with `errno == ECANCELED`. See
 `examples/fd.c` (stdin lines as they are piped in, and an in-process TCP echo server and client, each a
-coroutine; POSIX only).
+coroutine; on Windows too, with stdin piped in from cmd or PowerShell, since a console cannot be watched there).
 
 ### Declarative animations
 
@@ -2108,8 +2108,8 @@ Roughly in the order I'd tackle them:
    machine (it was run under Wine only), and offscreen targets per window (they are shared, as GL's are: two windows of different sizes drawn in
    turn make them again every frame).
 4. Multi-window polish: child and modal windows, placing a window relative to another, focus moving between an app's windows.
-5. An `epoll`-style edge-triggered mode for descriptor watches on Linux (the watcher uses `poll(2)`, level-triggered, which is fine short
-   of thousands of descriptors), and `examples/fd.c` on Windows (it is POSIX: stdin and BSD sockets as they are there).
+5. `epoll` for descriptor watches on Linux, once an app watches thousands of descriptors: the watcher thread hands `poll(2)` every armed
+   one each time it looks, which costs nothing that matters short of that (a watch is never spun on: it is re-armed only after its callback).
 6. A 3D context shared between siblings (`preserve-3d`: depth sorting and intersecting planes; see "3D transforms").
 7. Painting, what is still painted again rather than reused (see "Dirty tracking and cached views"; each measured at well under 0.3 ms a
    frame, so only worth it if a real app shows it): a cached view whose own scroller moves (its visible part), one moved while it holds an
